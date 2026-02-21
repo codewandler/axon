@@ -184,35 +184,47 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 			go func(subIdx indexer.Indexer, eventCh <-chan indexer.Event) {
 				defer subscriberWg.Done()
 
-				for event := range eventCh {
-					// Determine the root URI for the subscriber
-					// Most indexers use the original root, but the git indexer
-					// reacting to .git needs the repo path (parent of .git)
-					eventRoot := uri
-					if subIdx.Name() == "git" && event.Name == ".git" {
-						eventRoot = types.RepoPathToURI(filepath.Dir(event.Path))
-					}
+				for {
+					select {
+					case <-ctx.Done():
+						// Context cancelled, drain remaining events without processing
+						for range eventCh {
+						}
+						return
+					case event, ok := <-eventCh:
+						if !ok {
+							return // Channel closed
+						}
 
-					// Create event-specific context that shares the parent context's counters
-					// We must create a new context per event because Root varies
-					eventCtx := &indexer.Context{
-						Root:       eventRoot,
-						Generation: ictx.Generation,
-						Graph:      ictx.Graph,
-						Emitter:    ictx.Emitter,
-						Progress:   ictx.Progress,
-						Events:     ictx.Events,
-					}
+						// Determine the root URI for the subscriber
+						// Most indexers use the original root, but the git indexer
+						// reacting to .git needs the repo path (parent of .git)
+						eventRoot := uri
+						if subIdx.Name() == "git" && event.Name == ".git" {
+							eventRoot = types.RepoPathToURI(filepath.Dir(event.Path))
+						}
 
-					if err := subIdx.HandleEvent(ctx, eventCtx, event); err != nil {
-						errorsMu.Lock()
-						indexerErrors = append(indexerErrors, err)
-						errorsMu.Unlock()
-					}
+						// Create event-specific context that shares the parent context's counters
+						// We must create a new context per event because Root varies
+						eventCtx := &indexer.Context{
+							Root:       eventRoot,
+							Generation: ictx.Generation,
+							Graph:      ictx.Graph,
+							Emitter:    ictx.Emitter,
+							Progress:   ictx.Progress,
+							Events:     ictx.Events,
+						}
 
-					// Aggregate deletions back to main context
-					if deleted := eventCtx.NodesDeleted(); deleted > 0 {
-						ictx.AddNodesDeleted(int(deleted))
+						if err := subIdx.HandleEvent(ctx, eventCtx, event); err != nil {
+							errorsMu.Lock()
+							indexerErrors = append(indexerErrors, err)
+							errorsMu.Unlock()
+						}
+
+						// Aggregate deletions back to main context
+						if deleted := eventCtx.NodesDeleted(); deleted > 0 {
+							ictx.AddNodesDeleted(int(deleted))
+						}
 					}
 				}
 			}(idx, ch)
@@ -224,17 +236,36 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 	dispatcherWg.Add(1)
 	go func() {
 		defer dispatcherWg.Done()
-		for event := range events {
-			// Find subscribers for this event and route to their channels
-			for _, sub := range a.indexers.SubscribersFor(event) {
-				if info, ok := subscriberMap[sub.Name()]; ok {
-					info.eventCh <- event
+		defer func() {
+			// Close all subscriber channels when dispatcher exits
+			for _, info := range subscriberMap {
+				close(info.eventCh)
+			}
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				// Context cancelled, drain events channel without dispatching
+				for range events {
+				}
+				return
+			case event, ok := <-events:
+				if !ok {
+					return // Events channel closed
+				}
+				// Find subscribers for this event and route to their channels
+				for _, sub := range a.indexers.SubscribersFor(event) {
+					if info, ok := subscriberMap[sub.Name()]; ok {
+						// Use select to avoid blocking on full subscriber channel when context is cancelled
+						select {
+						case info.eventCh <- event:
+						case <-ctx.Done():
+							return
+						}
+					}
 				}
 			}
-		}
-		// Close all subscriber channels when events channel closes
-		for _, info := range subscriberMap {
-			close(info.eventCh)
 		}
 	}()
 

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -425,6 +426,7 @@ func (s *Storage) flushLoop() {
 }
 
 // flushBatch writes a batch of operations to the database.
+// Errors are logged since this runs asynchronously and cannot return errors to callers.
 func (s *Storage) flushBatch(batch []writeOp) {
 	if len(batch) == 0 {
 		return
@@ -433,7 +435,8 @@ func (s *Storage) flushBatch(batch []writeOp) {
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return // Best effort - log in production
+		log.Printf("sqlite: failed to begin transaction: %v", err)
+		return
 	}
 	defer tx.Rollback()
 
@@ -452,6 +455,7 @@ func (s *Storage) flushBatch(batch []writeOp) {
 			updated_at = excluded.updated_at
 	`)
 	if err != nil {
+		log.Printf("sqlite: failed to prepare node statement: %v", err)
 		return
 	}
 	defer nodeStmt.Close()
@@ -464,33 +468,68 @@ func (s *Storage) flushBatch(batch []writeOp) {
 			generation = excluded.generation
 	`)
 	if err != nil {
+		log.Printf("sqlite: failed to prepare edge statement: %v", err)
 		return
 	}
 	defer edgeStmt.Close()
 
-	// Process operations in order
+	// Process operations in order, abort batch on first error
+	var batchErr error
 	for _, op := range batch {
 		if op.Node != nil {
-			data, _ := json.Marshal(op.Node.Data)
-			labels, _ := json.Marshal(op.Node.Labels)
-			nodeStmt.ExecContext(ctx,
+			data, err := json.Marshal(op.Node.Data)
+			if err != nil {
+				log.Printf("sqlite: failed to marshal node data for %s: %v", op.Node.ID, err)
+				batchErr = err
+				break
+			}
+			labels, err := json.Marshal(op.Node.Labels)
+			if err != nil {
+				log.Printf("sqlite: failed to marshal node labels for %s: %v", op.Node.ID, err)
+				batchErr = err
+				break
+			}
+			_, err = nodeStmt.ExecContext(ctx,
 				op.Node.ID, op.Node.Type, op.Node.URI, op.Node.Key, op.Node.Name,
 				string(labels), string(data), op.Node.Generation,
 				op.Node.CreatedAt.Format(time.RFC3339), op.Node.UpdatedAt.Format(time.RFC3339))
+			if err != nil {
+				log.Printf("sqlite: failed to insert node %s: %v", op.Node.ID, err)
+				batchErr = err
+				break
+			}
 		}
 		if op.Edge != nil {
 			var data string
 			if op.Edge.Data != nil {
-				dataBytes, _ := json.Marshal(op.Edge.Data)
+				dataBytes, err := json.Marshal(op.Edge.Data)
+				if err != nil {
+					log.Printf("sqlite: failed to marshal edge data for %s: %v", op.Edge.ID, err)
+					batchErr = err
+					break
+				}
 				data = string(dataBytes)
 			}
-			edgeStmt.ExecContext(ctx,
+			_, err = edgeStmt.ExecContext(ctx,
 				op.Edge.ID, op.Edge.Type, op.Edge.From, op.Edge.To, data, op.Edge.Generation,
 				op.Edge.CreatedAt.Format(time.RFC3339))
+			if err != nil {
+				log.Printf("sqlite: failed to insert edge %s: %v", op.Edge.ID, err)
+				batchErr = err
+				break
+			}
 		}
 	}
 
-	tx.Commit()
+	// If any operation failed, rollback (via defer) instead of committing
+	if batchErr != nil {
+		log.Printf("sqlite: batch write failed, rolling back %d operations", len(batch))
+		return
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("sqlite: failed to commit batch of %d operations: %v", len(batch), err)
+	}
 }
 
 func (s *Storage) GetNode(ctx context.Context, id string) (*graph.Node, error) {
