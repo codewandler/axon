@@ -1173,11 +1173,15 @@ func (s *Storage) buildNodeFilterArgs(query *string, filter graph.NodeFilter) []
 	}
 
 	// Root filter: only nodes with no incoming containment edges
+	// Note: We only check 'contains' edges, not 'located_at', because
+	// 'located_at' represents "X is located at Y" (e.g., repo at directory),
+	// not "Y contains X". The root fs:dir may have repos located at it but
+	// is still a structural root of the filesystem tree.
 	if filter.Root {
 		*query += ` AND NOT EXISTS (
 			SELECT 1 FROM edges e 
 			WHERE e.to_id = nodes.id 
-			AND e.type IN ('contains', 'located_at')
+			AND e.type = 'contains'
 		)`
 	}
 
