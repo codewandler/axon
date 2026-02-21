@@ -1,3 +1,16 @@
+// Package graph provides the core graph data structures and operations for Axon.
+//
+// The graph consists of nodes and edges. Nodes represent entities (files, directories,
+// git repos, markdown documents, etc.) and edges represent relationships between them
+// (contains, has, links_to, etc.).
+//
+// The Graph type wraps a Storage implementation and provides high-level operations
+// like AddNode, AddEdge, Neighbors, Children, and Parents. It also handles type
+// validation through a Registry.
+//
+// Storage implementations (like SQLite) handle persistence and querying. The Storage
+// interface is broken into smaller composable interfaces (NodeReader, NodeWriter, etc.)
+// for flexibility.
 package graph
 
 import (

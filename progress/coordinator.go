@@ -1,3 +1,18 @@
+// Package progress provides progress reporting for indexing operations.
+//
+// The Coordinator collects progress events from indexers and aggregates them
+// for display. It tracks per-indexer state (running, done, errored) and counts
+// of processed items.
+//
+// The UI component (ui.go) provides a bubbletea-based terminal UI that displays
+// real-time progress with spinners, counters, and ETA estimates.
+//
+// Usage:
+//
+//	coord := progress.NewCoordinator()
+//	// Pass coord.Events() to indexers
+//	// Run bubbletea with progress.NewModel(coord)
+//	// Call coord.Close() when indexing completes
 package progress
 
 import (
