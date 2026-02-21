@@ -231,8 +231,8 @@ No package-level doc comments.
 - [x] 10. Migrate all CLI commands to new traversal-based scope resolution
 - [x] 11. Optimize tree rendering O(N²) worst case
 - [x] 12. Fix event channel blocking risk in dispatcher
-- [ ] 13. Extract magic numbers to named constants
-- [ ] 14. Add missing package documentation
-- [ ] 15. Remove unused code (`extractExtension`, `startTime`)
-- [ ] 16. Fix inconsistent edge registration in types package
+- [x] 13. Extract magic numbers to named constants
+- [x] 14. Add missing package documentation
+- [x] 15. Remove unused code (`extractExtension`, `startTime`)
+- [x] 16. Fix inconsistent edge registration in types package
 - [ ] 17. Add missing tests (concurrent writes, symlinks, malformed markdown)
