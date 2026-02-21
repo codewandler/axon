@@ -225,12 +225,12 @@ No package-level doc comments.
 - [x] 4. Add consistent error wrapping throughout codebase (core paths in axon.go, sqlite init/migrate)
 - [x] 5. Break up Storage interface into smaller composable interfaces
 - [x] 6. Add context to SQLite init/migrate operations
-- [ ] 7. Extract CLI boilerplate into shared helpers
+- [x] 7. Extract CLI boilerplate into shared helpers
 - [ ] 8. Refactor `IndexWithOptions` into smaller functions
-- [ ] 9. Fix silent error suppression in graph `Neighbors`/`Children`/`Parents`
-- [ ] 10. Migrate all CLI commands to new traversal-based scope resolution
-- [ ] 11. Optimize tree rendering O(N²) worst case
-- [ ] 12. Fix event channel blocking risk in dispatcher
+- [x] 9. Fix silent error suppression in graph `Neighbors`/`Children`/`Parents`
+- [x] 10. Migrate all CLI commands to new traversal-based scope resolution
+- [x] 11. Optimize tree rendering O(N²) worst case
+- [x] 12. Fix event channel blocking risk in dispatcher
 - [ ] 13. Extract magic numbers to named constants
 - [ ] 14. Add missing package documentation
 - [ ] 15. Remove unused code (`extractExtension`, `startTime`)
