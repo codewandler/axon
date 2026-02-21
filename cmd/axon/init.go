@@ -6,7 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/codewandler/axon"
+	"github.com/codewandler/axon/adapters/sqlite"
+	"github.com/codewandler/axon/progress"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +29,7 @@ structure that can be queried with other axon commands.`,
 func runInit(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	// Determine path
+	// Determine path to index
 	path := "."
 	if len(args) > 0 {
 		path = args[0]
@@ -46,14 +50,44 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("path is not a directory: %s", absPath)
 	}
 
-	// Create axon instance
-	ax, err := axon.New(axon.Config{Dir: absPath})
+	// Resolve database location
+	dbLoc, err := resolveDB(flagDBDir, flagLocal, absPath, true)
+	if err != nil {
+		return fmt.Errorf("failed to resolve database location: %w", err)
+	}
+
+	// Print database location
+	fmt.Printf("Using database: %s\n", dbLoc.Path)
+
+	// Open SQLite storage
+	storage, err := sqlite.New(dbLoc.Path)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer storage.Close()
+
+	// Create axon instance with SQLite storage
+	ax, err := axon.New(axon.Config{
+		Dir:     absPath,
+		Storage: storage,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create axon: %w", err)
 	}
 
-	// Run indexing
-	result, err := ax.Index(ctx, "")
+	// Check if we have a TTY for progress display
+	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+
+	var result *axon.IndexResult
+
+	if isTTY {
+		// Use bubbletea progress UI
+		result, err = runInitWithProgress(ctx, ax, absPath)
+	} else {
+		// Simple text output
+		result, err = ax.Index(ctx, "")
+	}
+
 	if err != nil {
 		return fmt.Errorf("indexing failed: %w", err)
 	}
@@ -69,4 +103,42 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// runInitWithProgress runs indexing with a bubbletea progress UI.
+func runInitWithProgress(ctx context.Context, ax *axon.Axon, absPath string) (*axon.IndexResult, error) {
+	// Create progress coordinator
+	coord := progress.NewCoordinator()
+
+	// Channel for result
+	resultCh := make(chan *axon.IndexResult, 1)
+	errCh := make(chan error, 1)
+
+	// Run indexing in background
+	go func() {
+		result, err := ax.IndexWithProgress(ctx, "", coord.Events())
+		if err != nil {
+			errCh <- err
+		} else {
+			resultCh <- result
+		}
+		// Signal coordinator that indexing is complete
+		coord.Close()
+	}()
+
+	// Create and run bubbletea program
+	p := tea.NewProgram(progress.NewModel(coord))
+
+	// Run the TUI (blocks until coordinator signals done via IsRunning() returning false)
+	if _, err := p.Run(); err != nil {
+		return nil, fmt.Errorf("progress UI error: %w", err)
+	}
+
+	// Result must be available now since indexing goroutine writes before coord.Close()
+	select {
+	case err := <-errCh:
+		return nil, err
+	case result := <-resultCh:
+		return result, nil
+	}
 }

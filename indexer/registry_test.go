@@ -22,6 +22,7 @@ func (m *mockIndexer) Handles(uri string) bool {
 	}
 	return false
 }
+func (m *mockIndexer) Subscriptions() []Subscription                  { return nil }
 func (m *mockIndexer) Index(ctx context.Context, ictx *Context) error { return nil }
 
 func TestRegistryForURI(t *testing.T) {

@@ -97,14 +97,14 @@ func RegisterVCSTypes(r *graph.Registry) {
 	})
 }
 
-// RepoPathToURI converts a repo path to a git:// URI.
+// RepoPathToURI converts a repo path to a git+file:// URI.
 func RepoPathToURI(path string) string {
-	return "git://" + path
+	return "git+file://" + path
 }
 
-// URIToRepoPath extracts the path from a git:// URI.
+// URIToRepoPath extracts the path from a git+file:// URI.
 func URIToRepoPath(uri string) string {
-	const prefix = "git://"
+	const prefix = "git+file://"
 	if len(uri) > len(prefix) && uri[:len(prefix)] == prefix {
 		return uri[len(prefix):]
 	}

@@ -203,12 +203,12 @@ func TestIndexerMeta(t *testing.T) {
 	}
 
 	schemes := idx.Schemes()
-	if len(schemes) != 1 || schemes[0] != "git" {
-		t.Errorf("expected schemes [git], got %v", schemes)
+	if len(schemes) != 1 || schemes[0] != "git+file" {
+		t.Errorf("expected schemes [git+file], got %v", schemes)
 	}
 
-	if !idx.Handles("git:///home/user/repo") {
-		t.Error("should handle git:// URIs")
+	if !idx.Handles("git+file:///home/user/repo") {
+		t.Error("should handle git+file:// URIs")
 	}
 
 	if idx.Handles("file:///home/user/repo") {
@@ -216,19 +216,35 @@ func TestIndexerMeta(t *testing.T) {
 	}
 }
 
-func TestIndexFromPath(t *testing.T) {
-	ctx := context.Background()
-	dir := setupTestRepo(t)
-	g := setupGraph(t)
+func TestSubscriptions(t *testing.T) {
+	idx := New()
+	subs := idx.Subscriptions()
 
-	emitter := indexer.NewGraphEmitter(g, "gen-1")
-
-	if err := IndexFromPath(ctx, g, emitter, dir, "gen-1"); err != nil {
-		t.Fatalf("IndexFromPath failed: %v", err)
+	if len(subs) != 2 {
+		t.Fatalf("expected 2 subscriptions, got %d", len(subs))
 	}
 
-	repos, _ := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeRepo})
-	if len(repos) != 1 {
-		t.Errorf("expected 1 repo, got %d", len(repos))
+	// First subscription: EventEntryVisited for .git dirs
+	sub := subs[0]
+	if sub.EventType != indexer.EventEntryVisited {
+		t.Error("expected first subscription to be EventEntryVisited")
+	}
+	if sub.NodeType != types.TypeDir {
+		t.Errorf("expected NodeType fs:dir, got %s", sub.NodeType)
+	}
+	if sub.Name != ".git" {
+		t.Errorf("expected Name .git, got %s", sub.Name)
+	}
+
+	// Second subscription: EventNodeDeleting for .git dirs
+	sub2 := subs[1]
+	if sub2.EventType != indexer.EventNodeDeleting {
+		t.Error("expected second subscription to be EventNodeDeleting")
+	}
+	if sub2.NodeType != types.TypeDir {
+		t.Errorf("expected NodeType fs:dir, got %s", sub2.NodeType)
+	}
+	if sub2.Name != ".git" {
+		t.Errorf("expected Name .git, got %s", sub2.Name)
 	}
 }

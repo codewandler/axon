@@ -66,6 +66,24 @@ func (r *Registry) All() []Indexer {
 	return result
 }
 
+// SubscribersFor returns all indexers that have a subscription matching the event.
+func (r *Registry) SubscribersFor(event Event) []Indexer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var result []Indexer
+	for _, idx := range r.indexers {
+		subs := idx.Subscriptions()
+		for _, sub := range subs {
+			if sub.Matches(event) {
+				result = append(result, idx)
+				break // Don't add same indexer twice
+			}
+		}
+	}
+	return result
+}
+
 // GetScheme extracts the scheme from a URI.
 // Returns empty string if the URI is invalid or has no scheme.
 func GetScheme(uri string) string {

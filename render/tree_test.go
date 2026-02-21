@@ -171,9 +171,9 @@ func TestTreeFromURI(t *testing.T) {
 		t.Fatalf("TreeFromURI failed: %v", err)
 	}
 
-	// Should start with subdir
-	if !strings.HasPrefix(output, "[") || !strings.Contains(output, "subdir/") {
-		t.Error("output should start with subdir")
+	// Should contain subdir and an ID
+	if !strings.Contains(output, "subdir/") || !strings.Contains(output, "[") {
+		t.Error("output should contain subdir and node ID")
 	}
 }
 

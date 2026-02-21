@@ -29,16 +29,28 @@ type Storage interface {
 	// Queries
 	FindNodes(ctx context.Context, filter NodeFilter) ([]*Node, error)
 
-	// Staleness management
-	// DeleteStaleNodes removes nodes with the given URI prefix that don't have the current generation.
-	// Returns the number of deleted nodes.
-	DeleteStaleNodes(ctx context.Context, uriPrefix, currentGen string) (int, error)
+	// Staleness management (used by indexers for cleanup)
 
-	// DeleteStaleEdges removes edges that reference deleted nodes or don't have the current generation.
+	// FindStaleByURIPrefix returns nodes matching the URI prefix that don't have the current generation.
+	FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGen string) ([]*Node, error)
+
+	// DeleteStaleByURIPrefix removes nodes matching the URI prefix that don't have the current generation.
+	// Returns the number of deleted nodes.
+	DeleteStaleByURIPrefix(ctx context.Context, uriPrefix, currentGen string) (int, error)
+
+	// DeleteByURIPrefix removes all nodes matching the URI prefix regardless of generation.
+	// Returns the number of deleted nodes.
+	DeleteByURIPrefix(ctx context.Context, uriPrefix string) (int, error)
+
+	// DeleteStaleEdges removes edges that don't have the current generation.
 	// Returns the number of deleted edges.
 	DeleteStaleEdges(ctx context.Context, currentGen string) (int, error)
 
 	// DeleteOrphanedEdges removes edges where either endpoint node no longer exists.
 	// Returns the number of deleted edges.
 	DeleteOrphanedEdges(ctx context.Context) (int, error)
+
+	// Flush writes any buffered data to persistent storage.
+	// Implementations without buffering can no-op.
+	Flush(ctx context.Context) error
 }

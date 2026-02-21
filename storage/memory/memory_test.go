@@ -278,11 +278,11 @@ func TestFindNodes(t *testing.T) {
 	}
 }
 
-func TestDeleteStaleNodes(t *testing.T) {
+func TestDeleteStaleByURIPrefix(t *testing.T) {
 	ctx := context.Background()
 	s := New()
 
-	// Create nodes with different generations
+	// Create nodes with different generations and URI prefixes
 	node1 := graph.NewNode("fs:file").WithURI("file:///test/a.txt").WithGeneration("gen-1")
 	node2 := graph.NewNode("fs:file").WithURI("file:///test/b.txt").WithGeneration("gen-2")
 	node3 := graph.NewNode("fs:file").WithURI("file:///other/c.txt").WithGeneration("gen-1")
@@ -291,10 +291,10 @@ func TestDeleteStaleNodes(t *testing.T) {
 	_ = s.PutNode(ctx, node2)
 	_ = s.PutNode(ctx, node3)
 
-	// Delete stale nodes under /test with current gen-2
-	deleted, err := s.DeleteStaleNodes(ctx, "file:///test", "gen-2")
+	// Delete stale nodes under file:///test with current gen-2
+	deleted, err := s.DeleteStaleByURIPrefix(ctx, "file:///test", "gen-2")
 	if err != nil {
-		t.Fatalf("DeleteStaleNodes failed: %v", err)
+		t.Fatalf("DeleteStaleByURIPrefix failed: %v", err)
 	}
 	if deleted != 1 {
 		t.Errorf("expected 1 deleted, got %d", deleted)
@@ -312,10 +312,75 @@ func TestDeleteStaleNodes(t *testing.T) {
 		t.Error("current gen node should exist")
 	}
 
-	// node3 should still exist (different prefix)
+	// node3 should still exist (different URI prefix)
 	_, err = s.GetNode(ctx, node3.ID)
 	if err != nil {
-		t.Error("node outside prefix should exist")
+		t.Error("node outside URI prefix should exist")
+	}
+}
+
+func TestDeleteByURIPrefix(t *testing.T) {
+	ctx := context.Background()
+	s := New()
+
+	// Create nodes with different URI prefixes
+	node1 := graph.NewNode("fs:file").WithURI("file:///test/a.txt").WithGeneration("gen-1")
+	node2 := graph.NewNode("fs:file").WithURI("file:///test/b.txt").WithGeneration("gen-2")
+	node3 := graph.NewNode("fs:file").WithURI("file:///other/c.txt").WithGeneration("gen-1")
+
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+	_ = s.PutNode(ctx, node3)
+
+	// Delete all nodes under file:///test (regardless of generation)
+	deleted, err := s.DeleteByURIPrefix(ctx, "file:///test")
+	if err != nil {
+		t.Fatalf("DeleteByURIPrefix failed: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("expected 2 deleted, got %d", deleted)
+	}
+
+	// node1 and node2 should be gone
+	_, err = s.GetNode(ctx, node1.ID)
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Error("node1 should be deleted")
+	}
+	_, err = s.GetNode(ctx, node2.ID)
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Error("node2 should be deleted")
+	}
+
+	// node3 should still exist (different URI prefix)
+	_, err = s.GetNode(ctx, node3.ID)
+	if err != nil {
+		t.Error("node outside URI prefix should exist")
+	}
+}
+
+func TestFindStaleByURIPrefix(t *testing.T) {
+	ctx := context.Background()
+	s := New()
+
+	// Create nodes with different generations
+	node1 := graph.NewNode("fs:file").WithURI("file:///test/a.txt").WithGeneration("gen-1")
+	node2 := graph.NewNode("fs:file").WithURI("file:///test/b.txt").WithGeneration("gen-2")
+	node3 := graph.NewNode("fs:file").WithURI("file:///other/c.txt").WithGeneration("gen-1")
+
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+	_ = s.PutNode(ctx, node3)
+
+	// Find stale nodes under file:///test with current gen-2
+	stale, err := s.FindStaleByURIPrefix(ctx, "file:///test", "gen-2")
+	if err != nil {
+		t.Fatalf("FindStaleByURIPrefix failed: %v", err)
+	}
+	if len(stale) != 1 {
+		t.Errorf("expected 1 stale node, got %d", len(stale))
+	}
+	if len(stale) > 0 && stale[0].ID != node1.ID {
+		t.Errorf("expected stale node to be node1")
 	}
 }
 

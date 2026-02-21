@@ -1,0 +1,481 @@
+package sqlite
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/codewandler/axon/graph"
+	"github.com/codewandler/axon/storage"
+)
+
+func setupTestDB(t *testing.T) *Storage {
+	t.Helper()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	s, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	t.Cleanup(func() {
+		s.Close()
+	})
+
+	return s
+}
+
+func TestPutAndGetNode(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node := graph.NewNode("fs:file").
+		WithURI("file:///test.txt").
+		WithKey("/test.txt").
+		WithData(map[string]any{"name": "test.txt", "size": 1024})
+
+	if err := s.PutNode(ctx, node); err != nil {
+		t.Fatalf("PutNode failed: %v", err)
+	}
+
+	// Get by ID
+	got, err := s.GetNode(ctx, node.ID)
+	if err != nil {
+		t.Fatalf("GetNode failed: %v", err)
+	}
+	if got.ID != node.ID {
+		t.Errorf("expected ID %s, got %s", node.ID, got.ID)
+	}
+	if got.Type != node.Type {
+		t.Errorf("expected Type %s, got %s", node.Type, got.Type)
+	}
+	if got.URI != node.URI {
+		t.Errorf("expected URI %s, got %s", node.URI, got.URI)
+	}
+
+	// Get by URI
+	got, err = s.GetNodeByURI(ctx, "file:///test.txt")
+	if err != nil {
+		t.Fatalf("GetNodeByURI failed: %v", err)
+	}
+	if got.ID != node.ID {
+		t.Errorf("expected ID %s, got %s", node.ID, got.ID)
+	}
+
+	// Get by Key
+	got, err = s.GetNodeByKey(ctx, "fs:file", "/test.txt")
+	if err != nil {
+		t.Fatalf("GetNodeByKey failed: %v", err)
+	}
+	if got.ID != node.ID {
+		t.Errorf("expected ID %s, got %s", node.ID, got.ID)
+	}
+}
+
+func TestGetNodeNotFound(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	_, err := s.GetNode(ctx, "nonexistent")
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Errorf("expected ErrNodeNotFound, got %v", err)
+	}
+
+	_, err = s.GetNodeByURI(ctx, "file:///nonexistent")
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Errorf("expected ErrNodeNotFound, got %v", err)
+	}
+
+	_, err = s.GetNodeByKey(ctx, "fs:file", "nonexistent")
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Errorf("expected ErrNodeNotFound, got %v", err)
+	}
+}
+
+func TestDeleteNode(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node := graph.NewNode("fs:file").WithURI("file:///test.txt")
+	_ = s.PutNode(ctx, node)
+
+	if err := s.DeleteNode(ctx, node.ID); err != nil {
+		t.Fatalf("DeleteNode failed: %v", err)
+	}
+
+	_, err := s.GetNode(ctx, node.ID)
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Error("node should not be found after delete")
+	}
+}
+
+func TestPutNodeUpdate(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node := graph.NewNode("fs:file").WithURI("file:///test.txt")
+	_ = s.PutNode(ctx, node)
+
+	// Update the node
+	node.URI = "file:///updated.txt"
+	_ = s.PutNode(ctx, node)
+
+	got, err := s.GetNode(ctx, node.ID)
+	if err != nil {
+		t.Fatalf("GetNode failed: %v", err)
+	}
+	if got.URI != "file:///updated.txt" {
+		t.Errorf("expected updated URI, got %s", got.URI)
+	}
+}
+
+func TestPutAndGetEdge(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node1 := graph.NewNode("fs:dir")
+	node2 := graph.NewNode("fs:file")
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+
+	edge := graph.NewEdge("contains", node1.ID, node2.ID)
+	if err := s.PutEdge(ctx, edge); err != nil {
+		t.Fatalf("PutEdge failed: %v", err)
+	}
+
+	got, err := s.GetEdge(ctx, edge.ID)
+	if err != nil {
+		t.Fatalf("GetEdge failed: %v", err)
+	}
+	if got.ID != edge.ID {
+		t.Errorf("expected ID %s, got %s", edge.ID, got.ID)
+	}
+	if got.Type != edge.Type {
+		t.Errorf("expected Type %s, got %s", edge.Type, got.Type)
+	}
+}
+
+func TestGetEdgesFrom(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	dir := graph.NewNode("fs:dir")
+	file1 := graph.NewNode("fs:file")
+	file2 := graph.NewNode("fs:file")
+	_ = s.PutNode(ctx, dir)
+	_ = s.PutNode(ctx, file1)
+	_ = s.PutNode(ctx, file2)
+
+	_ = s.PutEdge(ctx, graph.NewEdge("contains", dir.ID, file1.ID))
+	_ = s.PutEdge(ctx, graph.NewEdge("contains", dir.ID, file2.ID))
+
+	edges, err := s.GetEdgesFrom(ctx, dir.ID)
+	if err != nil {
+		t.Fatalf("GetEdgesFrom failed: %v", err)
+	}
+	if len(edges) != 2 {
+		t.Errorf("expected 2 edges, got %d", len(edges))
+	}
+}
+
+func TestGetEdgesTo(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	dir1 := graph.NewNode("fs:dir")
+	dir2 := graph.NewNode("fs:dir")
+	file := graph.NewNode("fs:file")
+	_ = s.PutNode(ctx, dir1)
+	_ = s.PutNode(ctx, dir2)
+	_ = s.PutNode(ctx, file)
+
+	_ = s.PutEdge(ctx, graph.NewEdge("references", dir1.ID, file.ID))
+	_ = s.PutEdge(ctx, graph.NewEdge("references", dir2.ID, file.ID))
+
+	edges, err := s.GetEdgesTo(ctx, file.ID)
+	if err != nil {
+		t.Fatalf("GetEdgesTo failed: %v", err)
+	}
+	if len(edges) != 2 {
+		t.Errorf("expected 2 edges, got %d", len(edges))
+	}
+}
+
+func TestDeleteEdge(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node1 := graph.NewNode("fs:dir")
+	node2 := graph.NewNode("fs:file")
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+
+	edge := graph.NewEdge("contains", node1.ID, node2.ID)
+	_ = s.PutEdge(ctx, edge)
+
+	if err := s.DeleteEdge(ctx, edge.ID); err != nil {
+		t.Fatalf("DeleteEdge failed: %v", err)
+	}
+
+	_, err := s.GetEdge(ctx, edge.ID)
+	if !errors.Is(err, storage.ErrEdgeNotFound) {
+		t.Error("edge should not be found after delete")
+	}
+}
+
+func TestFindNodes(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	file1 := graph.NewNode("fs:file").WithURI("file:///home/user/a.txt")
+	file2 := graph.NewNode("fs:file").WithURI("file:///home/user/b.txt")
+	dir := graph.NewNode("fs:dir").WithURI("file:///home/user")
+	other := graph.NewNode("fs:file").WithURI("file:///other/c.txt")
+
+	_ = s.PutNode(ctx, file1)
+	_ = s.PutNode(ctx, file2)
+	_ = s.PutNode(ctx, dir)
+	_ = s.PutNode(ctx, other)
+
+	// Find by type
+	nodes, err := s.FindNodes(ctx, graph.NodeFilter{Type: "fs:file"})
+	if err != nil {
+		t.Fatalf("FindNodes failed: %v", err)
+	}
+	if len(nodes) != 3 {
+		t.Errorf("expected 3 files, got %d", len(nodes))
+	}
+
+	// Find by URI prefix
+	nodes, err = s.FindNodes(ctx, graph.NodeFilter{URIPrefix: "file:///home/user"})
+	if err != nil {
+		t.Fatalf("FindNodes failed: %v", err)
+	}
+	if len(nodes) != 3 {
+		t.Errorf("expected 3 nodes under /home/user, got %d", len(nodes))
+	}
+
+	// Find by type AND URI prefix
+	nodes, err = s.FindNodes(ctx, graph.NodeFilter{Type: "fs:file", URIPrefix: "file:///home/user"})
+	if err != nil {
+		t.Fatalf("FindNodes failed: %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Errorf("expected 2 files under /home/user, got %d", len(nodes))
+	}
+}
+
+func TestDeleteStaleByURIPrefix(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node1 := graph.NewNode("fs:file").WithURI("file:///test/a.txt").WithGeneration("gen-1")
+	node2 := graph.NewNode("fs:file").WithURI("file:///test/b.txt").WithGeneration("gen-2")
+	node3 := graph.NewNode("fs:file").WithURI("file:///other/c.txt").WithGeneration("gen-1")
+
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+	_ = s.PutNode(ctx, node3)
+
+	deleted, err := s.DeleteStaleByURIPrefix(ctx, "file:///test", "gen-2")
+	if err != nil {
+		t.Fatalf("DeleteStaleByURIPrefix failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 deleted, got %d", deleted)
+	}
+
+	_, err = s.GetNode(ctx, node1.ID)
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Error("stale node should be deleted")
+	}
+
+	_, err = s.GetNode(ctx, node2.ID)
+	if err != nil {
+		t.Error("current gen node should exist")
+	}
+
+	_, err = s.GetNode(ctx, node3.ID)
+	if err != nil {
+		t.Error("node outside URI prefix should exist")
+	}
+}
+
+func TestDeleteByURIPrefix(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node1 := graph.NewNode("fs:file").WithURI("file:///test/a.txt").WithGeneration("gen-1")
+	node2 := graph.NewNode("fs:file").WithURI("file:///test/b.txt").WithGeneration("gen-2")
+	node3 := graph.NewNode("fs:file").WithURI("file:///other/c.txt").WithGeneration("gen-1")
+
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+	_ = s.PutNode(ctx, node3)
+
+	deleted, err := s.DeleteByURIPrefix(ctx, "file:///test")
+	if err != nil {
+		t.Fatalf("DeleteByURIPrefix failed: %v", err)
+	}
+	if deleted != 2 {
+		t.Errorf("expected 2 deleted, got %d", deleted)
+	}
+
+	_, err = s.GetNode(ctx, node1.ID)
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Error("node1 should be deleted")
+	}
+
+	_, err = s.GetNode(ctx, node2.ID)
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Error("node2 should be deleted")
+	}
+
+	_, err = s.GetNode(ctx, node3.ID)
+	if err != nil {
+		t.Error("node outside URI prefix should exist")
+	}
+}
+
+func TestFindStaleByURIPrefix(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node1 := graph.NewNode("fs:file").WithURI("file:///test/a.txt").WithGeneration("gen-1")
+	node2 := graph.NewNode("fs:file").WithURI("file:///test/b.txt").WithGeneration("gen-2")
+	node3 := graph.NewNode("fs:file").WithURI("file:///other/c.txt").WithGeneration("gen-1")
+
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+	_ = s.PutNode(ctx, node3)
+
+	stale, err := s.FindStaleByURIPrefix(ctx, "file:///test", "gen-2")
+	if err != nil {
+		t.Fatalf("FindStaleByURIPrefix failed: %v", err)
+	}
+	if len(stale) != 1 {
+		t.Errorf("expected 1 stale node, got %d", len(stale))
+	}
+	if len(stale) > 0 && stale[0].ID != node1.ID {
+		t.Errorf("expected stale node to be node1")
+	}
+}
+
+func TestDeleteStaleEdges(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node1 := graph.NewNode("fs:dir")
+	node2 := graph.NewNode("fs:file")
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+
+	edge1 := graph.NewEdge("contains", node1.ID, node2.ID).WithGeneration("gen-1")
+	edge2 := graph.NewEdge("references", node1.ID, node2.ID).WithGeneration("gen-2")
+	_ = s.PutEdge(ctx, edge1)
+	_ = s.PutEdge(ctx, edge2)
+
+	deleted, err := s.DeleteStaleEdges(ctx, "gen-2")
+	if err != nil {
+		t.Fatalf("DeleteStaleEdges failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 deleted, got %d", deleted)
+	}
+
+	_, err = s.GetEdge(ctx, edge1.ID)
+	if !errors.Is(err, storage.ErrEdgeNotFound) {
+		t.Error("stale edge should be deleted")
+	}
+
+	_, err = s.GetEdge(ctx, edge2.ID)
+	if err != nil {
+		t.Error("current gen edge should exist")
+	}
+}
+
+func TestDeleteOrphanedEdges(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node1 := graph.NewNode("fs:dir")
+	node2 := graph.NewNode("fs:file")
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+
+	edge := graph.NewEdge("contains", node1.ID, node2.ID)
+	_ = s.PutEdge(ctx, edge)
+
+	// Delete one node
+	_ = s.DeleteNode(ctx, node2.ID)
+
+	// Edge should be orphaned
+	deleted, err := s.DeleteOrphanedEdges(ctx)
+	if err != nil {
+		t.Fatalf("DeleteOrphanedEdges failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 deleted, got %d", deleted)
+	}
+
+	_, err = s.GetEdge(ctx, edge.ID)
+	if !errors.Is(err, storage.ErrEdgeNotFound) {
+		t.Error("orphaned edge should be deleted")
+	}
+}
+
+func TestPersistence(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Create and populate
+	s1, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	node := graph.NewNode("fs:file").WithURI("file:///test.txt")
+	_ = s1.PutNode(ctx, node)
+	s1.Close()
+
+	// Reopen and verify
+	s2, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("New (reopen) failed: %v", err)
+	}
+	defer s2.Close()
+
+	got, err := s2.GetNode(ctx, node.ID)
+	if err != nil {
+		t.Fatalf("GetNode after reopen failed: %v", err)
+	}
+	if got.URI != node.URI {
+		t.Errorf("expected URI %s, got %s", node.URI, got.URI)
+	}
+}
+
+func TestNewCreatesFile(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "new.db")
+
+	// File shouldn't exist yet
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatal("database file should not exist yet")
+	}
+
+	s, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	s.Close()
+
+	// File should exist now
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Errorf("database file should exist: %v", err)
+	}
+}

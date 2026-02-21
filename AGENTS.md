@@ -1,0 +1,191 @@
+# Axon - Agent Guidelines
+
+Graph-based storage system for AI agent context management, retrieval, and exploration.
+
+## Build & Test Commands
+
+```bash
+# Build all packages
+go build ./...
+
+# Build CLI binary
+go build -o axon ./cmd/axon
+
+# Run all tests
+go test ./...
+
+# Run tests with verbose output
+go test -v ./...
+
+# Run a single test by name
+go test -v -run TestAxonIndex ./...
+
+# Run tests in a specific package
+go test -v ./adapters/sqlite
+
+# Run a single test in a specific package
+go test -v -run TestDeleteStaleNodes ./adapters/sqlite
+
+# Run tests with race detection
+go test -race ./...
+
+# Check for lint issues (if golangci-lint is installed)
+golangci-lint run
+
+# Format code
+gofmt -w .
+```
+
+## Project Structure
+
+```
+axon/
+├── axon.go              # Main Axon type and IndexWithProgress
+├── graph/               # Core graph types (Node, Edge, Storage interface)
+├── adapters/sqlite/     # SQLite storage implementation
+├── storage/memory/      # In-memory storage implementation
+├── indexer/             # Indexer interface, registry, events, emitter
+│   ├── fs/              # Filesystem indexer
+│   └── git/             # Git repository indexer
+├── types/               # Node/edge type definitions (fs, vcs)
+├── progress/            # Progress reporting (coordinator, bubbletea UI)
+├── render/              # Tree rendering utilities
+└── cmd/axon/            # CLI commands (init, tree, show)
+```
+
+## Code Style Guidelines
+
+### Imports
+
+Group imports in this order, separated by blank lines:
+1. Standard library
+2. External packages
+3. Internal packages (github.com/codewandler/axon/...)
+
+```go
+import (
+    "context"
+    "path/filepath"
+    "sync"
+
+    "github.com/go-git/go-git/v5"
+
+    "github.com/codewandler/axon/graph"
+    "github.com/codewandler/axon/indexer"
+)
+```
+
+### Naming Conventions
+
+- **Types**: PascalCase (`Config`, `IndexResult`, `GraphEmitter`)
+- **Interfaces**: PascalCase, often noun-based (`Storage`, `Indexer`, `Emitter`)
+- **Functions/Methods**: PascalCase for exported, camelCase for internal
+- **Constants**: PascalCase for exported, camelCase for internal
+- **Node types**: Use `domain:name` format (`fs:file`, `fs:dir`, `vcs:repo`)
+- **Edge types**: Use snake_case (`contains`, `has_branch`, `located_at`)
+
+### Error Handling
+
+- Use sentinel errors for common cases:
+  ```go
+  var ErrNodeNotFound = errors.New("node not found")
+  ```
+- Wrap errors with context using `fmt.Errorf("...: %w", err)`
+- Check errors immediately after function calls
+- Use `errors.Is()` for sentinel error comparison
+
+### Structs and Methods
+
+- Use pointer receivers for methods that modify state
+- Use value receivers for simple getters
+- Builder pattern with `With*` methods returning `*T` for chaining:
+  ```go
+  node := graph.NewNode("fs:file").
+      WithURI("file:///path").
+      WithKey("/path").
+      WithData(data)
+  ```
+
+### Context Usage
+
+- Always pass `context.Context` as first parameter
+- Use `ctx` as the parameter name
+- Create indexer-specific context types for domain data:
+  ```go
+  type Context struct {
+      Root       string
+      Generation string
+      Graph      *graph.Graph
+      Emitter    Emitter
+  }
+  ```
+
+### Testing
+
+- Use `t.Helper()` in test helper functions
+- Use `t.TempDir()` for temporary directories (auto-cleaned)
+- Use `t.Cleanup()` for deferred cleanup
+- Use table-driven tests for multiple cases
+- Name test functions as `TestFunctionName` or `TestType_Method`
+
+```go
+func setupTestDB(t *testing.T) *Storage {
+    t.Helper()
+    dir := t.TempDir()
+    s, err := New(filepath.Join(dir, "test.db"))
+    if err != nil {
+        t.Fatalf("New failed: %v", err)
+    }
+    t.Cleanup(func() { s.Close() })
+    return s
+}
+```
+
+### Concurrency
+
+- Use `sync.Mutex` for simple locking
+- Use `sync.RWMutex` when reads greatly outnumber writes
+- Use channels for communication between goroutines
+- Use `sync.WaitGroup` for coordinating goroutine completion
+
+### Storage Interface
+
+All storage implementations must implement `graph.Storage`:
+- `PutNode`, `GetNode`, `DeleteNode`
+- `PutEdge`, `GetEdge`, `DeleteEdge`
+- `GetEdgesFrom`, `GetEdgesTo`
+- `FindNodes`
+- `FindStaleByURIPrefix`, `DeleteStaleByURIPrefix`, `DeleteByURIPrefix` - for indexer-owned cleanup
+- `DeleteStaleEdges`, `DeleteOrphanedEdges` - framework-level cleanup
+- `Flush`
+
+SQLite adapter uses buffered writes (5000 items or 100ms) for performance.
+Always call `Flush()` before reads if writes are buffered.
+
+### Indexer Interface
+
+Indexers must implement:
+- `Name() string` - identifier (e.g., "fs", "git")
+- `Schemes() []string` - URI schemes handled
+- `Handles(uri string) bool` - can process this URI?
+- `Subscriptions() []Subscription` - events to subscribe to
+- `Index(ctx, ictx) error` - perform indexing
+
+### CLI Commands
+
+- Use cobra for command structure
+- Global flags: `--db-dir`, `--local`
+- DB auto-lookup: walk up directories, fallback to `~/.axon/graph.db`
+- Print "Using database: <path>" for transparency
+
+### Key Patterns
+
+1. **Generation-based cleanup**: Each index run has a generation ID; indexers use it to identify stale nodes
+2. **Indexer-owned cleanup**: Each indexer is responsible for finding and deleting its own stale nodes using URI prefix matching
+3. **Event-driven cascade**: When FS indexer detects stale nodes (deleted files/dirs), it emits `EventNodeDeleting` events so dependent indexers (git) can clean up their nodes
+4. **URI prefix for scoping**: Cleanup uses `DeleteStaleByURIPrefix(uriPrefix, generation)` instead of root path
+5. **Framework handles edges only**: The framework handles `DeleteStaleEdges` and `DeleteOrphanedEdges` after all indexers complete
+6. **Ignored directories are indexed**: Ignored directories (like `.git`) are indexed as nodes (but contents skipped) so deletion can be detected
+7. **Event-based indexing**: FS indexer emits `EventEntryVisited`; git indexer subscribes to `.git` directories
+8. **TriggerEvent in Context**: Indexers receive `TriggerEvent *Event` to know if they were invoked directly or triggered by an event subscription
+9. **URI schemes**: `file://` for filesystem, `git+file://` for local git repos

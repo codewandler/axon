@@ -11,6 +11,23 @@ import (
 	"github.com/codewandler/axon/types"
 )
 
+// Type emoji mappings
+var typeEmojis = map[string]string{
+	types.TypeDir:    "📁",
+	types.TypeFile:   "📄",
+	types.TypeLink:   "🔗",
+	types.TypeRepo:   "📦",
+	types.TypeRemote: "🌐",
+	types.TypeBranch: "🌿",
+	types.TypeTag:    "🏷️",
+}
+
+// ANSI color codes for colored output
+const (
+	colorReset = "\033[0m"
+	colorDim   = "\033[90m" // Gray/dim color for node IDs
+)
+
 // Options configures tree rendering.
 type Options struct {
 	// MaxDepth limits how deep the tree renders. 0 means unlimited.
@@ -24,6 +41,12 @@ type Options struct {
 
 	// Compact uses shorter output format.
 	Compact bool
+
+	// UseEmoji replaces type names with emojis.
+	UseEmoji bool
+
+	// UseColor enables ANSI color output.
+	UseColor bool
 }
 
 // DefaultOptions returns sensible default rendering options.
@@ -77,17 +100,28 @@ func renderNode(ctx context.Context, g *graph.Graph, node *graph.Node, sb *strin
 		}
 	}
 
-	// Node ID
-	if opts.ShowIDs {
-		line.WriteString(fmt.Sprintf("[%s] ", shortID(node.ID)))
+	// Type indicator (emoji)
+	if opts.UseEmoji {
+		if emoji, ok := typeEmojis[node.Type]; ok {
+			line.WriteString(emoji + " ")
+		}
 	}
 
 	// Name
 	line.WriteString(name)
 
-	// Type
-	if opts.ShowTypes {
+	// Type (only if not using emoji and ShowTypes is enabled)
+	if opts.ShowTypes && !opts.UseEmoji {
 		line.WriteString(fmt.Sprintf(" (%s)", node.Type))
+	}
+
+	// Node ID (dimmed, at the end)
+	if opts.ShowIDs {
+		if opts.UseColor {
+			line.WriteString(fmt.Sprintf(" %s[%s]%s", colorDim, shortID(node.ID), colorReset))
+		} else {
+			line.WriteString(fmt.Sprintf(" [%s]", shortID(node.ID)))
+		}
 	}
 
 	// Get children
@@ -144,6 +178,20 @@ func getDisplayName(node *graph.Node) string {
 			return data.Name
 		case types.LinkData:
 			return data.Name + " -> " + data.Target
+		case types.RepoData:
+			return data.Name
+		case types.RemoteData:
+			if len(data.URLs) > 0 {
+				return data.Name + " (" + data.URLs[0] + ")"
+			}
+			return data.Name
+		case types.BranchData:
+			if data.IsHead {
+				return data.Name + " *"
+			}
+			return data.Name
+		case types.TagData:
+			return data.Name
 		case map[string]any:
 			if name, ok := data["name"].(string); ok {
 				if node.Type == types.TypeDir {

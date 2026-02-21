@@ -135,11 +135,21 @@ func TestIndexerIgnore(t *testing.T) {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
 
-	// Should have: root dir, file1.txt, subdir, file2.txt = 4 nodes (no .hidden or secret.txt)
-	if len(nodes) != 4 {
-		t.Errorf("expected 4 nodes (with .hidden ignored), got %d", len(nodes))
+	// Should have: root dir, file1.txt, subdir, file2.txt, .hidden dir = 5 nodes
+	// (no secret.txt inside .hidden - contents are skipped)
+	// Note: ignored directories are still indexed as nodes (so we can detect deletion),
+	// but their contents are skipped
+	if len(nodes) != 5 {
+		t.Errorf("expected 5 nodes (with .hidden dir but not contents), got %d", len(nodes))
 		for _, n := range nodes {
 			t.Logf("  %s: %s", n.Type, n.URI)
+		}
+	}
+
+	// Verify .hidden contents are not indexed
+	for _, n := range nodes {
+		if filepath.Base(types.URIToPath(n.URI)) == "secret.txt" {
+			t.Error("secret.txt inside .hidden should not be indexed")
 		}
 	}
 }

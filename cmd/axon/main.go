@@ -9,6 +9,12 @@ import (
 
 var version = "dev"
 
+// Global flags
+var (
+	flagDBDir string
+	flagLocal bool
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "axon",
 	Short: "Graph-based storage for AI agents",
@@ -25,8 +31,13 @@ func main() {
 }
 
 func init() {
+	// Global persistent flags
+	rootCmd.PersistentFlags().StringVar(&flagDBDir, "db-dir", "", "directory containing the database (default: auto-lookup)")
+	rootCmd.PersistentFlags().BoolVar(&flagLocal, "local", false, "use local .axon directory in target path")
+
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(treeCmd)
+	rootCmd.AddCommand(showCmd)
 
 	rootCmd.Version = version
 }

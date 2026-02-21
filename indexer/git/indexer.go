@@ -10,6 +10,7 @@ import (
 
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
+	"github.com/codewandler/axon/progress"
 	"github.com/codewandler/axon/types"
 )
 
@@ -26,19 +27,48 @@ func (i *Indexer) Name() string {
 }
 
 func (i *Indexer) Schemes() []string {
-	return []string{"git"}
+	return []string{"git+file"}
 }
 
 func (i *Indexer) Handles(uri string) bool {
-	return strings.HasPrefix(uri, "git://")
+	return strings.HasPrefix(uri, "git+file://")
+}
+
+func (i *Indexer) Subscriptions() []indexer.Subscription {
+	// Git indexer subscribes to .git directories being visited or deleted
+	return []indexer.Subscription{
+		{
+			EventType: indexer.EventEntryVisited,
+			NodeType:  types.TypeDir,
+			Name:      ".git",
+		},
+		{
+			EventType: indexer.EventNodeDeleting,
+			NodeType:  types.TypeDir,
+			Name:      ".git",
+		},
+	}
 }
 
 func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 	repoPath := types.URIToRepoPath(ictx.Root)
 
+	// Check if triggered by a deletion event - clean up instead of indexing
+	if ictx.TriggerEvent != nil && ictx.TriggerEvent.Type == indexer.EventNodeDeleting {
+		return i.cleanup(ctx, ictx, repoPath)
+	}
+
+	// Report start
+	if ictx.Progress != nil {
+		ictx.Progress <- progress.Started(i.Name())
+	}
+
 	// Open the repository
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
+		if ictx.Progress != nil {
+			ictx.Progress <- progress.Error(i.Name(), err)
+		}
 		return err
 	}
 
@@ -58,8 +88,9 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 
 	// Create repo node
 	repoName := filepath.Base(repoPath)
+	repoURI := types.RepoPathToURI(repoPath)
 	repoNode := graph.NewNode(types.TypeRepo).
-		WithURI(types.RepoPathToURI(repoPath)).
+		WithURI(repoURI).
 		WithKey(repoPath).
 		WithData(types.RepoData{
 			Name:       repoName,
@@ -83,25 +114,33 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 	}
 
 	// Index remotes
-	if err := i.indexRemotes(ctx, ictx, repo, repoNode.ID); err != nil {
+	if err := i.indexRemotes(ctx, ictx, repo, repoNode.ID, repoURI); err != nil {
 		return err
 	}
 
 	// Index branches
-	if err := i.indexBranches(ctx, ictx, repo, repoNode.ID, head); err != nil {
+	if err := i.indexBranches(ctx, ictx, repo, repoNode.ID, repoURI, head); err != nil {
 		return err
 	}
 
 	// Index tags
-	if err := i.indexTags(ctx, ictx, repo, repoNode.ID); err != nil {
+	if err := i.indexTags(ctx, ictx, repo, repoNode.ID, repoURI); err != nil {
+		if ictx.Progress != nil {
+			ictx.Progress <- progress.Error(i.Name(), err)
+		}
 		return err
+	}
+
+	// Report completion
+	if ictx.Progress != nil {
+		ictx.Progress <- progress.Completed(i.Name(), 1)
 	}
 
 	_ = worktree // silence unused warning
 	return nil
 }
 
-func (i *Indexer) indexRemotes(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoID string) error {
+func (i *Indexer) indexRemotes(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoID string, repoURI string) error {
 	remotes, err := repo.Remotes()
 	if err != nil {
 		return err
@@ -110,7 +149,7 @@ func (i *Indexer) indexRemotes(ctx context.Context, ictx *indexer.Context, repo 
 	for _, remote := range remotes {
 		cfg := remote.Config()
 		remoteNode := graph.NewNode(types.TypeRemote).
-			WithURI(types.RepoPathToURI(ictx.Root) + "/remote/" + cfg.Name).
+			WithURI(repoURI + "/remote/" + cfg.Name).
 			WithKey(cfg.Name).
 			WithData(types.RemoteData{
 				Name: cfg.Name,
@@ -130,7 +169,7 @@ func (i *Indexer) indexRemotes(ctx context.Context, ictx *indexer.Context, repo 
 	return nil
 }
 
-func (i *Indexer) indexBranches(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoID string, head *plumbing.Reference) error {
+func (i *Indexer) indexBranches(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoID string, repoURI string, head *plumbing.Reference) error {
 	branches, err := repo.Branches()
 	if err != nil {
 		return err
@@ -141,7 +180,7 @@ func (i *Indexer) indexBranches(ctx context.Context, ictx *indexer.Context, repo
 		isHead := head != nil && ref.Name() == head.Name()
 
 		branchNode := graph.NewNode(types.TypeBranch).
-			WithURI(types.RepoPathToURI(ictx.Root) + "/branch/" + branchName).
+			WithURI(repoURI + "/branch/" + branchName).
 			WithKey(branchName).
 			WithData(types.BranchData{
 				Name:     branchName,
@@ -161,7 +200,7 @@ func (i *Indexer) indexBranches(ctx context.Context, ictx *indexer.Context, repo
 	return err
 }
 
-func (i *Indexer) indexTags(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoID string) error {
+func (i *Indexer) indexTags(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoID string, repoURI string) error {
 	tags, err := repo.Tags()
 	if err != nil {
 		return err
@@ -171,7 +210,7 @@ func (i *Indexer) indexTags(ctx context.Context, ictx *indexer.Context, repo *gi
 		tagName := ref.Name().Short()
 
 		tagNode := graph.NewNode(types.TypeTag).
-			WithURI(types.RepoPathToURI(ictx.Root) + "/tag/" + tagName).
+			WithURI(repoURI + "/tag/" + tagName).
 			WithKey(tagName).
 			WithData(types.TagData{
 				Name:   tagName,
@@ -189,15 +228,12 @@ func (i *Indexer) indexTags(ctx context.Context, ictx *indexer.Context, repo *gi
 	return err
 }
 
-// IndexFromPath is a helper that indexes a git repo at a given path.
-// It's used when auto-detecting .git directories.
-func IndexFromPath(ctx context.Context, g *graph.Graph, emitter indexer.Emitter, path string, generation string) error {
-	idx := New()
-	ictx := &indexer.Context{
-		Root:       types.RepoPathToURI(path),
-		Generation: generation,
-		Graph:      g,
-		Emitter:    emitter,
-	}
-	return idx.Index(ctx, ictx)
+// cleanup removes all git nodes for the given repository.
+// Called when the .git directory is being deleted.
+func (i *Indexer) cleanup(ctx context.Context, ictx *indexer.Context, repoPath string) error {
+	repoURI := types.RepoPathToURI(repoPath)
+
+	// Delete all nodes under this repo's URI prefix
+	_, err := ictx.Graph.Storage().DeleteByURIPrefix(ctx, repoURI)
+	return err
 }

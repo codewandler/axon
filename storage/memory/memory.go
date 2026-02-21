@@ -265,13 +265,48 @@ func matchesFilter(node *graph.Node, filter graph.NodeFilter) bool {
 	return true
 }
 
-func (s *Storage) DeleteStaleNodes(ctx context.Context, uriPrefix, currentGen string) (int, error) {
+func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGen string) ([]*graph.Node, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var stale []*graph.Node
+	for _, node := range s.nodes {
+		if strings.HasPrefix(node.URI, uriPrefix) && node.Generation != currentGen {
+			nodeCopy := *node
+			stale = append(stale, &nodeCopy)
+		}
+	}
+
+	return stale, nil
+}
+
+func (s *Storage) DeleteStaleByURIPrefix(ctx context.Context, uriPrefix, currentGen string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var toDelete []string
 	for id, node := range s.nodes {
 		if strings.HasPrefix(node.URI, uriPrefix) && node.Generation != currentGen {
+			toDelete = append(toDelete, id)
+		}
+	}
+
+	for _, id := range toDelete {
+		node := s.nodes[id]
+		s.removeNodeIndexes(node)
+		delete(s.nodes, id)
+	}
+
+	return len(toDelete), nil
+}
+
+func (s *Storage) DeleteByURIPrefix(ctx context.Context, uriPrefix string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var toDelete []string
+	for id, node := range s.nodes {
+		if strings.HasPrefix(node.URI, uriPrefix) {
 			toDelete = append(toDelete, id)
 		}
 	}
@@ -325,4 +360,9 @@ func (s *Storage) DeleteOrphanedEdges(ctx context.Context) (int, error) {
 	}
 
 	return len(toDelete), nil
+}
+
+// Flush is a no-op for memory storage since all writes are immediate.
+func (s *Storage) Flush(ctx context.Context) error {
+	return nil
 }

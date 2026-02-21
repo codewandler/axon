@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/codewandler/axon/graph"
@@ -78,18 +79,32 @@ func TestAxonIndex(t *testing.T) {
 		t.Errorf("expected 2 files, got %d", result.Files)
 	}
 
-	// Should have dir, subdir = 2 directories
-	if result.Directories != 2 {
-		t.Errorf("expected 2 directories, got %d", result.Directories)
+	// Should have dir, subdir, .git = 3 directories
+	// (ignored directories are indexed as nodes so we can detect their deletion,
+	// but their contents are skipped)
+	if result.Directories != 3 {
+		t.Errorf("expected 3 directories, got %d", result.Directories)
 	}
 
-	// .git should be ignored
+	// .git directory should exist as a node (for deletion detection)
 	nodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{URIPrefix: types.PathToURI(filepath.Join(dir, ".git"))})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
-	if len(nodes) != 0 {
-		t.Errorf("expected .git to be ignored, found %d nodes", len(nodes))
+	if len(nodes) != 1 {
+		t.Errorf("expected .git directory node, found %d nodes", len(nodes))
+	}
+
+	// But .git contents should not be indexed (check for a file that would be inside)
+	allNodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{})
+	if err != nil {
+		t.Fatalf("FindNodes failed: %v", err)
+	}
+	for _, n := range allNodes {
+		path := types.URIToPath(n.URI)
+		if strings.Contains(path, ".git/") {
+			t.Errorf("expected .git contents to be skipped, found: %s", path)
+		}
 	}
 }
 
@@ -170,12 +185,19 @@ func TestAxonCustomIgnore(t *testing.T) {
 		t.Errorf("expected 2 files, got %d", result.Files)
 	}
 
-	// subdir should be ignored
+	// subdir should exist as a node (for deletion detection) but contents skipped
 	nodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{URIPrefix: types.PathToURI(filepath.Join(dir, "subdir"))})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
-	if len(nodes) != 0 {
-		t.Errorf("expected subdir to be ignored, found %d nodes", len(nodes))
+	if len(nodes) != 1 {
+		t.Errorf("expected subdir directory node only, found %d nodes", len(nodes))
+	}
+
+	// Check that file2.txt inside subdir is NOT indexed
+	for _, n := range nodes {
+		if filepath.Base(types.URIToPath(n.URI)) == "file2.txt" {
+			t.Errorf("expected subdir contents to be skipped")
+		}
 	}
 }

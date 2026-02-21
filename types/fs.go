@@ -1,6 +1,7 @@
 package types
 
 import (
+	"os"
 	"time"
 
 	"github.com/codewandler/axon/graph"
@@ -20,14 +21,16 @@ const (
 
 // DirData holds data for a directory node.
 type DirData struct {
-	Name string `json:"name"`
+	Name string      `json:"name"`
+	Mode os.FileMode `json:"mode"`
 }
 
 // FileData holds data for a file node.
 type FileData struct {
-	Name     string    `json:"name"`
-	Size     int64     `json:"size"`
-	Modified time.Time `json:"modified"`
+	Name     string      `json:"name"`
+	Size     int64       `json:"size"`
+	Modified time.Time   `json:"modified"`
+	Mode     os.FileMode `json:"mode"`
 }
 
 // LinkData holds data for a symbolic link node.

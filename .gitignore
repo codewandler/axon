@@ -1,3 +1,7 @@
 .idea
 .axon/*.db
 TODO.md
+
+# Binaries
+/axon
+*.exe

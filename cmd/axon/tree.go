@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 
 	"github.com/codewandler/axon"
+	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/render"
 	"github.com/codewandler/axon/types"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -16,6 +18,10 @@ var (
 	treeDepth     int
 	treeShowIDs   bool
 	treeShowTypes bool
+	treeNoColor   bool
+	treeNoEmoji   bool
+	treeColor     bool
+	treeEmoji     bool
 )
 
 var treeCmd = &cobra.Command{
@@ -35,6 +41,10 @@ func init() {
 	treeCmd.Flags().IntVarP(&treeDepth, "depth", "d", 3, "Maximum depth to display (0 for unlimited)")
 	treeCmd.Flags().BoolVar(&treeShowIDs, "ids", true, "Show node IDs")
 	treeCmd.Flags().BoolVar(&treeShowTypes, "types", true, "Show node types")
+	treeCmd.Flags().BoolVar(&treeNoColor, "no-color", false, "Disable colored output")
+	treeCmd.Flags().BoolVar(&treeNoEmoji, "no-emoji", false, "Disable emoji icons")
+	treeCmd.Flags().BoolVar(&treeColor, "color", false, "Force colored output")
+	treeCmd.Flags().BoolVar(&treeEmoji, "emoji", false, "Force emoji icons")
 }
 
 func runTree(cmd *cobra.Command, args []string) error {
@@ -61,16 +71,29 @@ func runTree(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("path is not a directory: %s", absPath)
 	}
 
-	// Create axon instance and index
-	ax, err := axon.New(axon.Config{Dir: absPath})
+	// Resolve database location (read-only, so forWrite=false)
+	dbLoc, err := resolveDB(flagDBDir, flagLocal, absPath, false)
 	if err != nil {
-		return fmt.Errorf("failed to create axon: %w", err)
+		return err
 	}
 
-	// Index first (since we're using in-memory storage)
-	_, err = ax.Index(ctx, "")
+	// Print database location
+	fmt.Printf("Using database: %s\n", dbLoc.Path)
+
+	// Open SQLite storage
+	storage, err := sqlite.New(dbLoc.Path)
 	if err != nil {
-		return fmt.Errorf("indexing failed: %w", err)
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer storage.Close()
+
+	// Create axon instance with existing storage
+	ax, err := axon.New(axon.Config{
+		Dir:     absPath,
+		Storage: storage,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create axon: %w", err)
 	}
 
 	// Find root node
@@ -80,11 +103,20 @@ func runTree(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to find root node: %w", err)
 	}
 
+	// Detect TTY for color/emoji support
+	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
+
+	// Determine color/emoji settings (flags override TTY detection)
+	useColor := (isTTY || treeColor) && !treeNoColor
+	useEmoji := (isTTY || treeEmoji) && !treeNoEmoji
+
 	// Render tree
 	opts := render.Options{
 		MaxDepth:  treeDepth,
 		ShowIDs:   treeShowIDs,
 		ShowTypes: treeShowTypes,
+		UseColor:  useColor,
+		UseEmoji:  useEmoji,
 	}
 
 	output, err := render.Tree(ctx, ax.Graph(), rootNode.ID, opts)

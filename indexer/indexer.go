@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/codewandler/axon/graph"
+	"github.com/codewandler/axon/progress"
 )
 
 // Context provides the execution environment for an indexer.
@@ -20,6 +21,20 @@ type Context struct {
 
 	// Emitter is where discovered nodes and edges should be emitted.
 	Emitter Emitter
+
+	// Progress is an optional channel for reporting indexing progress.
+	// If nil, progress reporting is disabled.
+	Progress chan<- progress.Event
+
+	// Events is an optional channel for broadcasting indexer events.
+	// Other indexers can subscribe to these events to react dynamically.
+	// If nil, event broadcasting is disabled.
+	Events chan<- Event
+
+	// TriggerEvent is the event that triggered this indexer invocation.
+	// Nil for direct invocations (primary indexers).
+	// Set when the indexer is triggered by an event subscription.
+	TriggerEvent *Event
 }
 
 // InBounds returns true if the given URI is within the root boundary.
@@ -38,6 +53,11 @@ type Indexer interface {
 
 	// Handles returns true if this indexer can process the given URI.
 	Handles(uri string) bool
+
+	// Subscriptions returns the events this indexer subscribes to.
+	// Return nil or empty slice if this indexer doesn't subscribe to events
+	// (i.e., it's a primary indexer triggered directly, not by events).
+	Subscriptions() []Subscription
 
 	// Index indexes starting from the root URI in the context.
 	Index(ctx context.Context, ictx *Context) error

@@ -2,13 +2,14 @@ package axon
 
 import (
 	"context"
-	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
 	"github.com/codewandler/axon/indexer/fs"
 	"github.com/codewandler/axon/indexer/git"
+	"github.com/codewandler/axon/progress"
 	"github.com/codewandler/axon/storage/memory"
 	"github.com/codewandler/axon/types"
 )
@@ -68,6 +69,7 @@ func New(cfg Config) (*Axon, error) {
 		ignore = []string{".git", ".axon", "node_modules", "__pycache__", ".DS_Store"}
 	}
 	idxRegistry.Register(fs.New(fs.Config{Ignore: ignore}))
+	idxRegistry.Register(git.New())
 
 	return &Axon{
 		graph:    g,
@@ -85,6 +87,12 @@ func (a *Axon) Graph() *graph.Graph {
 // Index indexes the given path and updates the graph.
 // If path is empty, indexes the configured directory.
 func (a *Axon) Index(ctx context.Context, path string) (*IndexResult, error) {
+	return a.IndexWithProgress(ctx, path, nil)
+}
+
+// IndexWithProgress indexes the given path and reports progress on the provided channel.
+// If progress is nil, progress reporting is disabled.
+func (a *Axon) IndexWithProgress(ctx context.Context, path string, prog chan<- progress.Event) (*IndexResult, error) {
 	if path == "" {
 		path = a.config.Dir
 	}
@@ -107,31 +115,84 @@ func (a *Axon) Index(ctx context.Context, path string) (*IndexResult, error) {
 	// Create emitter
 	emitter := indexer.NewGraphEmitter(a.graph, generation)
 
+	// Create event channel for indexer communication
+	events := make(chan indexer.Event, 100)
+
 	// Create index context
 	ictx := &indexer.Context{
 		Root:       uri,
 		Generation: generation,
 		Graph:      a.graph,
 		Emitter:    emitter,
+		Progress:   prog,
+		Events:     events,
 	}
 
-	// Run indexer
+	// Track active indexers
+	var wg sync.WaitGroup
+	var indexerErrors []error
+	var errorsMu sync.Mutex
+
+	// Event dispatcher goroutine
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for event := range events {
+			// Find subscribers for this event
+			subscribers := a.indexers.SubscribersFor(event)
+			for _, sub := range subscribers {
+				// Determine the root path for the subscriber
+				// For git indexer reacting to .git, root is parent dir
+				subRoot := event.Path
+				if event.Name == ".git" {
+					subRoot = filepath.Dir(event.Path)
+				}
+
+				// Capture event for closure
+				triggerEvent := event
+
+				wg.Add(1)
+				go func(subIdx indexer.Indexer, root string, trigger indexer.Event) {
+					defer wg.Done()
+
+					// Create context for subscribed indexer
+					subCtx := &indexer.Context{
+						Root:         types.RepoPathToURI(root),
+						Generation:   generation,
+						Graph:        a.graph,
+						Emitter:      emitter,
+						Progress:     prog,
+						Events:       events, // Allow chaining events
+						TriggerEvent: &trigger,
+					}
+
+					if err := subIdx.Index(ctx, subCtx); err != nil {
+						errorsMu.Lock()
+						indexerErrors = append(indexerErrors, err)
+						errorsMu.Unlock()
+					}
+				}(sub, subRoot, triggerEvent)
+			}
+		}
+	}()
+
+	// Run primary indexer
 	if err := idx.Index(ctx, ictx); err != nil {
+		close(events)
+		wg.Wait()
 		return nil, err
 	}
 
-	// Auto-detect and index git repositories
-	if err := a.indexGitRepos(ctx, absPath, emitter, generation); err != nil {
-		// Log but don't fail - git indexing is supplementary
-		_ = err
-	}
+	// Close events channel and wait for all indexers
+	close(events)
+	wg.Wait()
 
-	// Clean up stale nodes and edges
-	staleNodes, err := a.storage.DeleteStaleNodes(ctx, uri, generation)
-	if err != nil {
+	// Flush storage buffer
+	if err := a.storage.Flush(ctx); err != nil {
 		return nil, err
 	}
 
+	// Clean up stale edges and orphaned edges (nodes cleaned up by indexers)
 	staleEdges, err := a.storage.DeleteStaleEdges(ctx, generation)
 	if err != nil {
 		return nil, err
@@ -164,9 +225,10 @@ func (a *Axon) Index(ctx context.Context, path string) (*IndexResult, error) {
 		Files:        files,
 		Directories:  dirs,
 		Repos:        repos,
-		StaleRemoved: staleNodes + staleEdges + orphanedEdges,
+		StaleRemoved: staleEdges + orphanedEdges,
 		RootURI:      uri,
 		Generation:   generation,
+		Errors:       indexerErrors,
 	}, nil
 }
 
@@ -183,6 +245,7 @@ type IndexResult struct {
 	StaleRemoved int
 	RootURI      string
 	Generation   string
+	Errors       []error // Errors from individual indexers (non-fatal)
 }
 
 // ErrNoIndexer is returned when no indexer can handle a URI.
@@ -192,35 +255,4 @@ type ErrNoIndexer struct {
 
 func (e *ErrNoIndexer) Error() string {
 	return "no indexer for URI: " + e.URI
-}
-
-// indexGitRepos scans for .git directories and indexes them.
-func (a *Axon) indexGitRepos(ctx context.Context, rootPath string, emitter indexer.Emitter, generation string) error {
-	// Find all .git directories
-	return filepath.WalkDir(rootPath, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // Skip errors
-		}
-
-		// Check for .git directory
-		if d.IsDir() && d.Name() == ".git" {
-			// The repo is in the parent directory
-			repoPath := filepath.Dir(path)
-			if err := git.IndexFromPath(ctx, a.graph, emitter, repoPath, generation); err != nil {
-				// Log but continue
-				_ = err
-			}
-			return filepath.SkipDir // Don't descend into .git
-		}
-
-		// Skip common non-repo directories
-		if d.IsDir() {
-			switch d.Name() {
-			case "node_modules", "__pycache__", ".axon", "vendor":
-				return filepath.SkipDir
-			}
-		}
-
-		return nil
-	})
 }
