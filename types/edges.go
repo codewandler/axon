@@ -78,6 +78,18 @@ const (
 // RegisterCommonEdges registers the common edge types that are used across domains.
 // These are generic edges that don't have specific FromTypes/ToTypes constraints.
 func RegisterCommonEdges(r *graph.Registry) {
+	// Structural containment pair
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeContains,
+		Description: "Structural containment (container contains item)",
+	})
+
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeContainedBy,
+		Description: "Inverse of contains (item contained by container)",
+	})
+
+	// Logical ownership pair
 	r.RegisterEdgeType(graph.EdgeSpec{
 		Type:        EdgeHas,
 		Description: "Logical ownership (owner has owned)",
@@ -88,11 +100,24 @@ func RegisterCommonEdges(r *graph.Registry) {
 		Description: "Inverse of has (owned belongs to owner)",
 	})
 
+	// Location
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeLocatedAt,
+		Description: "Physical location (resource located at filesystem location)",
+	})
+
+	// Links and references
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeLinksTo,
+		Description: "Explicit hyperlink (source links to target)",
+	})
+
 	r.RegisterEdgeType(graph.EdgeSpec{
 		Type:        EdgeReferences,
 		Description: "Soft cross-reference between nodes",
 	})
 
+	// Dependencies and imports
 	r.RegisterEdgeType(graph.EdgeSpec{
 		Type:        EdgeDependsOn,
 		Description: "Dependency relationship (dependent depends on dependency)",
