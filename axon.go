@@ -5,12 +5,12 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
 	"github.com/codewandler/axon/indexer/fs"
 	"github.com/codewandler/axon/indexer/git"
 	"github.com/codewandler/axon/progress"
-	"github.com/codewandler/axon/storage/memory"
 	"github.com/codewandler/axon/types"
 )
 
@@ -47,9 +47,13 @@ func New(cfg Config) (*Axon, error) {
 	}
 	cfg.Dir = absDir
 
-	// Default storage
+	// Default storage (in-memory SQLite)
 	if cfg.Storage == nil {
-		cfg.Storage = memory.New()
+		s, err := sqlite.New(":memory:")
+		if err != nil {
+			return nil, err
+		}
+		cfg.Storage = s
 	}
 
 	// Create registry with built-in types

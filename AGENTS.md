@@ -42,8 +42,8 @@ gofmt -w .
 axon/
 ├── axon.go              # Main Axon type and IndexWithProgress
 ├── graph/               # Core graph types (Node, Edge, Storage interface)
-├── adapters/sqlite/     # SQLite storage implementation
-├── storage/memory/      # In-memory storage implementation
+├── adapters/sqlite/     # SQLite storage implementation (also supports :memory: mode)
+├── storage/             # Storage error types
 ├── indexer/             # Indexer interface, registry, events, emitter
 │   ├── fs/              # Filesystem indexer
 │   └── git/             # Git repository indexer

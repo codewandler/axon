@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -37,12 +39,31 @@ type Storage struct {
 	lastFlush  time.Time
 }
 
+var memoryDBCounter uint64
+
 // New creates a new SQLite storage at the given path.
 // The database file will be created if it doesn't exist.
+// For in-memory databases, use ":memory:" as the path.
 func New(path string) (*Storage, error) {
-	db, err := sql.Open("sqlite", path)
+	// For in-memory databases, use shared cache mode so all connections
+	// see the same database. Without this, each connection gets its own
+	// empty database. We use a unique name per instance to isolate tests.
+	dsn := path
+	if path == ":memory:" {
+		id := atomic.AddUint64(&memoryDBCounter, 1)
+		dsn = fmt.Sprintf("file:memdb%d?mode=memory&cache=shared", id)
+	}
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
+	}
+
+	// For in-memory with shared cache, we need to keep at least one connection
+	// open at all times, otherwise the database is deleted when all connections close.
+	if path == ":memory:" {
+		db.SetMaxIdleConns(1)
+		db.SetConnMaxLifetime(0)
 	}
 
 	s := &Storage{

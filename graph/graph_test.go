@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/storage"
-	"github.com/codewandler/axon/storage/memory"
 )
 
 func setupGraph(t *testing.T) *graph.Graph {
@@ -22,7 +22,11 @@ func setupGraph(t *testing.T) *graph.Graph {
 	})
 	r.RegisterEdgeType(graph.EdgeSpec{Type: "references"})
 
-	s := memory.New()
+	s, err := sqlite.New(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.New failed: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
 	return graph.New(s, r)
 }
 

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
-	"github.com/codewandler/axon/storage/memory"
 	"github.com/codewandler/axon/types"
 )
 
@@ -52,7 +52,11 @@ func setupGraph(t *testing.T) *graph.Graph {
 	t.Helper()
 	r := graph.NewRegistry()
 	types.RegisterFSTypes(r)
-	s := memory.New()
+	s, err := sqlite.New(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.New failed: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
 	return graph.New(s, r)
 }
 
