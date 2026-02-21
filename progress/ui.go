@@ -26,7 +26,6 @@ type Model struct {
 	spinnerFrames map[string]string // Per-indexer random spinner frames
 	width         int
 	done          bool
-	startTime     time.Time
 }
 
 // Styles
@@ -56,7 +55,6 @@ func NewModel(coord *Coordinator) Model {
 		coordinator:   coord,
 		spinner:       s,
 		spinnerFrames: make(map[string]string),
-		startTime:     time.Now(),
 	}
 }
 

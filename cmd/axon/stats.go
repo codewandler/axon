@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -346,14 +345,4 @@ func formatDurationMs(ms int64) string {
 	}
 
 	return fmt.Sprintf("%ds", seconds)
-}
-
-// extractExtension extracts the file extension from a name
-func extractExtension(name string) string {
-	// Handle cases like .gitignore (no extension)
-	if strings.HasPrefix(name, ".") && !strings.Contains(name[1:], ".") {
-		return ""
-	}
-	ext := filepath.Ext(name)
-	return ext
 }
