@@ -62,3 +62,12 @@ type Indexer interface {
 	// Index indexes starting from the root URI in the context.
 	Index(ctx context.Context, ictx *Context) error
 }
+
+// PostIndexer is an optional interface for indexers that need a post-processing stage.
+// This is called after all indexers have completed their initial Index() pass,
+// allowing deferred resolution (e.g., resolving local links to files indexed later).
+type PostIndexer interface {
+	Indexer
+	// PostIndex is called after all indexers complete their Index() pass.
+	PostIndex(ctx context.Context, ictx *Context) error
+}

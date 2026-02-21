@@ -92,6 +92,7 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 	repoNode := graph.NewNode(types.TypeRepo).
 		WithURI(repoURI).
 		WithKey(repoPath).
+		WithName(repoName).
 		WithData(types.RepoData{
 			Name:       repoName,
 			IsBare:     isBare,
@@ -151,6 +152,7 @@ func (i *Indexer) indexRemotes(ctx context.Context, ictx *indexer.Context, repo 
 		remoteNode := graph.NewNode(types.TypeRemote).
 			WithURI(repoURI + "/remote/" + cfg.Name).
 			WithKey(cfg.Name).
+			WithName(cfg.Name).
 			WithData(types.RemoteData{
 				Name: cfg.Name,
 				URLs: cfg.URLs,
@@ -160,8 +162,7 @@ func (i *Indexer) indexRemotes(ctx context.Context, ictx *indexer.Context, repo 
 			return err
 		}
 
-		edge := graph.NewEdge(types.EdgeHasRemote, repoID, remoteNode.ID)
-		if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
+		if err := indexer.EmitOwnership(ctx, ictx.Emitter, repoID, remoteNode.ID); err != nil {
 			return err
 		}
 	}
@@ -182,6 +183,7 @@ func (i *Indexer) indexBranches(ctx context.Context, ictx *indexer.Context, repo
 		branchNode := graph.NewNode(types.TypeBranch).
 			WithURI(repoURI + "/branch/" + branchName).
 			WithKey(branchName).
+			WithName(branchName).
 			WithData(types.BranchData{
 				Name:     branchName,
 				IsHead:   isHead,
@@ -193,8 +195,7 @@ func (i *Indexer) indexBranches(ctx context.Context, ictx *indexer.Context, repo
 			return err
 		}
 
-		edge := graph.NewEdge(types.EdgeHasBranch, repoID, branchNode.ID)
-		return ictx.Emitter.EmitEdge(ctx, edge)
+		return indexer.EmitOwnership(ctx, ictx.Emitter, repoID, branchNode.ID)
 	})
 
 	return err
@@ -212,6 +213,7 @@ func (i *Indexer) indexTags(ctx context.Context, ictx *indexer.Context, repo *gi
 		tagNode := graph.NewNode(types.TypeTag).
 			WithURI(repoURI + "/tag/" + tagName).
 			WithKey(tagName).
+			WithName(tagName).
 			WithData(types.TagData{
 				Name:   tagName,
 				Commit: ref.Hash().String(),
@@ -221,8 +223,7 @@ func (i *Indexer) indexTags(ctx context.Context, ictx *indexer.Context, repo *gi
 			return err
 		}
 
-		edge := graph.NewEdge(types.EdgeHasTag, repoID, tagNode.ID)
-		return ictx.Emitter.EmitEdge(ctx, edge)
+		return indexer.EmitOwnership(ctx, ictx.Emitter, repoID, tagNode.ID)
 	})
 
 	return err

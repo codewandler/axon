@@ -117,19 +117,25 @@ func TestPutNodeUpdate(t *testing.T) {
 	ctx := context.Background()
 	s := setupTestDB(t)
 
-	node := graph.NewNode("fs:file").WithURI("file:///test.txt")
+	node := graph.NewNode("fs:file").WithURI("file:///test.txt").WithKey("test.txt")
+	node.Data = map[string]any{"size": 100}
 	_ = s.PutNode(ctx, node)
 
-	// Update the node
-	node.URI = "file:///updated.txt"
+	// Update the node's data (not URI - URI is the identity)
+	node.Data = map[string]any{"size": 200}
+	node.Generation = "gen2"
 	_ = s.PutNode(ctx, node)
 
 	got, err := s.GetNode(ctx, node.ID)
 	if err != nil {
 		t.Fatalf("GetNode failed: %v", err)
 	}
-	if got.URI != "file:///updated.txt" {
-		t.Errorf("expected updated URI, got %s", got.URI)
+	data := got.Data.(map[string]any)
+	if int(data["size"].(float64)) != 200 {
+		t.Errorf("expected updated size 200, got %v", data["size"])
+	}
+	if got.Generation != "gen2" {
+		t.Errorf("expected generation gen2, got %s", got.Generation)
 	}
 }
 

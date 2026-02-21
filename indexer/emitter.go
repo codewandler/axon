@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/codewandler/axon/graph"
+	"github.com/codewandler/axon/types"
 )
 
 // Emitter receives discovered nodes and edges during indexing.
@@ -39,6 +40,60 @@ func (e *GraphEmitter) EmitEdge(ctx context.Context, edge *graph.Edge) error {
 	return e.graph.Storage().PutEdge(ctx, edge)
 }
 
+// EmitContainment creates bidirectional containment edges using any Emitter:
+// - contains: parentID → childID (structural containment)
+// - contained_by: childID → parentID (inverse)
+// Use for physical/structural hierarchies (directories, nested structures).
+func EmitContainment(ctx context.Context, e Emitter, parentID, childID string) error {
+	containsEdge := graph.NewEdge(types.EdgeContains, parentID, childID)
+	if err := e.EmitEdge(ctx, containsEdge); err != nil {
+		return err
+	}
+	containedByEdge := graph.NewEdge(types.EdgeContainedBy, childID, parentID)
+	return e.EmitEdge(ctx, containedByEdge)
+}
+
+// EmitOwnership creates bidirectional ownership edges using any Emitter:
+// - has: ownerID → ownedID (logical ownership)
+// - belongs_to: ownedID → ownerID (inverse)
+// Use when the child cannot exist without the parent (repo→branch, doc→section).
+func EmitOwnership(ctx context.Context, e Emitter, ownerID, ownedID string) error {
+	hasEdge := graph.NewEdge(types.EdgeHas, ownerID, ownedID)
+	if err := e.EmitEdge(ctx, hasEdge); err != nil {
+		return err
+	}
+	belongsToEdge := graph.NewEdge(types.EdgeBelongsTo, ownedID, ownerID)
+	return e.EmitEdge(ctx, belongsToEdge)
+}
+
+// GraphEmitter-specific methods (for convenience, delegate to package functions)
+
+// EmitContainment creates bidirectional containment edges:
+// - contains: parentID → childID (structural containment)
+// - contained_by: childID → parentID (inverse)
+// Use for physical/structural hierarchies (directories, nested structures).
+func (e *GraphEmitter) EmitContainment(ctx context.Context, parentID, childID string) error {
+	containsEdge := graph.NewEdge(types.EdgeContains, parentID, childID)
+	if err := e.EmitEdge(ctx, containsEdge); err != nil {
+		return err
+	}
+	containedByEdge := graph.NewEdge(types.EdgeContainedBy, childID, parentID)
+	return e.EmitEdge(ctx, containedByEdge)
+}
+
+// EmitOwnership creates bidirectional ownership edges:
+// - has: ownerID → ownedID (logical ownership)
+// - belongs_to: ownedID → ownerID (inverse)
+// Use when the child cannot exist without the parent (repo→branch, doc→section).
+func (e *GraphEmitter) EmitOwnership(ctx context.Context, ownerID, ownedID string) error {
+	hasEdge := graph.NewEdge(types.EdgeHas, ownerID, ownedID)
+	if err := e.EmitEdge(ctx, hasEdge); err != nil {
+		return err
+	}
+	belongsToEdge := graph.NewEdge(types.EdgeBelongsTo, ownedID, ownerID)
+	return e.EmitEdge(ctx, belongsToEdge)
+}
+
 // CollectingEmitter collects nodes and edges for later processing.
 // Useful for testing or batch operations.
 type CollectingEmitter struct {
@@ -54,4 +109,24 @@ func (e *CollectingEmitter) EmitNode(ctx context.Context, node *graph.Node) erro
 func (e *CollectingEmitter) EmitEdge(ctx context.Context, edge *graph.Edge) error {
 	e.Edges = append(e.Edges, edge)
 	return nil
+}
+
+// EmitContainment creates bidirectional containment edges for testing.
+func (e *CollectingEmitter) EmitContainment(ctx context.Context, parentID, childID string) error {
+	containsEdge := graph.NewEdge(types.EdgeContains, parentID, childID)
+	if err := e.EmitEdge(ctx, containsEdge); err != nil {
+		return err
+	}
+	containedByEdge := graph.NewEdge(types.EdgeContainedBy, childID, parentID)
+	return e.EmitEdge(ctx, containedByEdge)
+}
+
+// EmitOwnership creates bidirectional ownership edges for testing.
+func (e *CollectingEmitter) EmitOwnership(ctx context.Context, ownerID, ownedID string) error {
+	hasEdge := graph.NewEdge(types.EdgeHas, ownerID, ownedID)
+	if err := e.EmitEdge(ctx, hasEdge); err != nil {
+		return err
+	}
+	belongsToEdge := graph.NewEdge(types.EdgeBelongsTo, ownedID, ownerID)
+	return e.EmitEdge(ctx, belongsToEdge)
 }

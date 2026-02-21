@@ -136,16 +136,50 @@ func (g *Graph) Neighbors(ctx context.Context, nodeID string, dir Direction) ([]
 	return nodes, nil
 }
 
-// Children returns all nodes that this node has outgoing edges to.
-// This is a convenience method equivalent to Neighbors(ctx, nodeID, Outgoing).
+// Children returns all nodes that this node contains or has (owns).
+// Filters to only "contains" and "has" edges (parent→child relationships).
 func (g *Graph) Children(ctx context.Context, nodeID string) ([]*Node, error) {
-	return g.Neighbors(ctx, nodeID, Outgoing)
+	edges, err := g.storage.GetEdgesFrom(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to only parent→child edge types
+	nodes := make([]*Node, 0)
+	for _, e := range edges {
+		if e.Type == "contains" || e.Type == "has" {
+			node, err := g.storage.GetNode(ctx, e.To)
+			if err != nil {
+				continue
+			}
+			nodes = append(nodes, node)
+		}
+	}
+
+	return nodes, nil
 }
 
-// Parents returns all nodes that have edges pointing to this node.
-// This is a convenience method equivalent to Neighbors(ctx, nodeID, Incoming).
+// Parents returns all nodes that contain or own this node.
+// Filters to only "contained_by" and "belongs_to" edges (child→parent relationships).
 func (g *Graph) Parents(ctx context.Context, nodeID string) ([]*Node, error) {
-	return g.Neighbors(ctx, nodeID, Incoming)
+	edges, err := g.storage.GetEdgesFrom(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to only child→parent edge types
+	nodes := make([]*Node, 0)
+	for _, e := range edges {
+		if e.Type == "contained_by" || e.Type == "belongs_to" {
+			node, err := g.storage.GetNode(ctx, e.To)
+			if err != nil {
+				continue
+			}
+			nodes = append(nodes, node)
+		}
+	}
+
+	return nodes, nil
 }
 
 // FindNodes finds nodes matching the given filter.

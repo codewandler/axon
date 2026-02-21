@@ -95,6 +95,7 @@ func (s *Storage) init() error {
 		PRAGMA synchronous=NORMAL;
 		PRAGMA cache_size=10000;
 		PRAGMA temp_store=MEMORY;
+		PRAGMA busy_timeout=30000;
 	`)
 	if err != nil {
 		return err
@@ -168,6 +169,25 @@ func (s *Storage) migrate() error {
 				-- Add root column to existing nodes table if missing
 				ALTER TABLE nodes ADD COLUMN root TEXT;
 				CREATE INDEX IF NOT EXISTS idx_nodes_root ON nodes(root);
+			`,
+		},
+		{
+			version: 3,
+			sql: `
+				-- Unique constraint on nodes.uri (only for non-empty URIs)
+				-- Partial index allows multiple nodes with empty URI for testing
+				CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_uri_unique ON nodes(uri) WHERE uri != '';
+				
+				-- Unique constraint on edges (type, from_id, to_id)
+				CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON edges(type, from_id, to_id);
+			`,
+		},
+		{
+			version: 4,
+			sql: `
+				-- Add name column for human-readable node names
+				ALTER TABLE nodes ADD COLUMN name TEXT;
+				CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
 			`,
 		},
 	}
@@ -263,13 +283,16 @@ func (s *Storage) flushLocked(ctx context.Context) error {
 	defer tx.Rollback()
 
 	// Prepare statements for batch insert
+	// Use ON CONFLICT(id) since deterministic IDs ensure same URI = same ID
+	// The unique index on uri (WHERE uri != '') provides additional safety
 	nodeStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO nodes (id, type, uri, key, data, generation, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO nodes (id, type, uri, key, name, data, generation, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			type = excluded.type,
 			uri = excluded.uri,
 			key = excluded.key,
+			name = excluded.name,
 			data = excluded.data,
 			generation = excluded.generation,
 			updated_at = excluded.updated_at
@@ -282,10 +305,7 @@ func (s *Storage) flushLocked(ctx context.Context) error {
 	edgeStmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO edges (id, type, from_id, to_id, data, generation, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			type = excluded.type,
-			from_id = excluded.from_id,
-			to_id = excluded.to_id,
+		ON CONFLICT(type, from_id, to_id) DO UPDATE SET
 			data = excluded.data,
 			generation = excluded.generation
 	`)
@@ -301,7 +321,7 @@ func (s *Storage) flushLocked(ctx context.Context) error {
 			return err
 		}
 		_, err = nodeStmt.ExecContext(ctx,
-			node.ID, node.Type, node.URI, node.Key, string(data), node.Generation,
+			node.ID, node.Type, node.URI, node.Key, node.Name, string(data), node.Generation,
 			node.CreatedAt.Format(time.RFC3339), node.UpdatedAt.Format(time.RFC3339))
 		if err != nil {
 			return err
@@ -345,7 +365,7 @@ func (s *Storage) GetNode(ctx context.Context, id string) (*graph.Node, error) {
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, uri, key, data, generation, root, created_at, updated_at
+		SELECT id, type, uri, key, name, data, generation, root, created_at, updated_at
 		FROM nodes WHERE id = ?
 	`, id)
 	return s.scanNode(row)
@@ -357,7 +377,7 @@ func (s *Storage) GetNodeByURI(ctx context.Context, uri string) (*graph.Node, er
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, uri, key, data, generation, root, created_at, updated_at
+		SELECT id, type, uri, key, name, data, generation, root, created_at, updated_at
 		FROM nodes WHERE uri = ?
 	`, uri)
 	return s.scanNode(row)
@@ -369,7 +389,7 @@ func (s *Storage) GetNodeByKey(ctx context.Context, nodeType, key string) (*grap
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, uri, key, data, generation, root, created_at, updated_at
+		SELECT id, type, uri, key, name, data, generation, root, created_at, updated_at
 		FROM nodes WHERE type = ? AND key = ?
 	`, nodeType, key)
 	return s.scanNode(row)
@@ -378,9 +398,9 @@ func (s *Storage) GetNodeByKey(ctx context.Context, nodeType, key string) (*grap
 func (s *Storage) scanNode(row *sql.Row) (*graph.Node, error) {
 	var node graph.Node
 	var dataStr, createdAt, updatedAt string
-	var uri, key, generation, root sql.NullString
+	var uri, key, name, generation, root sql.NullString
 
-	err := row.Scan(&node.ID, &node.Type, &uri, &key, &dataStr, &generation, &root, &createdAt, &updatedAt)
+	err := row.Scan(&node.ID, &node.Type, &uri, &key, &name, &dataStr, &generation, &root, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, storage.ErrNodeNotFound
 	}
@@ -390,6 +410,7 @@ func (s *Storage) scanNode(row *sql.Row) (*graph.Node, error) {
 
 	node.URI = uri.String
 	node.Key = key.String
+	node.Name = name.String
 	node.Generation = generation.String
 	_ = root // Column still exists in schema but no longer used
 
@@ -561,16 +582,28 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter) ([]*gr
 		return nil, err
 	}
 
-	query := `SELECT id, type, uri, key, data, generation, root, created_at, updated_at FROM nodes WHERE 1=1`
+	query := `SELECT id, type, uri, key, name, data, generation, root, created_at, updated_at FROM nodes WHERE 1=1`
 	var args []any
 
 	if filter.Type != "" {
 		query += ` AND type = ?`
 		args = append(args, filter.Type)
 	}
+	if filter.TypePattern != "" {
+		query += ` AND type GLOB ?`
+		args = append(args, filter.TypePattern)
+	}
 	if filter.URIPrefix != "" {
 		query += ` AND uri LIKE ?`
 		args = append(args, filter.URIPrefix+"%")
+	}
+	if filter.Name != "" {
+		query += ` AND name = ?`
+		args = append(args, filter.Name)
+	}
+	if filter.NamePattern != "" {
+		query += ` AND name GLOB ?`
+		args = append(args, filter.NamePattern)
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -583,15 +616,16 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter) ([]*gr
 	for rows.Next() {
 		var node graph.Node
 		var dataStr, createdAt, updatedAt string
-		var uri, key, generation, root sql.NullString
+		var uri, key, name, generation, root sql.NullString
 
-		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &dataStr, &generation, &root, &createdAt, &updatedAt)
+		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &dataStr, &generation, &root, &createdAt, &updatedAt)
 		if err != nil {
 			return nil, err
 		}
 
 		node.URI = uri.String
 		node.Key = key.String
+		node.Name = name.String
 		node.Generation = generation.String
 		_ = root // Column still exists in schema but no longer used
 
@@ -617,7 +651,7 @@ func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGe
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, type, uri, key, data, generation, root, created_at, updated_at
+		SELECT id, type, uri, key, name, data, generation, root, created_at, updated_at
 		FROM nodes WHERE uri LIKE ? AND generation != ?
 	`, uriPrefix+"%", currentGen)
 	if err != nil {
@@ -629,15 +663,16 @@ func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGe
 	for rows.Next() {
 		var node graph.Node
 		var dataStr, createdAt, updatedAt string
-		var uri, key, generation, root sql.NullString
+		var uri, key, name, generation, root sql.NullString
 
-		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &dataStr, &generation, &root, &createdAt, &updatedAt)
+		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &dataStr, &generation, &root, &createdAt, &updatedAt)
 		if err != nil {
 			return nil, err
 		}
 
 		node.URI = uri.String
 		node.Key = key.String
+		node.Name = name.String
 		node.Generation = generation.String
 
 		if dataStr != "" {

@@ -10,6 +10,7 @@ import (
 	"github.com/codewandler/axon/indexer"
 	"github.com/codewandler/axon/indexer/fs"
 	"github.com/codewandler/axon/indexer/git"
+	"github.com/codewandler/axon/indexer/markdown"
 	"github.com/codewandler/axon/progress"
 	"github.com/codewandler/axon/types"
 )
@@ -58,8 +59,10 @@ func New(cfg Config) (*Axon, error) {
 
 	// Create registry with built-in types
 	registry := graph.NewRegistry()
+	types.RegisterCommonEdges(registry)
 	types.RegisterFSTypes(registry)
 	types.RegisterVCSTypes(registry)
+	types.RegisterMarkdownTypes(registry)
 
 	// Create graph
 	g := graph.New(cfg.Storage, registry)
@@ -74,6 +77,7 @@ func New(cfg Config) (*Axon, error) {
 	}
 	idxRegistry.Register(fs.New(fs.Config{Ignore: ignore}))
 	idxRegistry.Register(git.New())
+	idxRegistry.Register(markdown.New())
 
 	return &Axon{
 		graph:    g,
@@ -191,17 +195,38 @@ func (a *Axon) IndexWithProgress(ctx context.Context, path string, prog chan<- p
 	close(events)
 	wg.Wait()
 
-	// Flush storage buffer
+	// Flush storage buffer before post-index (so all nodes are queryable)
 	if err := a.storage.Flush(ctx); err != nil {
 		return nil, err
 	}
 
-	// Clean up stale edges and orphaned edges (nodes cleaned up by indexers)
-	staleEdges, err := a.storage.DeleteStaleEdges(ctx, generation)
-	if err != nil {
+	// Run post-index stage for indexers that implement PostIndexer
+	for _, idx := range a.indexers.All() {
+		if post, ok := idx.(indexer.PostIndexer); ok {
+			postCtx := &indexer.Context{
+				Root:       uri,
+				Generation: generation,
+				Graph:      a.graph,
+				Emitter:    emitter,
+				Progress:   prog,
+			}
+			if err := post.PostIndex(ctx, postCtx); err != nil {
+				errorsMu.Lock()
+				indexerErrors = append(indexerErrors, err)
+				errorsMu.Unlock()
+			}
+		}
+	}
+
+	// Flush again after post-index
+	if err := a.storage.Flush(ctx); err != nil {
 		return nil, err
 	}
 
+	// Clean up orphaned edges (edges pointing to deleted nodes)
+	// Note: We don't use DeleteStaleEdges because it's global and would delete
+	// edges from other indexed directories. Indexers clean up their own stale
+	// nodes, and orphaned edges are removed here.
 	orphanedEdges, err := a.storage.DeleteOrphanedEdges(ctx)
 	if err != nil {
 		return nil, err
@@ -229,7 +254,7 @@ func (a *Axon) IndexWithProgress(ctx context.Context, path string, prog chan<- p
 		Files:        files,
 		Directories:  dirs,
 		Repos:        repos,
-		StaleRemoved: staleEdges + orphanedEdges,
+		StaleRemoved: orphanedEdges,
 		RootURI:      uri,
 		Generation:   generation,
 		Errors:       indexerErrors,

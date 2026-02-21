@@ -5,14 +5,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/codewandler/axon"
 	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/types"
 	"github.com/spf13/cobra"
+)
+
+// Lipgloss styles for node header
+var (
+	headerLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	headerValueStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
 )
 
 var showCmd = &cobra.Command{
@@ -129,9 +139,38 @@ func getNodeSummary(n *graph.Node) string {
 		name = data.Name
 	case types.TagData:
 		name = data.Name
+	case types.DocumentData:
+		name = data.Title
+	case types.SectionData:
+		name = data.Title
+	case types.CodeBlockData:
+		if data.Language != "" {
+			name = fmt.Sprintf("%s (%d lines)", data.Language, data.Lines)
+		} else {
+			name = fmt.Sprintf("(%d lines)", data.Lines)
+		}
+	case types.MarkdownLinkData:
+		name = data.Text
+	case types.ImageData:
+		name = data.Alt
 	case map[string]any:
-		if n, ok := data["name"].(string); ok {
-			name = n
+		// Try common name fields
+		if title, ok := data["title"].(string); ok && title != "" {
+			name = title
+		} else if nm, ok := data["name"].(string); ok {
+			name = nm
+		} else if text, ok := data["text"].(string); ok && text != "" {
+			name = text
+		} else if lang, ok := data["language"].(string); ok {
+			lines := 0
+			if l, ok := data["lines"].(float64); ok {
+				lines = int(l)
+			}
+			if lang != "" {
+				name = fmt.Sprintf("%s (%d lines)", lang, lines)
+			} else {
+				name = fmt.Sprintf("(%d lines)", lines)
+			}
 		}
 	}
 
@@ -143,19 +182,19 @@ func getNodeSummary(n *graph.Node) string {
 
 // showNodeDetails displays full details of a node
 func showNodeDetails(ctx context.Context, g *graph.Graph, node *graph.Node) error {
-	fmt.Printf("Node: %s\n", node.ID)
-	fmt.Printf("Type: %s\n", node.Type)
+	// Styled header
+	fmt.Printf("%s %s\n", headerLabelStyle.Render("Node:"), headerValueStyle.Render(node.ID))
+	fmt.Printf("%s %s\n", headerLabelStyle.Render("Type:"), headerValueStyle.Render(node.Type))
 
 	if node.URI != "" {
-		fmt.Printf("URI:  %s\n", node.URI)
+		fmt.Printf("%s %s\n", headerLabelStyle.Render("URI: "), node.URI)
 	}
 	if node.Key != "" {
-		fmt.Printf("Key:  %s\n", node.Key)
+		fmt.Printf("%s %s\n", headerLabelStyle.Render("Key: "), node.Key)
 	}
 
-	// Print data fields
-	fmt.Println("\nData:")
-	printNodeData(node)
+	// Print data fields (or render markdown content)
+	printNodeData(ctx, g, node)
 
 	// Get and print edges
 	edgesFrom, err := g.GetEdgesFrom(ctx, node.ID)
@@ -194,23 +233,27 @@ func showNodeDetails(ctx context.Context, g *graph.Graph, node *graph.Node) erro
 }
 
 // printNodeData prints the data fields of a node
-func printNodeData(node *graph.Node) {
+func printNodeData(ctx context.Context, g *graph.Graph, node *graph.Node) {
 	switch data := node.Data.(type) {
 	case types.DirData:
+		fmt.Println("\nData:")
 		fmt.Printf("  Name: %s\n", data.Name)
 		fmt.Printf("  Mode: %s\n", data.Mode.String())
 
 	case types.FileData:
+		fmt.Println("\nData:")
 		fmt.Printf("  Name:     %s\n", data.Name)
 		fmt.Printf("  Size:     %s\n", formatSize(data.Size))
 		fmt.Printf("  Modified: %s\n", data.Modified.Format(time.RFC3339))
 		fmt.Printf("  Mode:     %s\n", data.Mode.String())
 
 	case types.LinkData:
+		fmt.Println("\nData:")
 		fmt.Printf("  Name:   %s\n", data.Name)
 		fmt.Printf("  Target: %s\n", data.Target)
 
 	case types.RepoData:
+		fmt.Println("\nData:")
 		fmt.Printf("  Name:       %s\n", data.Name)
 		fmt.Printf("  IsBare:     %v\n", data.IsBare)
 		if data.HeadBranch != "" {
@@ -221,6 +264,7 @@ func printNodeData(node *graph.Node) {
 		}
 
 	case types.RemoteData:
+		fmt.Println("\nData:")
 		fmt.Printf("  Name: %s\n", data.Name)
 		if len(data.URLs) > 0 {
 			fmt.Printf("  URLs:\n")
@@ -230,6 +274,7 @@ func printNodeData(node *graph.Node) {
 		}
 
 	case types.BranchData:
+		fmt.Println("\nData:")
 		fmt.Printf("  Name:     %s\n", data.Name)
 		fmt.Printf("  IsHead:   %v\n", data.IsHead)
 		fmt.Printf("  IsRemote: %v\n", data.IsRemote)
@@ -238,28 +283,278 @@ func printNodeData(node *graph.Node) {
 		}
 
 	case types.TagData:
+		fmt.Println("\nData:")
 		fmt.Printf("  Name: %s\n", data.Name)
 		if data.Commit != "" {
 			fmt.Printf("  Commit: %s\n", data.Commit)
 		}
 
+	// Markdown types - render content with glamour
+	case types.DocumentData:
+		fmt.Println("\nData:")
+		fmt.Printf("  Title: %s\n", data.Title)
+		// Read and render the source file content
+		renderDocumentContent(ctx, g, node)
+
+	case types.SectionData:
+		fmt.Println("\nData:")
+		fmt.Printf("  Order: %d\n", data.Order)
+		// Render section content recursively (heading + content + children)
+		renderSectionRecursive(ctx, g, node, data.Level, data.Title, data.Content)
+
+	case types.CodeBlockData:
+		// Render code block with syntax highlighting
+		renderCodeBlockContent(data)
+
+	case types.MarkdownLinkData:
+		// Render as markdown link
+		renderLinkContent(data)
+
+	case types.ImageData:
+		// Render as markdown image
+		renderImageContent(data)
+
 	case map[string]any:
 		// Data loaded from JSON - format based on node type
-		printMapData(node.Type, data)
+		printMapData(ctx, g, node.Type, node, data)
 
 	default:
 		if node.Data != nil {
+			fmt.Println("\nData:")
 			fmt.Printf("  %+v\n", node.Data)
 		} else {
+			fmt.Println("\nData:")
 			fmt.Printf("  (no data)\n")
 		}
 	}
 }
 
-// printMapData formats map data based on node type
-func printMapData(nodeType string, data map[string]any) {
+// renderMarkdown renders markdown content using glamour
+func renderMarkdown(content string) string {
+	r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(120),
+	)
+	if err != nil {
+		return content
+	}
+	out, err := r.Render(content)
+	if err != nil {
+		return content
+	}
+	return strings.TrimSpace(out)
+}
+
+// renderDocumentContent reads and renders the source markdown file
+func renderDocumentContent(ctx context.Context, g *graph.Graph, node *graph.Node) {
+	// Find the source file via incoming has_content edge
+	edgesTo, err := g.GetEdgesTo(ctx, node.ID)
+	if err != nil {
+		return
+	}
+
+	for _, e := range edgesTo {
+		// Document belongs_to file via ownership edge
+		if e.Type == types.EdgeBelongsTo {
+			sourceNode, err := g.GetNode(ctx, e.To)
+			if err != nil || sourceNode.Type != types.TypeFile {
+				continue
+			}
+			// Extract path from file:///path URI
+			filePath := strings.TrimPrefix(sourceNode.URI, "file://")
+			content, err := os.ReadFile(filePath)
+			if err != nil {
+				fmt.Printf("\n(Could not read file: %v)\n", err)
+				return
+			}
+			fmt.Println("\nContent:")
+			fmt.Println(renderMarkdown(string(content)))
+			return
+		}
+	}
+}
+
+// renderSectionRecursive renders a section with its heading, content, and children recursively
+func renderSectionRecursive(ctx context.Context, g *graph.Graph, node *graph.Node, level int, title, content string) {
+	// Build markdown for this section
+	var md strings.Builder
+	headingMarker := strings.Repeat("#", level)
+	md.WriteString(fmt.Sprintf("%s %s\n\n", headingMarker, title))
+	if content != "" {
+		md.WriteString(content)
+		md.WriteString("\n\n")
+	}
+
+	// Get children and sort by position
+	children := getOrderedChildren(ctx, g, node.ID)
+
+	// Render each child
+	for _, child := range children {
+		switch child.node.Type {
+		case types.TypeMarkdownSection:
+			// Get section data and render recursively
+			childLevel, childTitle, childContent := extractSectionData(child.node)
+			childMd := renderSectionToMarkdown(ctx, g, child.node, childLevel, childTitle, childContent)
+			md.WriteString(childMd)
+
+		case types.TypeMarkdownCodeBlock:
+			// Get code block data and render
+			lang, code := extractCodeBlockData(child.node)
+			md.WriteString(fmt.Sprintf("```%s\n%s```\n\n", lang, code))
+		}
+	}
+
+	fmt.Println("\nContent:")
+	fmt.Println(renderMarkdown(md.String()))
+}
+
+// renderSectionToMarkdown renders a section and its children to a markdown string (for recursive calls)
+func renderSectionToMarkdown(ctx context.Context, g *graph.Graph, node *graph.Node, level int, title, content string) string {
+	var md strings.Builder
+	headingMarker := strings.Repeat("#", level)
+	md.WriteString(fmt.Sprintf("%s %s\n\n", headingMarker, title))
+	if content != "" {
+		md.WriteString(content)
+		md.WriteString("\n\n")
+	}
+
+	// Get children and sort by position
+	children := getOrderedChildren(ctx, g, node.ID)
+
+	// Render each child
+	for _, child := range children {
+		switch child.node.Type {
+		case types.TypeMarkdownSection:
+			childLevel, childTitle, childContent := extractSectionData(child.node)
+			childMd := renderSectionToMarkdown(ctx, g, child.node, childLevel, childTitle, childContent)
+			md.WriteString(childMd)
+
+		case types.TypeMarkdownCodeBlock:
+			lang, code := extractCodeBlockData(child.node)
+			md.WriteString(fmt.Sprintf("```%s\n%s```\n\n", lang, code))
+		}
+	}
+
+	return md.String()
+}
+
+// orderedChild represents a child node with its position for sorting
+type orderedChild struct {
+	node     *graph.Node
+	position int
+}
+
+// getOrderedChildren returns child nodes (sections and code blocks) sorted by position
+func getOrderedChildren(ctx context.Context, g *graph.Graph, nodeID string) []orderedChild {
+	edges, err := g.GetEdgesFrom(ctx, nodeID)
+	if err != nil {
+		return nil
+	}
+
+	var children []orderedChild
+	for _, e := range edges {
+		// Only include 'has' edges (ownership)
+		if e.Type != types.EdgeHas {
+			continue
+		}
+
+		childNode, err := g.GetNode(ctx, e.To)
+		if err != nil {
+			continue
+		}
+
+		// Only include sections and code blocks (skip links, images)
+		if childNode.Type != types.TypeMarkdownSection && childNode.Type != types.TypeMarkdownCodeBlock {
+			continue
+		}
+
+		pos := extractPosition(childNode)
+		children = append(children, orderedChild{
+			node:     childNode,
+			position: pos,
+		})
+	}
+
+	// Sort by position
+	sort.Slice(children, func(i, j int) bool {
+		return children[i].position < children[j].position
+	})
+
+	return children
+}
+
+// extractPosition extracts the position from a node's data
+func extractPosition(n *graph.Node) int {
+	switch data := n.Data.(type) {
+	case types.SectionData:
+		return data.Position
+	case types.CodeBlockData:
+		return data.Position
+	case map[string]any:
+		if pos, ok := data["position"].(float64); ok {
+			return int(pos)
+		}
+	}
+	return 0
+}
+
+// extractSectionData extracts level, title, content from a section node
+func extractSectionData(n *graph.Node) (level int, title, content string) {
+	switch data := n.Data.(type) {
+	case types.SectionData:
+		return data.Level, data.Title, data.Content
+	case map[string]any:
+		level = getMapInt(data, "level")
+		title = getMapString(data, "title")
+		content = getMapString(data, "content")
+		return
+	}
+	return 0, "", ""
+}
+
+// extractCodeBlockData extracts language and content from a code block node
+func extractCodeBlockData(n *graph.Node) (language, content string) {
+	switch data := n.Data.(type) {
+	case types.CodeBlockData:
+		return data.Language, data.Content
+	case map[string]any:
+		return getMapString(data, "language"), getMapString(data, "content")
+	}
+	return "", ""
+}
+
+// renderCodeBlockContent renders a code block with syntax highlighting
+func renderCodeBlockContent(data types.CodeBlockData) {
+	// Wrap in markdown code fence
+	md := fmt.Sprintf("```%s\n%s```", data.Language, data.Content)
+	fmt.Println("\nContent:")
+	fmt.Println(renderMarkdown(md))
+}
+
+// renderLinkContent renders a markdown link
+func renderLinkContent(data types.MarkdownLinkData) {
+	var md string
+	if data.Title != "" {
+		md = fmt.Sprintf("[%s](%s \"%s\")", data.Text, data.URL, data.Title)
+	} else {
+		md = fmt.Sprintf("[%s](%s)", data.Text, data.URL)
+	}
+	fmt.Println("\nContent:")
+	fmt.Println(renderMarkdown(md))
+}
+
+// renderImageContent renders a markdown image reference
+func renderImageContent(data types.ImageData) {
+	md := fmt.Sprintf("![%s](%s)", data.Alt, data.URL)
+	fmt.Println("\nContent:")
+	fmt.Println(renderMarkdown(md))
+}
+
+// printMapData formats map data based on node type (for data loaded from JSON)
+func printMapData(ctx context.Context, g *graph.Graph, nodeType string, node *graph.Node, data map[string]any) {
 	switch nodeType {
 	case types.TypeDir:
+		fmt.Println("\nData:")
 		if name, ok := data["name"].(string); ok {
 			fmt.Printf("  Name: %s\n", name)
 		}
@@ -268,6 +563,7 @@ func printMapData(nodeType string, data map[string]any) {
 		}
 
 	case types.TypeFile:
+		fmt.Println("\nData:")
 		if name, ok := data["name"].(string); ok {
 			fmt.Printf("  Name:     %s\n", name)
 		}
@@ -282,6 +578,7 @@ func printMapData(nodeType string, data map[string]any) {
 		}
 
 	case types.TypeLink:
+		fmt.Println("\nData:")
 		if name, ok := data["name"].(string); ok {
 			fmt.Printf("  Name:   %s\n", name)
 		}
@@ -290,6 +587,7 @@ func printMapData(nodeType string, data map[string]any) {
 		}
 
 	case types.TypeRepo:
+		fmt.Println("\nData:")
 		if name, ok := data["name"].(string); ok {
 			fmt.Printf("  Name:       %s\n", name)
 		}
@@ -304,6 +602,7 @@ func printMapData(nodeType string, data map[string]any) {
 		}
 
 	case types.TypeRemote:
+		fmt.Println("\nData:")
 		if name, ok := data["name"].(string); ok {
 			fmt.Printf("  Name: %s\n", name)
 		}
@@ -317,6 +616,7 @@ func printMapData(nodeType string, data map[string]any) {
 		}
 
 	case types.TypeBranch:
+		fmt.Println("\nData:")
 		if name, ok := data["name"].(string); ok {
 			fmt.Printf("  Name:     %s\n", name)
 		}
@@ -331,6 +631,7 @@ func printMapData(nodeType string, data map[string]any) {
 		}
 
 	case types.TypeTag:
+		fmt.Println("\nData:")
 		if name, ok := data["name"].(string); ok {
 			fmt.Printf("  Name: %s\n", name)
 		}
@@ -338,12 +639,73 @@ func printMapData(nodeType string, data map[string]any) {
 			fmt.Printf("  Commit: %s\n", commit)
 		}
 
+	// Markdown types from JSON
+	case types.TypeMarkdownDoc:
+		fmt.Println("\nData:")
+		if title, ok := data["title"].(string); ok {
+			fmt.Printf("  Title: %s\n", title)
+		}
+		renderDocumentContent(ctx, g, node)
+
+	case types.TypeMarkdownSection:
+		fmt.Println("\nData:")
+		if order, ok := data["order"].(float64); ok {
+			fmt.Printf("  Order: %d\n", int(order))
+		}
+		// Build SectionData from map and render recursively
+		level := getMapInt(data, "level")
+		title := getMapString(data, "title")
+		content := getMapString(data, "content")
+		renderSectionRecursive(ctx, g, node, level, title, content)
+
+	case types.TypeMarkdownCodeBlock:
+		// Render code block with syntax highlighting
+		cbData := types.CodeBlockData{
+			Language: getMapString(data, "language"),
+			Content:  getMapString(data, "content"),
+		}
+		renderCodeBlockContent(cbData)
+
+	case types.TypeMarkdownLink:
+		// Render as markdown link
+		linkData := types.MarkdownLinkData{
+			URL:   getMapString(data, "url"),
+			Text:  getMapString(data, "text"),
+			Title: getMapString(data, "title"),
+		}
+		renderLinkContent(linkData)
+
+	case types.TypeMarkdownImage:
+		// Render as markdown image
+		imgData := types.ImageData{
+			URL: getMapString(data, "url"),
+			Alt: getMapString(data, "alt"),
+		}
+		renderImageContent(imgData)
+
 	default:
 		// Generic fallback
+		fmt.Println("\nData:")
 		for k, v := range data {
 			fmt.Printf("  %s: %v\n", k, v)
 		}
 	}
+}
+
+// getMapString extracts a string from a map, returning empty string if not found
+func getMapString(data map[string]any, key string) string {
+	if v, ok := data[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// getMapInt extracts an int from a map (JSON numbers come as float64)
+func getMapInt(data map[string]any, key string) int {
+	if v, ok := data[key].(float64); ok {
+		return int(v)
+	}
+	return 0
 }
 
 // formatSize formats a byte count as a human-readable string

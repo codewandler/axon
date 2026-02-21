@@ -14,9 +14,11 @@ type Edge struct {
 }
 
 // NewEdge creates a new edge with the given type and endpoints.
+// The edge ID is deterministic based on (type, from, to), ensuring
+// the same edge always has the same ID.
 func NewEdge(edgeType, from, to string) *Edge {
 	return &Edge{
-		ID:        NewID(),
+		ID:        IDFromEdgeKey(edgeType, from, to),
 		Type:      edgeType,
 		From:      from,
 		To:        to,

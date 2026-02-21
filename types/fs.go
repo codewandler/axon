@@ -14,11 +14,6 @@ const (
 	TypeLink = "fs:link"
 )
 
-// Filesystem edge types
-const (
-	EdgeContains = "contains"
-)
-
 // DirData holds data for a directory node.
 type DirData struct {
 	Name string      `json:"name"`
@@ -27,10 +22,12 @@ type DirData struct {
 
 // FileData holds data for a file node.
 type FileData struct {
-	Name     string      `json:"name"`
-	Size     int64       `json:"size"`
-	Modified time.Time   `json:"modified"`
-	Mode     os.FileMode `json:"mode"`
+	Name        string      `json:"name"`
+	Size        int64       `json:"size"`
+	Modified    time.Time   `json:"modified"`
+	Mode        os.FileMode `json:"mode"`
+	Ext         string      `json:"ext"`          // File extension (e.g., ".md", ".go")
+	ContentType string      `json:"content_type"` // MIME type (e.g., "text/markdown")
 }
 
 // LinkData holds data for a symbolic link node.
@@ -61,6 +58,13 @@ func RegisterFSTypes(r *graph.Registry) {
 		Description: "Parent directory contains child",
 		FromTypes:   []string{TypeDir},
 		ToTypes:     []string{TypeDir, TypeFile, TypeLink},
+	})
+
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeContainedBy,
+		Description: "Child is contained by parent directory",
+		FromTypes:   []string{TypeDir, TypeFile, TypeLink},
+		ToTypes:     []string{TypeDir},
 	})
 }
 

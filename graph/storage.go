@@ -4,8 +4,11 @@ import "context"
 
 // NodeFilter specifies criteria for finding nodes.
 type NodeFilter struct {
-	Type      string // Filter by node type (empty = any)
-	URIPrefix string // Filter by URI prefix (empty = any)
+	Type        string // Filter by exact node type (empty = any)
+	TypePattern string // Filter by node type with glob pattern (empty = any)
+	URIPrefix   string // Filter by URI prefix (empty = any)
+	Name        string // Filter by exact name (empty = any)
+	NamePattern string // Filter by name with glob pattern (empty = any)
 }
 
 // Storage defines the interface for graph persistence.

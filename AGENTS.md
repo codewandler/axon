@@ -8,8 +8,8 @@ Graph-based storage system for AI agent context management, retrieval, and explo
 # Build all packages
 go build ./...
 
-# Build CLI binary
-go build -o axon ./cmd/axon
+# Build CLI binary (output to ./bin/)
+go build -o ./bin/axon ./cmd/axon
 
 # Run all tests
 go test ./...
@@ -34,6 +34,9 @@ golangci-lint run
 
 # Format code
 gofmt -w .
+
+# Install CLI globally (final step after impl, test, e2e test)
+go install ./cmd/axon
 ```
 
 ## Project Structure
@@ -46,8 +49,9 @@ axon/
 ├── storage/             # Storage error types
 ├── indexer/             # Indexer interface, registry, events, emitter
 │   ├── fs/              # Filesystem indexer
-│   └── git/             # Git repository indexer
-├── types/               # Node/edge type definitions (fs, vcs)
+│   ├── git/             # Git repository indexer
+│   └── markdown/        # Markdown document indexer
+├── types/               # Node/edge type definitions (fs, vcs, markdown)
 ├── progress/            # Progress reporting (coordinator, bubbletea UI)
 ├── render/              # Tree rendering utilities
 └── cmd/axon/            # CLI commands (init, tree, show)
@@ -82,7 +86,7 @@ import (
 - **Functions/Methods**: PascalCase for exported, camelCase for internal
 - **Constants**: PascalCase for exported, camelCase for internal
 - **Node types**: Use `domain:name` format (`fs:file`, `fs:dir`, `vcs:repo`)
-- **Edge types**: Use snake_case (`contains`, `has_branch`, `located_at`)
+- **Edge types**: Use snake_case, prefer generic edges (`contains`, `has`, `belongs_to`)
 
 ### Error Handling
 
@@ -189,3 +193,47 @@ Indexers must implement:
 7. **Event-based indexing**: FS indexer emits `EventEntryVisited`; git indexer subscribes to `.git` directories
 8. **TriggerEvent in Context**: Indexers receive `TriggerEvent *Event` to know if they were invoked directly or triggered by an event subscription
 9. **URI schemes**: `file://` for filesystem, `git+file://` for local git repos
+
+### Edge Type Design
+
+#### Common Edge Types
+
+All edge types are defined in `types/edges.go`. Use generic edges rather than domain-specific ones.
+
+| Edge | Inverse | Semantics | Example |
+|------|---------|-----------|---------|
+| `contains` | `contained_by` | Structural containment | dir → file |
+| `has` | `belongs_to` | Logical ownership | repo → branch, doc → section |
+| `located_at` | - | Physical location | repo → dir |
+| `links_to` | - | Explicit hyperlink | section → file |
+| `references` | - | Soft cross-reference | code → code |
+| `depends_on` | - | Dependency | module → module |
+| `imports` | - | Import | file → file |
+| `defines` | - | Symbol definition | file → symbol |
+
+#### Design Rules
+
+1. **Structural vs Logical**:
+   - `contains` / `contained_by` = physical/structural hierarchy (directories, DOM trees)
+   - `has` / `belongs_to` = logical ownership (repos have branches, documents have sections)
+
+2. **Bidirectional Relationships**:
+   - Use `EmitContainment(parentID, childID)` for structural containment (creates both `contains` and `contained_by`)
+   - Use `EmitOwnership(ownerID, ownedID)` for logical ownership (creates both `has` and `belongs_to`)
+   - Both helpers are in `indexer/emitter.go`
+
+3. **Avoid Domain-Scoped Edges**:
+   - Prefer generic edges + node types over scoped edges like `git::has_branch`
+   - Node types already provide domain context
+   - Query pattern: `GetEdgesFrom(repo.ID)` then filter by `e.Type == "has"` and target node type == `vcs:branch`
+   - Only create scoped edges (e.g., `git::is_submodule_of`) for truly unique semantics
+
+4. **Query Patterns**:
+   - "All children of X": `GetEdgesFrom(X.ID)` where `e.Type == "contains"` or `"has"`
+   - "Parent of X": `GetEdgesFrom(X.ID)` where `e.Type == "contained_by"` or `"belongs_to"`
+   - "All tags of repo": `GetEdgesFrom(repo.ID)` where `e.Type == "has"` and target type == `vcs:tag`
+
+5. **Registration**:
+   - Call `types.RegisterCommonEdges(registry)` before domain-specific registrations
+   - Common edges have no FromTypes/ToTypes constraints (any-to-any)
+   - Domain-specific constraints are added in domain registration functions

@@ -51,6 +51,7 @@ func setupTestDir(t *testing.T) string {
 func setupGraph(t *testing.T) *graph.Graph {
 	t.Helper()
 	r := graph.NewRegistry()
+	types.RegisterCommonEdges(r)
 	types.RegisterFSTypes(r)
 	s, err := sqlite.New(":memory:")
 	if err != nil {
@@ -181,9 +182,9 @@ func TestIndexerCollecting(t *testing.T) {
 		t.Errorf("expected 6 nodes, got %d", len(emitter.Nodes))
 	}
 
-	// Each non-root node should have a contains edge
-	if len(emitter.Edges) != 5 {
-		t.Errorf("expected 5 edges, got %d", len(emitter.Edges))
+	// Each non-root node should have a contains + contained_by edge (bidirectional)
+	if len(emitter.Edges) != 10 {
+		t.Errorf("expected 10 edges (5 pairs), got %d", len(emitter.Edges))
 	}
 }
 

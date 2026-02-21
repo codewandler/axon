@@ -10,14 +10,6 @@ const (
 	TypeTag    = "vcs:tag"
 )
 
-// VCS edge types
-const (
-	EdgeHasRemote = "has_remote"
-	EdgeHasBranch = "has_branch"
-	EdgeHasTag    = "has_tag"
-	EdgeLocatedAt = "located_at"
-)
-
 // RepoData holds data for a repository node.
 type RepoData struct {
 	Name       string `json:"name"`
@@ -68,27 +60,8 @@ func RegisterVCSTypes(r *graph.Registry) {
 		Description: "A tag in the repository",
 	})
 
-	r.RegisterEdgeType(graph.EdgeSpec{
-		Type:        EdgeHasRemote,
-		Description: "Repository has a remote",
-		FromTypes:   []string{TypeRepo},
-		ToTypes:     []string{TypeRemote},
-	})
-
-	r.RegisterEdgeType(graph.EdgeSpec{
-		Type:        EdgeHasBranch,
-		Description: "Repository has a branch",
-		FromTypes:   []string{TypeRepo},
-		ToTypes:     []string{TypeBranch},
-	})
-
-	r.RegisterEdgeType(graph.EdgeSpec{
-		Type:        EdgeHasTag,
-		Description: "Repository has a tag",
-		FromTypes:   []string{TypeRepo},
-		ToTypes:     []string{TypeTag},
-	})
-
+	// VCS uses common edge types: has, belongs_to, located_at
+	// Repo ownership edges (has/belongs_to) are registered in RegisterCommonEdges
 	r.RegisterEdgeType(graph.EdgeSpec{
 		Type:        EdgeLocatedAt,
 		Description: "Repository is located at a directory",

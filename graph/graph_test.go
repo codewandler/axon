@@ -20,6 +20,11 @@ func setupGraph(t *testing.T) *graph.Graph {
 		FromTypes: []string{"fs:dir"},
 		ToTypes:   []string{"fs:file", "fs:dir"},
 	})
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:      "contained_by",
+		FromTypes: []string{"fs:file", "fs:dir"},
+		ToTypes:   []string{"fs:dir"},
+	})
 	r.RegisterEdgeType(graph.EdgeSpec{Type: "references"})
 
 	s, err := sqlite.New(":memory:")
@@ -161,7 +166,9 @@ func TestGraphChildrenAndParents(t *testing.T) {
 	file := graph.NewNode("fs:file")
 	_ = g.AddNode(ctx, dir)
 	_ = g.AddNode(ctx, file)
+	// Create both directions (as EmitContainment does)
 	_ = g.AddEdge(ctx, graph.NewEdge("contains", dir.ID, file.ID))
+	_ = g.AddEdge(ctx, graph.NewEdge("contained_by", file.ID, dir.ID))
 
 	children, _ := g.Children(ctx, dir.ID)
 	if len(children) != 1 || children[0].ID != file.ID {

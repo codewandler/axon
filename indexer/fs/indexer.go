@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +62,12 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 
 	err := filepath.WalkDir(rootPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return err
+			// Skip entries we can't read (permission denied, etc.)
+			// Return SkipDir for directories to avoid descending into them
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 
 		// Check context cancellation
@@ -85,6 +91,7 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 				node := graph.NewNode(types.TypeDir).
 					WithURI(uri).
 					WithKey(path).
+					WithName(d.Name()).
 					WithData(types.DirData{Name: d.Name(), Mode: info.Mode()})
 
 				if err := ictx.Emitter.EmitNode(ctx, node); err != nil {
@@ -104,11 +111,10 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 					}
 				}
 
-				// Create edge from parent
+				// Create containment edges from parent
 				parentPath := filepath.Dir(path)
 				if parentID, ok := nodeIDs[parentPath]; ok {
-					edge := graph.NewEdge(types.EdgeContains, parentID, node.ID)
-					if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
+					if err := indexer.EmitContainment(ctx, ictx.Emitter, parentID, node.ID); err != nil {
 						return err
 					}
 				}
@@ -137,26 +143,33 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 			node = graph.NewNode(types.TypeDir).
 				WithURI(uri).
 				WithKey(path).
+				WithName(d.Name()).
 				WithData(types.DirData{Name: d.Name(), Mode: info.Mode()})
 		} else if d.Type()&os.ModeSymlink != 0 {
 			target, _ := os.Readlink(path)
 			node = graph.NewNode(types.TypeLink).
 				WithURI(uri).
 				WithKey(path).
+				WithName(d.Name()).
 				WithData(types.LinkData{Name: d.Name(), Target: target})
 		} else {
 			info, err := d.Info()
 			if err != nil {
 				return err
 			}
+			ext := filepath.Ext(d.Name())
+			contentType := mime.TypeByExtension(ext)
 			node = graph.NewNode(types.TypeFile).
 				WithURI(uri).
 				WithKey(path).
+				WithName(d.Name()).
 				WithData(types.FileData{
-					Name:     d.Name(),
-					Size:     info.Size(),
-					Modified: info.ModTime(),
-					Mode:     info.Mode(),
+					Name:        d.Name(),
+					Size:        info.Size(),
+					Modified:    info.ModTime(),
+					Mode:        info.Mode(),
+					Ext:         ext,
+					ContentType: contentType,
 				})
 		}
 
@@ -185,11 +198,10 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 			lastProgressTime = now
 		}
 
-		// Create edge from parent to this node
+		// Create containment edges from parent to this node
 		parentPath := filepath.Dir(path)
 		if parentID, ok := nodeIDs[parentPath]; ok {
-			edge := graph.NewEdge(types.EdgeContains, parentID, node.ID)
-			if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
+			if err := indexer.EmitContainment(ctx, ictx.Emitter, parentID, node.ID); err != nil {
 				return err
 			}
 		}

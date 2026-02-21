@@ -14,6 +14,7 @@ func setupTestGraph(t *testing.T) (*graph.Graph, string) {
 	t.Helper()
 
 	r := graph.NewRegistry()
+	types.RegisterCommonEdges(r)
 	types.RegisterFSTypes(r)
 	s, err := sqlite.New(":memory:")
 	if err != nil {

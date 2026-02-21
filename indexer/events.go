@@ -1,5 +1,10 @@
 package indexer
 
+import (
+	"path/filepath"
+	"strings"
+)
+
 // EventType represents the type of indexing event.
 type EventType int
 
@@ -41,8 +46,16 @@ type Subscription struct {
 	// NodeType filters by node type (empty = all types).
 	NodeType string
 
-	// Name filters by entry name (empty = all names).
+	// Name filters by exact entry name match (empty = all names).
 	Name string
+
+	// Pattern filters by glob pattern on the entry name (e.g., "*.md", "test_*.go").
+	// Empty means no pattern filtering.
+	Pattern string
+
+	// Extensions filters by file extensions (e.g., []string{".md", ".markdown"}).
+	// Empty means no extension filtering.
+	Extensions []string
 }
 
 // Matches returns true if the event matches this subscription.
@@ -56,5 +69,28 @@ func (s Subscription) Matches(e Event) bool {
 	if s.Name != "" && s.Name != e.Name {
 		return false
 	}
+	if s.Pattern != "" && !matchGlob(s.Pattern, e.Name) {
+		return false
+	}
+	if len(s.Extensions) > 0 && !matchExtension(s.Extensions, e.Name) {
+		return false
+	}
 	return true
+}
+
+// matchGlob performs glob matching on the entry name.
+func matchGlob(pattern, name string) bool {
+	matched, _ := filepath.Match(pattern, name)
+	return matched
+}
+
+// matchExtension checks if name has one of the given extensions.
+func matchExtension(extensions []string, name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	for _, e := range extensions {
+		if strings.ToLower(e) == ext {
+			return true
+		}
+	}
+	return false
 }

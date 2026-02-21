@@ -38,6 +38,7 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(treeCmd)
 	rootCmd.AddCommand(showCmd)
+	rootCmd.AddCommand(findCmd)
 
 	rootCmd.Version = version
 }

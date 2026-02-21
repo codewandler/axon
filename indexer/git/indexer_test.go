@@ -68,6 +68,7 @@ func setupTestRepo(t *testing.T) string {
 func setupGraph(t *testing.T) *graph.Graph {
 	t.Helper()
 	r := graph.NewRegistry()
+	types.RegisterCommonEdges(r)
 	types.RegisterFSTypes(r)
 	types.RegisterVCSTypes(r)
 	s, err := sqlite.New(":memory:")
@@ -182,19 +183,23 @@ func TestIndexerWithRemote(t *testing.T) {
 		t.Errorf("expected 1 remote, got %d", len(remotes))
 	}
 
-	// Check edges from repo to remote
+	// Check edges from repo to remote (now using 'has' edge type)
 	repos, _ := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeRepo})
 	if len(repos) > 0 {
 		edges, _ := g.GetEdgesFrom(ctx, repos[0].ID)
 		hasRemoteEdge := false
 		for _, e := range edges {
-			if e.Type == types.EdgeHasRemote {
-				hasRemoteEdge = true
-				break
+			if e.Type == types.EdgeHas {
+				// Check if target is a remote
+				target, err := g.GetNode(ctx, e.To)
+				if err == nil && target.Type == types.TypeRemote {
+					hasRemoteEdge = true
+					break
+				}
 			}
 		}
 		if !hasRemoteEdge {
-			t.Error("expected has_remote edge from repo")
+			t.Error("expected 'has' edge from repo to remote")
 		}
 	}
 }

@@ -15,13 +15,14 @@ import (
 )
 
 var (
-	treeDepth     int
-	treeShowIDs   bool
-	treeShowTypes bool
-	treeNoColor   bool
-	treeNoEmoji   bool
-	treeColor     bool
-	treeEmoji     bool
+	treeDepth      int
+	treeShowIDs    bool
+	treeShowTypes  bool
+	treeNoColor    bool
+	treeNoEmoji    bool
+	treeColor      bool
+	treeEmoji      bool
+	treeTypeFilter []string
 )
 
 var treeCmd = &cobra.Command{
@@ -45,6 +46,7 @@ func init() {
 	treeCmd.Flags().BoolVar(&treeNoEmoji, "no-emoji", false, "Disable emoji icons")
 	treeCmd.Flags().BoolVar(&treeColor, "color", false, "Force colored output")
 	treeCmd.Flags().BoolVar(&treeEmoji, "emoji", false, "Force emoji icons")
+	treeCmd.Flags().StringArrayVarP(&treeTypeFilter, "type", "t", nil, "Filter by node type (glob: 'fs:*', 'md:*'). Can be repeated.")
 }
 
 func runTree(cmd *cobra.Command, args []string) error {
@@ -112,11 +114,12 @@ func runTree(cmd *cobra.Command, args []string) error {
 
 	// Render tree
 	opts := render.Options{
-		MaxDepth:  treeDepth,
-		ShowIDs:   treeShowIDs,
-		ShowTypes: treeShowTypes,
-		UseColor:  useColor,
-		UseEmoji:  useEmoji,
+		MaxDepth:   treeDepth,
+		ShowIDs:    treeShowIDs,
+		ShowTypes:  treeShowTypes,
+		UseColor:   useColor,
+		UseEmoji:   useEmoji,
+		TypeFilter: treeTypeFilter,
 	}
 
 	output, err := render.Tree(ctx, ax.Graph(), rootNode.ID, opts)
