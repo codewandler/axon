@@ -130,3 +130,35 @@ func (e *CollectingEmitter) EmitOwnership(ctx context.Context, ownerID, ownedID 
 	belongsToEdge := graph.NewEdge(types.EdgeBelongsTo, ownedID, ownerID)
 	return e.EmitEdge(ctx, belongsToEdge)
 }
+
+// CountingEmitter wraps an Emitter and tracks node counts by type in the Context.
+type CountingEmitter struct {
+	inner Emitter
+	ictx  *Context
+}
+
+// NewCountingEmitter creates an emitter that wraps inner and increments
+// counters in ictx based on emitted node types.
+func NewCountingEmitter(inner Emitter, ictx *Context) *CountingEmitter {
+	return &CountingEmitter{inner: inner, ictx: ictx}
+}
+
+func (e *CountingEmitter) EmitNode(ctx context.Context, node *graph.Node) error {
+	if err := e.inner.EmitNode(ctx, node); err != nil {
+		return err
+	}
+	// Increment counter based on node type
+	switch node.Type {
+	case types.TypeFile:
+		e.ictx.AddFilesIndexed(1)
+	case types.TypeDir:
+		e.ictx.AddDirsIndexed(1)
+	case types.TypeRepo:
+		e.ictx.AddReposIndexed(1)
+	}
+	return nil
+}
+
+func (e *CountingEmitter) EmitEdge(ctx context.Context, edge *graph.Edge) error {
+	return e.inner.EmitEdge(ctx, edge)
+}

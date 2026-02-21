@@ -15,6 +15,97 @@ type IndexerState struct {
 	Error     error
 	StartedAt time.Time
 	EndedAt   time.Time
+
+	// Rate tracking (sliding window of samples)
+	rateSamples []rateSample
+}
+
+// rateSample records a count at a point in time for rate calculation.
+type rateSample struct {
+	count int
+	time  time.Time
+}
+
+// maxRateSamples is the number of samples to keep for rate smoothing.
+const maxRateSamples = 5
+
+// Elapsed returns the duration since the indexer started.
+// If completed/errored, returns the total duration.
+func (s *IndexerState) Elapsed() time.Duration {
+	if s.StartedAt.IsZero() {
+		return 0
+	}
+	if s.Status == "running" {
+		return time.Since(s.StartedAt)
+	}
+	if s.EndedAt.IsZero() {
+		return time.Since(s.StartedAt)
+	}
+	return s.EndedAt.Sub(s.StartedAt)
+}
+
+// Rate returns the current items/second rate (smoothed over recent samples).
+func (s *IndexerState) Rate() float64 {
+	if len(s.rateSamples) < 2 {
+		// Not enough samples - use overall rate
+		elapsed := s.Elapsed().Seconds()
+		if elapsed <= 0 {
+			return 0
+		}
+		return float64(s.Current) / elapsed
+	}
+
+	// Use oldest and newest samples for rate calculation
+	oldest := s.rateSamples[0]
+	newest := s.rateSamples[len(s.rateSamples)-1]
+
+	duration := newest.time.Sub(oldest.time).Seconds()
+	if duration <= 0 {
+		return 0
+	}
+
+	items := newest.count - oldest.count
+	return float64(items) / duration
+}
+
+// ETA returns the estimated time remaining based on current rate.
+// Returns 0 if total is unknown or rate is too low.
+func (s *IndexerState) ETA() time.Duration {
+	if s.Total <= 0 || s.Status != "running" {
+		return 0
+	}
+
+	rate := s.Rate()
+	if rate <= 0 {
+		return 0
+	}
+
+	remaining := s.Total - s.Current
+	if remaining <= 0 {
+		return 0
+	}
+
+	return time.Duration(float64(remaining)/rate) * time.Second
+}
+
+// addRateSample adds a new sample for rate calculation.
+func (s *IndexerState) addRateSample(count int, t time.Time) {
+	s.rateSamples = append(s.rateSamples, rateSample{count: count, time: t})
+
+	// Keep only the last maxRateSamples samples
+	if len(s.rateSamples) > maxRateSamples {
+		s.rateSamples = s.rateSamples[len(s.rateSamples)-maxRateSamples:]
+	}
+}
+
+// IndexerSummary contains final statistics for an indexer.
+type IndexerSummary struct {
+	Name     string
+	Status   string // "completed", "error"
+	Duration time.Duration
+	Items    int
+	Rate     float64
+	Error    error
 }
 
 // Coordinator collects progress events from indexers and tracks their state.
@@ -96,6 +187,37 @@ func (c *Coordinator) IsRunning() bool {
 	return false
 }
 
+// Summary returns final statistics for all indexers in order of appearance.
+func (c *Coordinator) Summary() []IndexerSummary {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	result := make([]IndexerSummary, 0, len(c.order))
+	for _, name := range c.order {
+		state, ok := c.states[name]
+		if !ok {
+			continue
+		}
+
+		summary := IndexerSummary{
+			Name:     state.Name,
+			Status:   state.Status,
+			Duration: state.Elapsed(),
+			Items:    state.Total,
+			Error:    state.Error,
+		}
+
+		// Calculate final rate
+		if summary.Duration > 0 && summary.Items > 0 {
+			summary.Rate = float64(summary.Items) / summary.Duration.Seconds()
+		}
+
+		result = append(result, summary)
+	}
+
+	return result
+}
+
 // run processes events from indexers.
 func (c *Coordinator) run() {
 	defer close(c.allDone)
@@ -148,6 +270,7 @@ func (c *Coordinator) processEvent(event Event) {
 			state.Total = event.Total
 		}
 		state.Item = event.Item
+		state.addRateSample(event.Current, event.Timestamp)
 
 	case EventCompleted:
 		state.Status = "completed"

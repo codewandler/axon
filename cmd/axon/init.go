@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/codewandler/axon"
@@ -122,6 +123,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 func runInitWithProgress(ctx context.Context, ax *axon.Axon, absPath string, opts axon.IndexOptions) (*axon.IndexResult, error) {
 	// Create progress coordinator
 	coord := progress.NewCoordinator()
+	startTime := time.Now()
 
 	// Channel for result
 	resultCh := make(chan *axon.IndexResult, 1)
@@ -147,6 +149,10 @@ func runInitWithProgress(ctx context.Context, ax *axon.Axon, absPath string, opt
 	if _, err := p.Run(); err != nil {
 		return nil, fmt.Errorf("progress UI error: %w", err)
 	}
+
+	// Print git-style summary after TUI clears
+	totalDuration := time.Since(startTime)
+	fmt.Print(progress.FormatSummary(coord.Summary(), totalDuration))
 
 	// Result must be available now since indexing goroutine writes before coord.Close()
 	select {

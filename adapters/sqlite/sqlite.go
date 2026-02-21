@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -214,6 +215,45 @@ func (s *Storage) migrate() error {
 			sql: `
 				-- Add labels column for categorical tagging
 				ALTER TABLE nodes ADD COLUMN labels TEXT DEFAULT '[]';
+			`,
+		},
+		{
+			version: 6,
+			sql: `
+				-- Covering index for edge queries that JOIN on from_id and filter by URI
+				-- This allows the JOIN lookup to use the index without hitting the table
+				CREATE INDEX IF NOT EXISTS idx_nodes_id_uri ON nodes(id, uri);
+				
+				-- Index for scanning nodes by URI prefix, used by scoped edge queries
+				CREATE INDEX IF NOT EXISTS idx_nodes_uri_id ON nodes(uri, id);
+			`,
+		},
+		{
+			version: 7,
+			sql: `
+				-- Track indexing runs for history and stats
+				CREATE TABLE IF NOT EXISTS index_runs (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					started_at TEXT NOT NULL,
+					finished_at TEXT NOT NULL,
+					duration_ms INTEGER NOT NULL,
+					root_path TEXT NOT NULL,
+					files_indexed INTEGER NOT NULL,
+					dirs_indexed INTEGER NOT NULL,
+					repos_indexed INTEGER NOT NULL,
+					stale_removed INTEGER NOT NULL,
+					generation TEXT NOT NULL
+				);
+				
+				CREATE INDEX IF NOT EXISTS idx_index_runs_finished ON index_runs(finished_at DESC);
+			`,
+		},
+		{
+			version: 8,
+			sql: `
+				-- Index for efficient traversal: find edges by to_id and type
+				-- Used for incoming edge lookups and root node detection
+				CREATE INDEX IF NOT EXISTS idx_edges_to_id_type ON edges(to_id, type);
 			`,
 		},
 	}
@@ -652,6 +692,297 @@ func (s *Storage) GetEdgesTo(ctx context.Context, nodeID string) ([]*graph.Edge,
 	return s.scanEdges(rows)
 }
 
+// Traverse walks the graph from seed nodes using BFS, yielding visited nodes via channel.
+func (s *Storage) Traverse(ctx context.Context, opts graph.TraverseOptions) (<-chan graph.TraverseResult, error) {
+	if err := s.Flush(ctx); err != nil {
+		return nil, err
+	}
+
+	// Find seed nodes
+	seedNodes, err := s.FindNodes(ctx, opts.Seed, graph.QueryOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	results := make(chan graph.TraverseResult, 100)
+
+	go func() {
+		defer close(results)
+
+		// Track visited nodes to avoid cycles
+		visited := make(map[string]bool)
+
+		// BFS queue: (nodeID, depth, edge that led here)
+		type queueItem struct {
+			nodeID string
+			depth  int
+			via    *graph.Edge
+		}
+		queue := make([]queueItem, 0, len(seedNodes))
+
+		// Initialize queue with seed nodes
+		for _, node := range seedNodes {
+			if visited[node.ID] {
+				continue
+			}
+			visited[node.ID] = true
+			queue = append(queue, queueItem{nodeID: node.ID, depth: 0, via: nil})
+
+			// Yield seed node if it passes the filter
+			if s.nodeMatchesFilter(node, opts.NodeFilter) {
+				select {
+				case <-ctx.Done():
+					results <- graph.TraverseResult{Err: ctx.Err()}
+					return
+				case results <- graph.TraverseResult{Node: node, Depth: 0, Via: nil}:
+				}
+			}
+		}
+
+		// BFS traversal
+		for len(queue) > 0 {
+			item := queue[0]
+			queue = queue[1:]
+
+			// Check depth limit
+			if opts.MaxDepth > 0 && item.depth >= opts.MaxDepth {
+				continue
+			}
+
+			// Find edges to follow based on EdgeFilters
+			edges, err := s.findEdgesToFollow(ctx, item.nodeID, opts.EdgeFilters)
+			if err != nil {
+				results <- graph.TraverseResult{Err: err}
+				return
+			}
+
+			for _, edge := range edges {
+				// Determine target node ID based on edge direction
+				var targetID string
+				if edge.From == item.nodeID {
+					targetID = edge.To
+				} else {
+					targetID = edge.From
+				}
+
+				if visited[targetID] {
+					continue
+				}
+				visited[targetID] = true
+
+				// Get the target node
+				targetNode, err := s.GetNode(ctx, targetID)
+				if err != nil {
+					// Node might have been deleted - skip
+					continue
+				}
+
+				// Add to queue for further traversal
+				queue = append(queue, queueItem{
+					nodeID: targetID,
+					depth:  item.depth + 1,
+					via:    edge,
+				})
+
+				// Yield if node passes the filter
+				if s.nodeMatchesFilter(targetNode, opts.NodeFilter) {
+					select {
+					case <-ctx.Done():
+						results <- graph.TraverseResult{Err: ctx.Err()}
+						return
+					case results <- graph.TraverseResult{
+						Node:  targetNode,
+						Depth: item.depth + 1,
+						Via:   edge,
+					}:
+					}
+				}
+			}
+		}
+	}()
+
+	return results, nil
+}
+
+// findEdgesToFollow returns edges from nodeID matching any of the EdgeFilters.
+func (s *Storage) findEdgesToFollow(ctx context.Context, nodeID string, filters []graph.EdgeFilter) ([]*graph.Edge, error) {
+	if len(filters) == 0 {
+		// Default: follow all outgoing edges
+		return s.GetEdgesFrom(ctx, nodeID)
+	}
+
+	var allEdges []*graph.Edge
+	seen := make(map[string]bool)
+
+	for _, filter := range filters {
+		var edges []*graph.Edge
+		var err error
+
+		direction := filter.Direction
+		if direction == "" {
+			direction = "outgoing"
+		}
+
+		// Get edges based on direction
+		switch direction {
+		case "outgoing":
+			edges, err = s.getEdgesFromWithTypes(ctx, nodeID, filter.Types, filter.Type)
+		case "incoming":
+			edges, err = s.getEdgesToWithTypes(ctx, nodeID, filter.Types, filter.Type)
+		case "both":
+			outEdges, err1 := s.getEdgesFromWithTypes(ctx, nodeID, filter.Types, filter.Type)
+			inEdges, err2 := s.getEdgesToWithTypes(ctx, nodeID, filter.Types, filter.Type)
+			if err1 != nil {
+				return nil, err1
+			}
+			if err2 != nil {
+				return nil, err2
+			}
+			edges = append(outEdges, inEdges...)
+		default:
+			edges, err = s.getEdgesFromWithTypes(ctx, nodeID, filter.Types, filter.Type)
+		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		// Deduplicate edges
+		for _, e := range edges {
+			if !seen[e.ID] {
+				seen[e.ID] = true
+				allEdges = append(allEdges, e)
+			}
+		}
+	}
+
+	return allEdges, nil
+}
+
+// getEdgesFromWithTypes gets outgoing edges optionally filtered by type(s).
+func (s *Storage) getEdgesFromWithTypes(ctx context.Context, nodeID string, types []string, singleType string) ([]*graph.Edge, error) {
+	query := `SELECT id, type, from_id, to_id, data, generation, created_at FROM edges WHERE from_id = ?`
+	args := []any{nodeID}
+
+	query, args = s.appendEdgeTypeFilter(query, args, types, singleType)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return s.scanEdges(rows)
+}
+
+// getEdgesToWithTypes gets incoming edges optionally filtered by type(s).
+func (s *Storage) getEdgesToWithTypes(ctx context.Context, nodeID string, types []string, singleType string) ([]*graph.Edge, error) {
+	query := `SELECT id, type, from_id, to_id, data, generation, created_at FROM edges WHERE to_id = ?`
+	args := []any{nodeID}
+
+	query, args = s.appendEdgeTypeFilter(query, args, types, singleType)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return s.scanEdges(rows)
+}
+
+// appendEdgeTypeFilter appends type filter conditions to query.
+func (s *Storage) appendEdgeTypeFilter(query string, args []any, types []string, singleType string) (string, []any) {
+	if len(types) > 0 {
+		placeholders := make([]string, len(types))
+		for i, t := range types {
+			placeholders[i] = "?"
+			args = append(args, t)
+		}
+		query += ` AND type IN (` + strings.Join(placeholders, ", ") + `)`
+	} else if singleType != "" {
+		query += ` AND type = ?`
+		args = append(args, singleType)
+	}
+	return query, args
+}
+
+// nodeMatchesFilter checks if a node matches the given filter.
+// An empty filter matches all nodes.
+func (s *Storage) nodeMatchesFilter(node *graph.Node, filter graph.NodeFilter) bool {
+	if filter.Type != "" && node.Type != filter.Type {
+		return false
+	}
+	if filter.TypePattern != "" && !globMatch(filter.TypePattern, node.Type) {
+		return false
+	}
+	if filter.URIPrefix != "" && !strings.HasPrefix(node.URI, filter.URIPrefix) {
+		return false
+	}
+	if filter.Name != "" && node.Name != filter.Name {
+		return false
+	}
+	if filter.NamePattern != "" && !globMatch(filter.NamePattern, node.Name) {
+		return false
+	}
+	if len(filter.Labels) > 0 {
+		hasLabel := false
+		for _, filterLabel := range filter.Labels {
+			for _, nodeLabel := range node.Labels {
+				if nodeLabel == filterLabel {
+					hasLabel = true
+					break
+				}
+			}
+			if hasLabel {
+				break
+			}
+		}
+		if !hasLabel {
+			return false
+		}
+	}
+	if len(filter.Extensions) > 0 {
+		hasExt := false
+		for _, ext := range filter.Extensions {
+			if strings.HasSuffix(node.Name, "."+ext) {
+				hasExt = true
+				break
+			}
+		}
+		if !hasExt {
+			return false
+		}
+	}
+	if len(filter.NodeIDs) > 0 {
+		hasID := false
+		for _, id := range filter.NodeIDs {
+			if node.ID == id {
+				hasID = true
+				break
+			}
+		}
+		if !hasID {
+			return false
+		}
+	}
+	// Note: Root filter is handled at query level, not here
+	return true
+}
+
+// globMatch provides simple glob matching (*, ?).
+func globMatch(pattern, s string) bool {
+	// Simple implementation - could use filepath.Match but it has different semantics
+	// For now, convert glob to a simple check
+	if pattern == "*" {
+		return true
+	}
+	if !strings.Contains(pattern, "*") && !strings.Contains(pattern, "?") {
+		return pattern == s
+	}
+	// Use filepath.Match for proper glob semantics
+	matched, _ := filepath.Match(pattern, s)
+	return matched
+}
+
 func (s *Storage) scanEdges(rows *sql.Rows) ([]*graph.Edge, error) {
 	var edges []*graph.Edge
 	for rows.Next() {
@@ -785,6 +1116,25 @@ func (s *Storage) buildNodeFilterArgs(query *string, filter graph.NodeFilter) []
 		*query += ` AND (` + strings.Join(extConditions, " OR ") + `)`
 	}
 
+	// NodeIDs filter: OR logic - node id must be one of the specified IDs
+	if len(filter.NodeIDs) > 0 {
+		placeholders := make([]string, len(filter.NodeIDs))
+		for i, id := range filter.NodeIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		*query += ` AND id IN (` + strings.Join(placeholders, ", ") + `)`
+	}
+
+	// Root filter: only nodes with no incoming containment edges
+	if filter.Root {
+		*query += ` AND NOT EXISTS (
+			SELECT 1 FROM edges e 
+			WHERE e.to_id = nodes.id 
+			AND e.type IN ('contains', 'located_at')
+		)`
+	}
+
 	return args
 }
 
@@ -878,6 +1228,33 @@ func (s *Storage) CountNodes(ctx context.Context, filter graph.NodeFilter, opts 
 		}
 		return result, rows.Err()
 
+	case "extension":
+		// Extract extension from data JSON, only for fs:file nodes
+		query := `SELECT json_extract(data, '$.ext'), COUNT(*) FROM nodes WHERE type = 'fs:file' AND json_extract(data, '$.ext') IS NOT NULL AND json_extract(data, '$.ext') != ''`
+		args := s.buildNodeFilterArgs(&query, filter)
+		query += ` GROUP BY json_extract(data, '$.ext')`
+		query += s.buildCountOrderBy(opts)
+		if opts.Limit > 0 {
+			query += ` LIMIT ?`
+			args = append(args, opts.Limit)
+		}
+
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var ext string
+			var count int
+			if err := rows.Scan(&ext, &count); err != nil {
+				return nil, err
+			}
+			result[ext] = count
+		}
+		return result, rows.Err()
+
 	default:
 		// No grouping - just total count
 		query := `SELECT COUNT(*) FROM nodes WHERE 1=1`
@@ -907,36 +1284,73 @@ func (s *Storage) CountEdges(ctx context.Context, filter graph.EdgeFilter, opts 
 	needFromJoin := filter.From != nil
 	needToJoin := filter.To != nil
 
-	switch opts.GroupBy {
-	case "type":
-		query = `SELECT e.type, COUNT(*) FROM edges e`
-	default:
-		query = `SELECT COUNT(*) FROM edges e`
-	}
+	// When filtering by From node (common case for scoped queries),
+	// restructure query to start from nodes table with index hints.
+	// This allows SQLite to use idx_nodes_uri for URI prefix filtering
+	// and idx_edges_from for the join, which is much faster.
+	if needFromJoin && filter.From.URIPrefix != "" {
+		// Optimized query: start from nodes, use index hints
+		switch opts.GroupBy {
+		case "type":
+			query = `SELECT e.type, COUNT(*) FROM nodes nf INDEXED BY idx_nodes_uri`
+			query += ` JOIN edges e INDEXED BY idx_edges_from ON e.from_id = nf.id`
+		default:
+			query = `SELECT COUNT(*) FROM nodes nf INDEXED BY idx_nodes_uri`
+			query += ` JOIN edges e INDEXED BY idx_edges_from ON e.from_id = nf.id`
+		}
 
-	if needFromJoin {
-		query += ` JOIN nodes nf ON e.from_id = nf.id`
-	}
-	if needToJoin {
-		query += ` JOIN nodes nt ON e.to_id = nt.id`
-	}
+		if needToJoin {
+			query += ` JOIN nodes nt ON e.to_id = nt.id`
+		}
 
-	query += ` WHERE 1=1`
+		query += ` WHERE 1=1`
 
-	// Edge type filter
-	if filter.Type != "" {
-		query += ` AND e.type = ?`
-		args = append(args, filter.Type)
-	}
-
-	// From node filter
-	if filter.From != nil {
+		// From node filter (applied to nf)
 		args = append(args, s.buildNodeFilterArgsWithPrefix(&query, *filter.From, "nf")...)
-	}
 
-	// To node filter
-	if filter.To != nil {
-		args = append(args, s.buildNodeFilterArgsWithPrefix(&query, *filter.To, "nt")...)
+		// Edge type filter
+		if filter.Type != "" {
+			query += ` AND e.type = ?`
+			args = append(args, filter.Type)
+		}
+
+		// To node filter
+		if filter.To != nil {
+			args = append(args, s.buildNodeFilterArgsWithPrefix(&query, *filter.To, "nt")...)
+		}
+	} else {
+		// Standard query starting from edges
+		switch opts.GroupBy {
+		case "type":
+			query = `SELECT e.type, COUNT(*) FROM edges e`
+		default:
+			query = `SELECT COUNT(*) FROM edges e`
+		}
+
+		if needFromJoin {
+			query += ` JOIN nodes nf ON e.from_id = nf.id`
+		}
+		if needToJoin {
+			query += ` JOIN nodes nt ON e.to_id = nt.id`
+		}
+
+		query += ` WHERE 1=1`
+
+		// Edge type filter
+		if filter.Type != "" {
+			query += ` AND e.type = ?`
+			args = append(args, filter.Type)
+		}
+
+		// From node filter
+		if filter.From != nil {
+			args = append(args, s.buildNodeFilterArgsWithPrefix(&query, *filter.From, "nf")...)
+		}
+
+		// To node filter
+		if filter.To != nil {
+			args = append(args, s.buildNodeFilterArgsWithPrefix(&query, *filter.To, "nt")...)
+		}
 	}
 
 	if opts.GroupBy == "type" {
@@ -1172,4 +1586,64 @@ func URIPrefix(uri string) string {
 		return uri
 	}
 	return uri + "/"
+}
+
+// RecordIndexRun saves a record of an indexing run.
+func (s *Storage) RecordIndexRun(ctx context.Context, run graph.IndexRunRecord) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO index_runs (started_at, finished_at, duration_ms, root_path, files_indexed, dirs_indexed, repos_indexed, stale_removed, generation)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		run.StartedAt.Format(time.RFC3339),
+		run.FinishedAt.Format(time.RFC3339),
+		run.DurationMs,
+		run.RootPath,
+		run.FilesIndexed,
+		run.DirsIndexed,
+		run.ReposIndexed,
+		run.StaleRemoved,
+		run.Generation,
+	)
+	return err
+}
+
+// GetLastIndexRun returns the most recent index run, or nil if none.
+func (s *Storage) GetLastIndexRun(ctx context.Context) (*graph.IndexRunRecord, error) {
+	var run graph.IndexRunRecord
+	var startedAt, finishedAt string
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, started_at, finished_at, duration_ms, root_path, files_indexed, dirs_indexed, repos_indexed, stale_removed, generation
+		FROM index_runs
+		ORDER BY finished_at DESC
+		LIMIT 1
+	`).Scan(
+		&run.ID,
+		&startedAt,
+		&finishedAt,
+		&run.DurationMs,
+		&run.RootPath,
+		&run.FilesIndexed,
+		&run.DirsIndexed,
+		&run.ReposIndexed,
+		&run.StaleRemoved,
+		&run.Generation,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	run.StartedAt, _ = time.Parse(time.RFC3339, startedAt)
+	run.FinishedAt, _ = time.Parse(time.RFC3339, finishedAt)
+
+	return &run, nil
+}
+
+// GetDatabasePath returns the path to the database file.
+func (s *Storage) GetDatabasePath() string {
+	return s.path
 }

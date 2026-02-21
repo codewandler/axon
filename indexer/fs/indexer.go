@@ -47,6 +47,14 @@ func (i *Indexer) Subscriptions() []indexer.Subscription {
 	return nil
 }
 
+// discoveredEntry holds a discovered filesystem entry for later indexing.
+type discoveredEntry struct {
+	path      string
+	entry     os.DirEntry
+	ignored   bool // If true, entry is ignored but included for deletion detection
+	skipIndex bool // If true, skip indexing (out of bounds)
+}
+
 func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 	rootPath := types.URIToPath(ictx.Root)
 
@@ -55,15 +63,13 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 		ictx.Progress <- progress.Started(i.Name())
 	}
 
-	// Track node IDs by path for creating edges
-	nodeIDs := make(map[string]string)
-	count := 0
-	lastProgressTime := time.Now()
+	// Phase 1: Discovery - walk the tree and collect all entries
+	// Pre-allocate for large directories (will grow if needed)
+	entries := make([]discoveredEntry, 0, 100000)
 
 	err := filepath.WalkDir(rootPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			// Skip entries we can't read (permission denied, etc.)
-			// Return SkipDir for directories to avoid descending into them
 			if d != nil && d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -79,47 +85,15 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 
 		uri := types.PathToURI(path)
 
-		// Check ignore patterns - create node for ignored dirs (so we can detect deletion)
-		// but skip their contents
+		// Check ignore patterns
 		if i.shouldIgnore(path, d.Name()) {
 			if d.IsDir() {
-				// Create a node for ignored directories so we can detect when they're deleted
-				info, err := d.Info()
-				if err != nil {
-					return err
-				}
-				node := graph.NewNode(types.TypeDir).
-					WithURI(uri).
-					WithKey(path).
-					WithName(d.Name()).
-					WithData(types.DirData{Name: d.Name(), Mode: info.Mode()})
-
-				if err := ictx.Emitter.EmitNode(ctx, node); err != nil {
-					return err
-				}
-				nodeIDs[path] = node.ID
-
-				// Emit event for ignored dirs so subscribers (like git indexer) can react
-				if ictx.Events != nil {
-					ictx.Events <- indexer.Event{
-						Type:     indexer.EventEntryVisited,
-						URI:      uri,
-						Path:     path,
-						Name:     d.Name(),
-						NodeType: node.Type,
-						NodeID:   node.ID,
-						Node:     node,
-					}
-				}
-
-				// Create containment edges from parent
-				parentPath := filepath.Dir(path)
-				if parentID, ok := nodeIDs[parentPath]; ok {
-					if err := indexer.EmitContainment(ctx, ictx.Emitter, parentID, node.ID); err != nil {
-						return err
-					}
-				}
-
+				// Include ignored dirs for deletion detection, but mark as ignored
+				entries = append(entries, discoveredEntry{
+					path:    path,
+					entry:   d,
+					ignored: true,
+				})
 				return filepath.SkipDir
 			}
 			// Ignored files are simply skipped
@@ -134,79 +108,10 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 			return nil
 		}
 
-		var node *graph.Node
-
-		if d.IsDir() {
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-			node = graph.NewNode(types.TypeDir).
-				WithURI(uri).
-				WithKey(path).
-				WithName(d.Name()).
-				WithData(types.DirData{Name: d.Name(), Mode: info.Mode()})
-		} else if d.Type()&os.ModeSymlink != 0 {
-			target, _ := os.Readlink(path)
-			node = graph.NewNode(types.TypeLink).
-				WithURI(uri).
-				WithKey(path).
-				WithName(d.Name()).
-				WithData(types.LinkData{Name: d.Name(), Target: target})
-		} else {
-			info, err := d.Info()
-			if err != nil {
-				return err
-			}
-			ext := filepath.Ext(d.Name())
-			contentType := mime.TypeByExtension(ext)
-			node = graph.NewNode(types.TypeFile).
-				WithURI(uri).
-				WithKey(path).
-				WithName(d.Name()).
-				WithData(types.FileData{
-					Name:        d.Name(),
-					Size:        info.Size(),
-					Modified:    info.ModTime(),
-					Mode:        info.Mode(),
-					Ext:         ext,
-					ContentType: contentType,
-				})
-		}
-
-		if err := ictx.Emitter.EmitNode(ctx, node); err != nil {
-			return err
-		}
-		nodeIDs[path] = node.ID
-		count++
-
-		// Emit event for visited entry
-		if ictx.Events != nil {
-			ictx.Events <- indexer.Event{
-				Type:     indexer.EventEntryVisited,
-				URI:      uri,
-				Path:     path,
-				Name:     d.Name(),
-				NodeType: node.Type,
-				NodeID:   node.ID,
-				Node:     node,
-			}
-		}
-
-		// Hybrid progress: every 50 items OR every 100ms
-		now := time.Now()
-		if ictx.Progress != nil && (count%50 == 0 || now.Sub(lastProgressTime) > 100*time.Millisecond) {
-			ictx.Progress <- progress.Progress(i.Name(), count, path)
-			lastProgressTime = now
-		}
-
-		// Create containment edges from parent to this node
-		parentPath := filepath.Dir(path)
-		if parentID, ok := nodeIDs[parentPath]; ok {
-			if err := indexer.EmitContainment(ctx, ictx.Emitter, parentID, node.ID); err != nil {
-				return err
-			}
-		}
+		entries = append(entries, discoveredEntry{
+			path:  path,
+			entry: d,
+		})
 
 		return nil
 	})
@@ -216,6 +121,43 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 			ictx.Progress <- progress.Error(i.Name(), err)
 		}
 		return err
+	}
+
+	// Phase 2: Indexing - process all discovered entries
+	// Now we know the total count for accurate progress reporting
+	total := len(entries)
+	nodeIDs := make(map[string]string, total)
+	count := 0
+	lastProgressTime := time.Now()
+
+	for idx, entry := range entries {
+		// Check context cancellation periodically
+		if idx%1000 == 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
+
+		node, err := i.indexEntry(ctx, ictx, entry, nodeIDs)
+		if err != nil {
+			if ictx.Progress != nil {
+				ictx.Progress <- progress.Error(i.Name(), err)
+			}
+			return err
+		}
+
+		if node != nil {
+			count++
+		}
+
+		// Progress reporting: every 100 items OR every 100ms
+		now := time.Now()
+		if ictx.Progress != nil && (idx%100 == 0 || now.Sub(lastProgressTime) > 100*time.Millisecond) {
+			ictx.Progress <- progress.ProgressWithTotal(i.Name(), idx+1, total, entry.path)
+			lastProgressTime = now
+		}
 	}
 
 	// Cleanup stale nodes (only for direct invocations, not event-triggered)
@@ -234,6 +176,92 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 	}
 
 	return nil
+}
+
+// indexEntry creates a node for a discovered entry and emits it.
+func (i *Indexer) indexEntry(ctx context.Context, ictx *indexer.Context, entry discoveredEntry, nodeIDs map[string]string) (*graph.Node, error) {
+	path := entry.path
+	d := entry.entry
+	uri := types.PathToURI(path)
+
+	var node *graph.Node
+
+	if entry.ignored {
+		// Ignored directory - create minimal node for deletion detection
+		info, err := d.Info()
+		if err != nil {
+			return nil, err
+		}
+		node = graph.NewNode(types.TypeDir).
+			WithURI(uri).
+			WithKey(path).
+			WithName(d.Name()).
+			WithData(types.DirData{Name: d.Name(), Mode: info.Mode()})
+	} else if d.IsDir() {
+		info, err := d.Info()
+		if err != nil {
+			return nil, err
+		}
+		node = graph.NewNode(types.TypeDir).
+			WithURI(uri).
+			WithKey(path).
+			WithName(d.Name()).
+			WithData(types.DirData{Name: d.Name(), Mode: info.Mode()})
+	} else if d.Type()&os.ModeSymlink != 0 {
+		target, _ := os.Readlink(path)
+		node = graph.NewNode(types.TypeLink).
+			WithURI(uri).
+			WithKey(path).
+			WithName(d.Name()).
+			WithData(types.LinkData{Name: d.Name(), Target: target})
+	} else {
+		info, err := d.Info()
+		if err != nil {
+			return nil, err
+		}
+		ext := filepath.Ext(d.Name())
+		contentType := mime.TypeByExtension(ext)
+		node = graph.NewNode(types.TypeFile).
+			WithURI(uri).
+			WithKey(path).
+			WithName(d.Name()).
+			WithData(types.FileData{
+				Name:        d.Name(),
+				Size:        info.Size(),
+				Modified:    info.ModTime(),
+				Mode:        info.Mode(),
+				Ext:         ext,
+				ContentType: contentType,
+			})
+	}
+
+	if err := ictx.Emitter.EmitNode(ctx, node); err != nil {
+		return nil, err
+	}
+	nodeIDs[path] = node.ID
+
+	// Emit event for visited entry (including ignored dirs for git indexer)
+	if ictx.Events != nil {
+		ictx.Events <- indexer.Event{
+			Type:     indexer.EventEntryVisited,
+			URI:      uri,
+			Path:     path,
+			Name:     d.Name(),
+			NodeType: node.Type,
+			NodeID:   node.ID,
+			Node:     node,
+		}
+	}
+
+	// Create containment edges from parent to this node
+	parentPath := filepath.Dir(path)
+	if parentID, ok := nodeIDs[parentPath]; ok {
+		if err := indexer.EmitContainment(ctx, ictx.Emitter, parentID, node.ID); err != nil {
+			return nil, err
+		}
+	}
+
+	return node, nil
 }
 
 // cleanupStale finds and removes stale nodes, emitting deletion events.

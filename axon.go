@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/graph"
@@ -122,6 +123,8 @@ func (a *Axon) IndexWithProgress(ctx context.Context, path string, prog chan<- p
 
 // IndexWithOptions indexes with the provided options.
 func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexResult, error) {
+	startTime := time.Now()
+
 	path := opts.Path
 	prog := opts.Progress
 	if path == "" {
@@ -143,21 +146,21 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 		return nil, &ErrNoIndexer{URI: uri}
 	}
 
-	// Create emitter
-	emitter := indexer.NewGraphEmitter(a.graph, generation)
-
 	// Create event channel for indexer communication
 	events := make(chan indexer.Event, 100)
 
-	// Create index context
+	// Create index context first (emitter needs it for counting)
 	ictx := &indexer.Context{
 		Root:       uri,
 		Generation: generation,
 		Graph:      a.graph,
-		Emitter:    emitter,
 		Progress:   prog,
 		Events:     events,
 	}
+
+	// Create emitter with counting wrapper
+	baseEmitter := indexer.NewGraphEmitter(a.graph, generation)
+	ictx.Emitter = indexer.NewCountingEmitter(baseEmitter, ictx)
 
 	// Track errors
 	var indexerErrors []error
@@ -248,28 +251,20 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 	dispatcherWg.Wait()
 	subscriberWg.Wait()
 
-	// Cleanup phase - report progress
-	if prog != nil {
-		prog <- progress.Started("cleanup")
-		prog <- progress.Progress("cleanup", 1, "flushing writes...")
-	}
-
 	// Flush storage buffer before post-index (so all nodes are queryable)
 	if err := a.storage.Flush(ctx); err != nil {
 		return nil, err
 	}
 
 	// Run post-index stage for indexers that implement PostIndexer
-	if prog != nil {
-		prog <- progress.Progress("cleanup", 2, "post-processing...")
-	}
+	// (e.g., markdown indexer resolving links - it reports its own progress)
 	for _, idx := range a.indexers.All() {
 		if post, ok := idx.(indexer.PostIndexer); ok {
 			postCtx := &indexer.Context{
 				Root:       uri,
 				Generation: generation,
 				Graph:      a.graph,
-				Emitter:    emitter,
+				Emitter:    ictx.Emitter, // Use same counting emitter
 				Progress:   prog,
 			}
 			if err := post.PostIndex(ctx, postCtx); err != nil {
@@ -281,52 +276,53 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 	}
 
 	// Flush again after post-index
-	if prog != nil {
-		prog <- progress.Progress("cleanup", 3, "flushing...")
-	}
 	if err := a.storage.Flush(ctx); err != nil {
 		return nil, err
 	}
 
 	// Clean up orphaned edges (edges pointing to deleted nodes)
-	// Note: We don't use DeleteStaleEdges because it's global and would delete
-	// edges from other indexed directories. Indexers clean up their own stale
-	// nodes, and orphaned edges are removed here.
 	// Optimization: Skip if no nodes were deleted (common case for re-indexing).
 	// Also skip if SkipGC option is set.
 	var orphanedEdges int
 	if !opts.SkipGC && ictx.NodesDeleted() > 0 {
 		if prog != nil {
-			prog <- progress.Progress("cleanup", 4, "removing orphaned edges...")
+			prog <- progress.Started("gc")
 		}
 		orphanedEdges, err = a.storage.DeleteOrphanedEdges(ctx)
 		if err != nil {
 			return nil, err
 		}
+		if prog != nil {
+			prog <- progress.Completed("gc", orphanedEdges)
+		}
 	}
 
-	// Count what we indexed using efficient COUNT queries
-	if prog != nil {
-		prog <- progress.Progress("cleanup", 5, "counting results...")
-	}
-	typeCounts, err := a.storage.CountNodes(ctx, graph.NodeFilter{}, graph.QueryOptions{GroupBy: "type"})
-	if err != nil {
-		return nil, err
-	}
-
-	if prog != nil {
-		prog <- progress.Completed("cleanup", 5)
-	}
-
-	return &IndexResult{
-		Files:        typeCounts[types.TypeFile],
-		Directories:  typeCounts[types.TypeDir],
-		Repos:        typeCounts[types.TypeRepo],
+	// Build result from actual indexing counts tracked in context
+	result := &IndexResult{
+		Files:        int(ictx.FilesIndexed()),
+		Directories:  int(ictx.DirsIndexed()),
+		Repos:        int(ictx.ReposIndexed()),
 		StaleRemoved: orphanedEdges,
 		RootURI:      uri,
 		Generation:   generation,
 		Errors:       indexerErrors,
-	}, nil
+	}
+
+	// Record this indexing run for stats/history
+	finishTime := time.Now()
+	_ = a.storage.RecordIndexRun(ctx, graph.IndexRunRecord{
+		StartedAt:    startTime,
+		FinishedAt:   finishTime,
+		DurationMs:   finishTime.Sub(startTime).Milliseconds(),
+		RootPath:     absPath,
+		FilesIndexed: result.Files,
+		DirsIndexed:  result.Directories,
+		ReposIndexed: result.Repos,
+		StaleRemoved: result.StaleRemoved,
+		Generation:   generation,
+	})
+
+	return result, nil
 }
 
 // RegisterIndexer adds a custom indexer.

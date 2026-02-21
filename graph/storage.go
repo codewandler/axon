@@ -1,6 +1,9 @@
 package graph
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // NodeFilter specifies criteria for finding nodes.
 type NodeFilter struct {
@@ -11,21 +14,55 @@ type NodeFilter struct {
 	NamePattern string   // Filter by name with glob pattern (empty = any)
 	Labels      []string // Filter by labels (OR logic - node must have at least one)
 	Extensions  []string // Filter by file extension without dot (OR logic, e.g., "go", "py")
+	NodeIDs     []string // Filter to specific node IDs (OR logic)
+	Root        bool     // Only nodes with no incoming containment edges (top-level roots)
 }
 
 // EdgeFilter specifies criteria for finding/counting edges.
 type EdgeFilter struct {
-	Type string      // Filter by exact edge type (empty = any)
-	From *NodeFilter // Filter by from-node properties (nil = any)
-	To   *NodeFilter // Filter by to-node properties (nil = any)
+	Type      string      // Filter by exact edge type (empty = any)
+	Types     []string    // Filter by multiple edge types (OR logic, empty = any)
+	Direction string      // For traversal: "outgoing", "incoming", "both" (default: "outgoing")
+	From      *NodeFilter // Filter by from-node properties (nil = any)
+	To        *NodeFilter // Filter by to-node properties (nil = any)
 }
 
 // QueryOptions specifies aggregation, ordering, and limiting for queries.
 type QueryOptions struct {
-	GroupBy string // "type", "label", or "" for no grouping
+	GroupBy string // "type", "label", "extension" or "" for no grouping
 	OrderBy string // "count", "name" for counts; "name", "updated", "type" for nodes
 	Desc    bool   // true for descending order
 	Limit   int    // 0 for no limit
+}
+
+// TraverseOptions controls graph traversal.
+type TraverseOptions struct {
+	Seed        NodeFilter   // finds starting nodes
+	MaxDepth    int          // 0 = unlimited
+	NodeFilter  NodeFilter   // filter which nodes to include in results
+	EdgeFilters []EdgeFilter // edges to follow (multiple allows different directions per edge type)
+}
+
+// TraverseResult represents a visited node during traversal.
+type TraverseResult struct {
+	Node  *Node // the visited node
+	Depth int   // distance from seed node (0 for seed nodes)
+	Via   *Edge // edge that led here (nil for seed nodes)
+	Err   error // if set, signals error and end of traversal
+}
+
+// IndexRunRecord represents a single indexing run for tracking history.
+type IndexRunRecord struct {
+	ID           int64
+	StartedAt    time.Time
+	FinishedAt   time.Time
+	DurationMs   int64
+	RootPath     string
+	FilesIndexed int
+	DirsIndexed  int
+	ReposIndexed int
+	StaleRemoved int
+	Generation   string
 }
 
 // Storage defines the interface for graph persistence.
@@ -45,6 +82,11 @@ type Storage interface {
 	// Traversal
 	GetEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error)
 	GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)
+
+	// Traverse walks the graph from seed nodes, yielding visited nodes via channel.
+	// Uses BFS, respects MaxDepth, applies NodeFilter to results, follows EdgeFilters.
+	// Closes channel when traversal completes or context is cancelled.
+	Traverse(ctx context.Context, opts TraverseOptions) (<-chan TraverseResult, error)
 
 	// Queries
 	FindNodes(ctx context.Context, filter NodeFilter, opts QueryOptions) ([]*Node, error)
@@ -84,4 +126,15 @@ type Storage interface {
 	// Flush writes any buffered data to persistent storage.
 	// Implementations without buffering can no-op.
 	Flush(ctx context.Context) error
+
+	// Index run tracking
+
+	// RecordIndexRun saves a record of an indexing run.
+	RecordIndexRun(ctx context.Context, run IndexRunRecord) error
+
+	// GetLastIndexRun returns the most recent index run, or nil if none.
+	GetLastIndexRun(ctx context.Context) (*IndexRunRecord, error)
+
+	// GetDatabasePath returns the path to the database file.
+	GetDatabasePath() string
 }

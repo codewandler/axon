@@ -43,6 +43,7 @@ func init() {
 	rootCmd.AddCommand(typesCmd)
 	rootCmd.AddCommand(edgesCmd)
 	rootCmd.AddCommand(gcCmd)
+	rootCmd.AddCommand(statsCmd)
 
 	rootCmd.Version = version
 }

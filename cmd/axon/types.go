@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/codewandler/axon"
 	"github.com/codewandler/axon/adapters/sqlite"
-	"github.com/codewandler/axon/graph"
 	"github.com/spf13/cobra"
 )
 
@@ -56,16 +56,28 @@ func runTypes(cmd *cobra.Command, args []string) error {
 	}
 	defer storage.Close()
 
-	// Build scoped filter
-	scope := resolveScope(typesGlobal, cwd)
-	filter := buildScopedNodeFilter(scope)
-
-	// Query type counts
-	counts, err := storage.CountNodes(ctx, filter, graph.QueryOptions{
-		GroupBy: "type",
-		OrderBy: "count",
-		Desc:    true,
+	// Create Axon instance for potential auto-indexing
+	ax, err := axon.New(axon.Config{
+		Dir:     cwd,
+		Storage: storage,
 	})
+	if err != nil {
+		return fmt.Errorf("failed to create axon instance: %w", err)
+	}
+
+	// Resolve scope using graph traversal
+	traverseOpts, err := resolveScopeTraversal(ctx, storage, ax, typesGlobal, cwd, 0)
+	if err != nil {
+		return err
+	}
+
+	// Traverse and count types
+	results, err := storage.Traverse(ctx, traverseOpts)
+	if err != nil {
+		return fmt.Errorf("failed to traverse graph: %w", err)
+	}
+
+	counts, err := countTraversalTypes(results)
 	if err != nil {
 		return fmt.Errorf("failed to count types: %w", err)
 	}

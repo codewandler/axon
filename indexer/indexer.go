@@ -40,6 +40,12 @@ type Context struct {
 	// nodesDeleted tracks the number of nodes deleted during cleanup.
 	// Use AddNodesDeleted() and NodesDeleted() to access this value.
 	nodesDeleted atomic.Int64
+
+	// Counters for nodes indexed by type.
+	// Use Add*Indexed() and *Indexed() methods to access these values.
+	filesIndexed atomic.Int64
+	dirsIndexed  atomic.Int64
+	reposIndexed atomic.Int64
 }
 
 // AddNodesDeleted atomically adds n to the count of deleted nodes.
@@ -50,6 +56,36 @@ func (c *Context) AddNodesDeleted(n int) {
 // NodesDeleted returns the total number of nodes deleted during cleanup.
 func (c *Context) NodesDeleted() int64 {
 	return c.nodesDeleted.Load()
+}
+
+// AddFilesIndexed atomically adds n to the count of indexed files.
+func (c *Context) AddFilesIndexed(n int) {
+	c.filesIndexed.Add(int64(n))
+}
+
+// FilesIndexed returns the total number of files indexed.
+func (c *Context) FilesIndexed() int64 {
+	return c.filesIndexed.Load()
+}
+
+// AddDirsIndexed atomically adds n to the count of indexed directories.
+func (c *Context) AddDirsIndexed(n int) {
+	c.dirsIndexed.Add(int64(n))
+}
+
+// DirsIndexed returns the total number of directories indexed.
+func (c *Context) DirsIndexed() int64 {
+	return c.dirsIndexed.Load()
+}
+
+// AddReposIndexed atomically adds n to the count of indexed repositories.
+func (c *Context) AddReposIndexed(n int) {
+	c.reposIndexed.Add(int64(n))
+}
+
+// ReposIndexed returns the total number of repositories indexed.
+func (c *Context) ReposIndexed() int64 {
+	return c.reposIndexed.Load()
 }
 
 // InBounds returns true if the given URI is within the root boundary.

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
+	"github.com/codewandler/axon/progress"
 	"github.com/codewandler/axon/types"
 )
 
@@ -148,7 +150,20 @@ func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 	i.pendingLinks = nil
 	i.mu.Unlock()
 
-	for _, link := range links {
+	total := len(links)
+	if total == 0 {
+		return nil
+	}
+
+	// Report start
+	if ictx.Progress != nil {
+		ictx.Progress <- progress.Started(i.Name())
+	}
+
+	resolved := 0
+	lastProgressTime := time.Now()
+
+	for idx, link := range links {
 		// Skip if from a different generation (stale)
 		if link.generation != ictx.Generation {
 			continue
@@ -171,6 +186,19 @@ func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 			// Log but continue
 			continue
 		}
+		resolved++
+
+		// Progress reporting: every 100 items OR every 100ms
+		now := time.Now()
+		if ictx.Progress != nil && (idx%100 == 0 || now.Sub(lastProgressTime) > 100*time.Millisecond) {
+			ictx.Progress <- progress.ProgressWithTotal(i.Name(), idx+1, total, "resolving links...")
+			lastProgressTime = now
+		}
+	}
+
+	// Report completion
+	if ictx.Progress != nil {
+		ictx.Progress <- progress.Completed(i.Name(), resolved)
 	}
 
 	return nil
