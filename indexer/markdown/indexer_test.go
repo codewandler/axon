@@ -91,7 +91,7 @@ func TestIndexerBasic(t *testing.T) {
 	emitter := indexer.NewGraphEmitter(g, "gen-1")
 
 	// Simulate the trigger event from fs indexer
-	event := &indexer.Event{
+	event := indexer.Event{
 		Type:     indexer.EventEntryVisited,
 		URI:      types.PathToURI(mdFile),
 		Path:     mdFile,
@@ -101,15 +101,14 @@ func TestIndexerBasic(t *testing.T) {
 	}
 
 	ictx := &indexer.Context{
-		Root:         types.PathToURI(mdFile),
-		Generation:   "gen-1",
-		Graph:        g,
-		Emitter:      emitter,
-		TriggerEvent: event,
+		Root:       types.PathToURI(mdFile),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
 	}
 
-	if err := idx.Index(ctx, ictx); err != nil {
-		t.Fatalf("Index failed: %v", err)
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent failed: %v", err)
 	}
 
 	// Flush to ensure all nodes are written
@@ -118,7 +117,7 @@ func TestIndexerBasic(t *testing.T) {
 	}
 
 	// Check document node
-	docNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownDoc})
+	docNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownDoc}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +126,7 @@ func TestIndexerBasic(t *testing.T) {
 	}
 
 	// Check sections
-	sectionNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownSection})
+	sectionNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownSection}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +139,7 @@ func TestIndexerBasic(t *testing.T) {
 	}
 
 	// Check code blocks
-	codeNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownCodeBlock})
+	codeNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownCodeBlock}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +149,7 @@ func TestIndexerBasic(t *testing.T) {
 	}
 
 	// Check external links
-	linkNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownLink})
+	linkNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownLink}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +159,7 @@ func TestIndexerBasic(t *testing.T) {
 	}
 
 	// Check images
-	imgNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownImage})
+	imgNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownImage}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +210,7 @@ See [other](./other.md).
 	emitter := indexer.NewGraphEmitter(g, "gen-1")
 
 	// Index main.md
-	event := &indexer.Event{
+	event := indexer.Event{
 		Type:     indexer.EventEntryVisited,
 		URI:      types.PathToURI(mdFile),
 		Path:     mdFile,
@@ -221,15 +220,14 @@ See [other](./other.md).
 	}
 
 	ictx := &indexer.Context{
-		Root:         types.PathToURI(mdFile),
-		Generation:   "gen-1",
-		Graph:        g,
-		Emitter:      emitter,
-		TriggerEvent: event,
+		Root:       types.PathToURI(mdFile),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
 	}
 
-	if err := idx.Index(ctx, ictx); err != nil {
-		t.Fatalf("Index failed: %v", err)
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent failed: %v", err)
 	}
 
 	// Flush before PostIndex
@@ -255,7 +253,7 @@ See [other](./other.md).
 	}
 
 	// Find the document node
-	docNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownDoc})
+	docNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownDoc}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +262,7 @@ See [other](./other.md).
 	}
 
 	// The link is from the h1 section (which contains the link), not the document
-	sectionNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownSection})
+	sectionNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownSection}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +349,7 @@ Content of second section.
 	idx := New()
 	emitter := indexer.NewGraphEmitter(g, "gen-1")
 
-	event := &indexer.Event{
+	event := indexer.Event{
 		Type:     indexer.EventEntryVisited,
 		URI:      types.PathToURI(mdFile),
 		Path:     mdFile,
@@ -361,15 +359,14 @@ Content of second section.
 	}
 
 	ictx := &indexer.Context{
-		Root:         types.PathToURI(mdFile),
-		Generation:   "gen-1",
-		Graph:        g,
-		Emitter:      emitter,
-		TriggerEvent: event,
+		Root:       types.PathToURI(mdFile),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
 	}
 
-	if err := idx.Index(ctx, ictx); err != nil {
-		t.Fatalf("Index failed: %v", err)
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent failed: %v", err)
 	}
 
 	if err := g.Storage().Flush(ctx); err != nil {
@@ -377,7 +374,7 @@ Content of second section.
 	}
 
 	// Find all sections
-	sections, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownSection})
+	sections, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownSection}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +466,7 @@ func TestPositionOrdering(t *testing.T) {
 	idx := New()
 	emitter := indexer.NewGraphEmitter(g, "gen-1")
 
-	event := &indexer.Event{
+	event := indexer.Event{
 		Type:     indexer.EventEntryVisited,
 		URI:      types.PathToURI(mdFile),
 		Path:     mdFile,
@@ -479,15 +476,14 @@ func TestPositionOrdering(t *testing.T) {
 	}
 
 	ictx := &indexer.Context{
-		Root:         types.PathToURI(mdFile),
-		Generation:   "gen-1",
-		Graph:        g,
-		Emitter:      emitter,
-		TriggerEvent: event,
+		Root:       types.PathToURI(mdFile),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
 	}
 
-	if err := idx.Index(ctx, ictx); err != nil {
-		t.Fatalf("Index failed: %v", err)
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent failed: %v", err)
 	}
 
 	if err := g.Storage().Flush(ctx); err != nil {
@@ -528,7 +524,7 @@ func TestPositionOrdering(t *testing.T) {
 	}
 
 	// Find the document node
-	docNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownDoc})
+	docNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeMarkdownDoc}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

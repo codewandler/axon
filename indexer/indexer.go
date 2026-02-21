@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/progress"
@@ -35,6 +36,20 @@ type Context struct {
 	// Nil for direct invocations (primary indexers).
 	// Set when the indexer is triggered by an event subscription.
 	TriggerEvent *Event
+
+	// nodesDeleted tracks the number of nodes deleted during cleanup.
+	// Use AddNodesDeleted() and NodesDeleted() to access this value.
+	nodesDeleted atomic.Int64
+}
+
+// AddNodesDeleted atomically adds n to the count of deleted nodes.
+func (c *Context) AddNodesDeleted(n int) {
+	c.nodesDeleted.Add(int64(n))
+}
+
+// NodesDeleted returns the total number of nodes deleted during cleanup.
+func (c *Context) NodesDeleted() int64 {
+	return c.nodesDeleted.Load()
 }
 
 // InBounds returns true if the given URI is within the root boundary.
@@ -61,6 +76,11 @@ type Indexer interface {
 
 	// Index indexes starting from the root URI in the context.
 	Index(ctx context.Context, ictx *Context) error
+
+	// HandleEvent processes an event from another indexer.
+	// Called when an event matches one of this indexer's subscriptions.
+	// The event includes the Node so implementations can avoid DB round-trips.
+	HandleEvent(ctx context.Context, ictx *Context, event Event) error
 }
 
 // PostIndexer is an optional interface for indexers that need a post-processing stage.

@@ -22,8 +22,9 @@ func (m *mockIndexer) Handles(uri string) bool {
 	}
 	return false
 }
-func (m *mockIndexer) Subscriptions() []Subscription                  { return nil }
-func (m *mockIndexer) Index(ctx context.Context, ictx *Context) error { return nil }
+func (m *mockIndexer) Subscriptions() []Subscription                                 { return nil }
+func (m *mockIndexer) Index(ctx context.Context, ictx *Context) error                { return nil }
+func (m *mockIndexer) HandleEvent(ctx context.Context, ictx *Context, e Event) error { return nil }
 
 func TestRegistryForURI(t *testing.T) {
 	r := NewRegistry()

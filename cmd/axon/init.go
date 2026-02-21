@@ -14,6 +14,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	flagNoGC bool
+)
+
 var initCmd = &cobra.Command{
 	Use:   "init [path]",
 	Short: "Initialize and index a directory",
@@ -24,6 +28,10 @@ This command indexes all files and directories, creating a graph
 structure that can be queried with other axon commands.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runInit,
+}
+
+func init() {
+	initCmd.Flags().BoolVar(&flagNoGC, "no-gc", false, "Skip garbage collection (orphaned edge cleanup)")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -78,14 +86,19 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Check if we have a TTY for progress display
 	isTTY := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 
+	// Build index options
+	opts := axon.IndexOptions{
+		SkipGC: flagNoGC,
+	}
+
 	var result *axon.IndexResult
 
 	if isTTY {
 		// Use bubbletea progress UI
-		result, err = runInitWithProgress(ctx, ax, absPath)
+		result, err = runInitWithProgress(ctx, ax, absPath, opts)
 	} else {
 		// Simple text output
-		result, err = ax.Index(ctx, "")
+		result, err = ax.IndexWithOptions(ctx, opts)
 	}
 
 	if err != nil {
@@ -106,7 +119,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 }
 
 // runInitWithProgress runs indexing with a bubbletea progress UI.
-func runInitWithProgress(ctx context.Context, ax *axon.Axon, absPath string) (*axon.IndexResult, error) {
+func runInitWithProgress(ctx context.Context, ax *axon.Axon, absPath string, opts axon.IndexOptions) (*axon.IndexResult, error) {
 	// Create progress coordinator
 	coord := progress.NewCoordinator()
 
@@ -116,7 +129,8 @@ func runInitWithProgress(ctx context.Context, ax *axon.Axon, absPath string) (*a
 
 	// Run indexing in background
 	go func() {
-		result, err := ax.IndexWithProgress(ctx, "", coord.Events())
+		opts.Progress = coord.Events()
+		result, err := ax.IndexWithOptions(ctx, opts)
 		if err != nil {
 			errCh <- err
 		} else {

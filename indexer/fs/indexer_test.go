@@ -81,7 +81,7 @@ func TestIndexerBasic(t *testing.T) {
 	}
 
 	// Find all nodes
-	nodes, err := g.FindNodes(ctx, graph.NodeFilter{})
+	nodes, err := g.FindNodes(ctx, graph.NodeFilter{}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestIndexerIgnore(t *testing.T) {
 		t.Fatalf("Index failed: %v", err)
 	}
 
-	nodes, err := g.FindNodes(ctx, graph.NodeFilter{})
+	nodes, err := g.FindNodes(ctx, graph.NodeFilter{}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}

@@ -87,7 +87,7 @@ func TestAxonIndex(t *testing.T) {
 	}
 
 	// .git directory should exist as a node (for deletion detection)
-	nodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{URIPrefix: types.PathToURI(filepath.Join(dir, ".git"))})
+	nodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{URIPrefix: types.PathToURI(filepath.Join(dir, ".git"))}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestAxonIndex(t *testing.T) {
 	}
 
 	// But .git contents should not be indexed (check for a file that would be inside)
-	allNodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{})
+	allNodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestAxonCustomIgnore(t *testing.T) {
 	}
 
 	// subdir should exist as a node (for deletion detection) but contents skipped
-	nodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{URIPrefix: types.PathToURI(filepath.Join(dir, "subdir"))})
+	nodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{URIPrefix: types.PathToURI(filepath.Join(dir, "subdir"))}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}

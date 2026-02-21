@@ -248,7 +248,7 @@ func TestFindNodes(t *testing.T) {
 	_ = s.PutNode(ctx, other)
 
 	// Find by type
-	nodes, err := s.FindNodes(ctx, graph.NodeFilter{Type: "fs:file"})
+	nodes, err := s.FindNodes(ctx, graph.NodeFilter{Type: "fs:file"}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestFindNodes(t *testing.T) {
 	}
 
 	// Find by URI prefix
-	nodes, err = s.FindNodes(ctx, graph.NodeFilter{URIPrefix: "file:///home/user"})
+	nodes, err = s.FindNodes(ctx, graph.NodeFilter{URIPrefix: "file:///home/user"}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestFindNodes(t *testing.T) {
 	}
 
 	// Find by type AND URI prefix
-	nodes, err = s.FindNodes(ctx, graph.NodeFilter{Type: "fs:file", URIPrefix: "file:///home/user"})
+	nodes, err = s.FindNodes(ctx, graph.NodeFilter{Type: "fs:file", URIPrefix: "file:///home/user"}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}

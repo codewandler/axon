@@ -14,7 +14,8 @@ type Node struct {
 	Type       string    `json:"type"`
 	URI        string    `json:"uri,omitempty"`
 	Key        string    `json:"key,omitempty"`
-	Name       string    `json:"name,omitempty"` // Human-readable name (filename, branch name, section title)
+	Name       string    `json:"name,omitempty"`   // Human-readable name (filename, branch name, section title)
+	Labels     []string  `json:"labels,omitempty"` // Categorical labels (e.g., "ci:config", "agent:instructions")
 	Data       any       `json:"data,omitempty"`
 	Generation string    `json:"generation,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
@@ -92,4 +93,34 @@ func (n *Node) WithName(name string) *Node {
 func (n *Node) WithGeneration(gen string) *Node {
 	n.Generation = gen
 	return n
+}
+
+// WithLabels adds labels to the node and returns the node for chaining.
+func (n *Node) WithLabels(labels ...string) *Node {
+	n.Labels = append(n.Labels, labels...)
+	return n
+}
+
+// HasLabel checks if the node has a specific label.
+func (n *Node) HasLabel(label string) bool {
+	for _, l := range n.Labels {
+		if l == label {
+			return true
+		}
+	}
+	return false
+}
+
+// AddLabels adds labels to the node, deduplicating.
+func (n *Node) AddLabels(labels ...string) {
+	existing := make(map[string]bool)
+	for _, l := range n.Labels {
+		existing[l] = true
+	}
+	for _, l := range labels {
+		if !existing[l] {
+			n.Labels = append(n.Labels, l)
+			existing[l] = true
+		}
+	}
 }

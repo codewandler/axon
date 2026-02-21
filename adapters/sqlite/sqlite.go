@@ -24,19 +24,30 @@ const (
 	flushThreshold = 5000
 	// flushInterval is the maximum time between flushes.
 	flushInterval = 100 * time.Millisecond
+	// writeOpBufferSize is the size of the write operation channel.
+	writeOpBufferSize = 10000
 )
 
+// writeOp represents a write operation (either node or edge).
+// Only one of Node or Edge is set.
+type writeOp struct {
+	Node *graph.Node
+	Edge *graph.Edge
+}
+
 // Storage is a SQLite implementation of the graph.Storage interface.
-// It buffers writes and flushes them in batches for performance.
+// It buffers writes via a channel and flushes them in batches for performance.
 type Storage struct {
 	db   *sql.DB
 	path string
 
-	// Write buffer
-	mu         sync.Mutex
-	nodeBuffer []*graph.Node
-	edgeBuffer []*graph.Edge
-	lastFlush  time.Time
+	// Write buffer channel - single channel maintains order
+	writeCh    chan writeOp
+	flushDone  chan struct{} // Signal to wait for flush completion
+	closeCh    chan struct{} // Signal to stop the flush loop
+	closeOnce  sync.Once
+	flushReqCh chan chan struct{} // Channel for flush requests (sends completion signal back)
+	pendingOps atomic.Int64       // Count of pending operations in channel
 }
 
 var memoryDBCounter uint64
@@ -67,24 +78,32 @@ func New(path string) (*Storage, error) {
 	}
 
 	s := &Storage{
-		db:        db,
-		path:      path,
-		lastFlush: time.Now(),
+		db:         db,
+		path:       path,
+		writeCh:    make(chan writeOp, writeOpBufferSize),
+		flushDone:  make(chan struct{}),
+		closeCh:    make(chan struct{}),
+		flushReqCh: make(chan chan struct{}, 1),
 	}
+
 	if err := s.init(); err != nil {
 		db.Close()
 		return nil, err
 	}
+
+	// Start background flush loop
+	go s.flushLoop()
 
 	return s, nil
 }
 
 // Close flushes any pending writes and closes the database connection.
 func (s *Storage) Close() error {
-	if err := s.Flush(context.Background()); err != nil {
-		s.db.Close()
-		return err
-	}
+	s.closeOnce.Do(func() {
+		close(s.closeCh)
+	})
+	// Wait for final flush
+	<-s.flushDone
 	return s.db.Close()
 }
 
@@ -190,6 +209,13 @@ func (s *Storage) migrate() error {
 				CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
 			`,
 		},
+		{
+			version: 5,
+			sql: `
+				-- Add labels column for categorical tagging
+				ALTER TABLE nodes ADD COLUMN labels TEXT DEFAULT '[]';
+			`,
+		},
 	}
 
 	// Run pending migrations
@@ -242,63 +268,151 @@ func (s *Storage) migrate() error {
 }
 
 func (s *Storage) PutNode(ctx context.Context, node *graph.Node) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	// Copy the node to avoid external mutation
 	nodeCopy := *node
-	s.nodeBuffer = append(s.nodeBuffer, &nodeCopy)
-
-	if s.shouldFlush() {
-		return s.flushLocked(ctx)
+	s.pendingOps.Add(1)
+	select {
+	case s.writeCh <- writeOp{Node: &nodeCopy}:
+		return nil
+	case <-s.closeCh:
+		s.pendingOps.Add(-1)
+		return fmt.Errorf("storage closed")
+	case <-ctx.Done():
+		s.pendingOps.Add(-1)
+		return ctx.Err()
 	}
-	return nil
-}
-
-// shouldFlush returns true if the buffer should be flushed.
-// Must be called with mu held.
-func (s *Storage) shouldFlush() bool {
-	total := len(s.nodeBuffer) + len(s.edgeBuffer)
-	return total >= flushThreshold || time.Since(s.lastFlush) > flushInterval
 }
 
 // Flush writes any buffered data to the database.
+// This blocks until all pending writes are flushed.
+// If there are no pending writes, this returns immediately.
 func (s *Storage) Flush(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.flushLocked(ctx)
-}
-
-// flushLocked writes buffered data to the database.
-// Must be called with mu held.
-func (s *Storage) flushLocked(ctx context.Context) error {
-	if len(s.nodeBuffer) == 0 && len(s.edgeBuffer) == 0 {
+	// Fast path: no pending writes, nothing to flush
+	if s.pendingOps.Load() == 0 {
 		return nil
 	}
 
+	// Request a flush and wait for completion
+	done := make(chan struct{})
+	select {
+	case s.flushReqCh <- done:
+		// Request sent, wait for completion
+		select {
+		case <-done:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.closeCh:
+			return nil
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.closeCh:
+		return nil
+	}
+}
+
+// flushLoop runs in a background goroutine and handles batched writes.
+func (s *Storage) flushLoop() {
+	defer close(s.flushDone)
+
+	batch := make([]writeOp, 0, flushThreshold)
+	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
+
+	// Track pending flush requests to signal when done
+	var pendingFlushReqs []chan struct{}
+
+	flushAndSignal := func() {
+		if len(batch) > 0 {
+			s.flushBatch(batch)
+			s.pendingOps.Add(-int64(len(batch)))
+			batch = batch[:0]
+		}
+		// Signal all pending flush requests
+		for _, done := range pendingFlushReqs {
+			close(done)
+		}
+		pendingFlushReqs = pendingFlushReqs[:0]
+	}
+
+	for {
+		select {
+		case op, ok := <-s.writeCh:
+			if !ok {
+				// Channel closed, flush remaining and exit
+				flushAndSignal()
+				return
+			}
+			batch = append(batch, op)
+			if len(batch) >= flushThreshold {
+				flushAndSignal()
+			}
+
+		case done := <-s.flushReqCh:
+			// Flush request received - drain channel and flush immediately
+			pendingFlushReqs = append(pendingFlushReqs, done)
+		drainLoop:
+			for {
+				select {
+				case op := <-s.writeCh:
+					batch = append(batch, op)
+				default:
+					break drainLoop
+				}
+			}
+			flushAndSignal()
+
+		case <-ticker.C:
+			// Time-based flush for batching efficiency
+			if len(batch) > 0 {
+				flushAndSignal()
+			}
+
+		case <-s.closeCh:
+			// Drain remaining writes from channel
+			for {
+				select {
+				case op := <-s.writeCh:
+					batch = append(batch, op)
+				default:
+					flushAndSignal()
+					return
+				}
+			}
+		}
+	}
+}
+
+// flushBatch writes a batch of operations to the database.
+func (s *Storage) flushBatch(batch []writeOp) {
+	if len(batch) == 0 {
+		return
+	}
+
+	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return // Best effort - log in production
 	}
 	defer tx.Rollback()
 
 	// Prepare statements for batch insert
-	// Use ON CONFLICT(id) since deterministic IDs ensure same URI = same ID
-	// The unique index on uri (WHERE uri != '') provides additional safety
 	nodeStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO nodes (id, type, uri, key, name, data, generation, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO nodes (id, type, uri, key, name, labels, data, generation, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			type = excluded.type,
 			uri = excluded.uri,
 			key = excluded.key,
 			name = excluded.name,
+			labels = excluded.labels,
 			data = excluded.data,
 			generation = excluded.generation,
 			updated_at = excluded.updated_at
 	`)
 	if err != nil {
-		return err
+		return
 	}
 	defer nodeStmt.Close()
 
@@ -310,52 +424,33 @@ func (s *Storage) flushLocked(ctx context.Context) error {
 			generation = excluded.generation
 	`)
 	if err != nil {
-		return err
+		return
 	}
 	defer edgeStmt.Close()
 
-	// Insert nodes
-	for _, node := range s.nodeBuffer {
-		data, err := json.Marshal(node.Data)
-		if err != nil {
-			return err
+	// Process operations in order
+	for _, op := range batch {
+		if op.Node != nil {
+			data, _ := json.Marshal(op.Node.Data)
+			labels, _ := json.Marshal(op.Node.Labels)
+			nodeStmt.ExecContext(ctx,
+				op.Node.ID, op.Node.Type, op.Node.URI, op.Node.Key, op.Node.Name,
+				string(labels), string(data), op.Node.Generation,
+				op.Node.CreatedAt.Format(time.RFC3339), op.Node.UpdatedAt.Format(time.RFC3339))
 		}
-		_, err = nodeStmt.ExecContext(ctx,
-			node.ID, node.Type, node.URI, node.Key, node.Name, string(data), node.Generation,
-			node.CreatedAt.Format(time.RFC3339), node.UpdatedAt.Format(time.RFC3339))
-		if err != nil {
-			return err
-		}
-	}
-
-	// Insert edges
-	for _, edge := range s.edgeBuffer {
-		var data string
-		if edge.Data != nil {
-			dataBytes, err := json.Marshal(edge.Data)
-			if err != nil {
-				return err
+		if op.Edge != nil {
+			var data string
+			if op.Edge.Data != nil {
+				dataBytes, _ := json.Marshal(op.Edge.Data)
+				data = string(dataBytes)
 			}
-			data = string(dataBytes)
-		}
-		_, err = edgeStmt.ExecContext(ctx,
-			edge.ID, edge.Type, edge.From, edge.To, data, edge.Generation,
-			edge.CreatedAt.Format(time.RFC3339))
-		if err != nil {
-			return err
+			edgeStmt.ExecContext(ctx,
+				op.Edge.ID, op.Edge.Type, op.Edge.From, op.Edge.To, data, op.Edge.Generation,
+				op.Edge.CreatedAt.Format(time.RFC3339))
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
-	// Clear buffers
-	s.nodeBuffer = s.nodeBuffer[:0]
-	s.edgeBuffer = s.edgeBuffer[:0]
-	s.lastFlush = time.Now()
-
-	return nil
+	tx.Commit()
 }
 
 func (s *Storage) GetNode(ctx context.Context, id string) (*graph.Node, error) {
@@ -365,7 +460,7 @@ func (s *Storage) GetNode(ctx context.Context, id string) (*graph.Node, error) {
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, uri, key, name, data, generation, root, created_at, updated_at
+		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at
 		FROM nodes WHERE id = ?
 	`, id)
 	return s.scanNode(row)
@@ -377,7 +472,7 @@ func (s *Storage) GetNodeByURI(ctx context.Context, uri string) (*graph.Node, er
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, uri, key, name, data, generation, root, created_at, updated_at
+		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at
 		FROM nodes WHERE uri = ?
 	`, uri)
 	return s.scanNode(row)
@@ -389,7 +484,7 @@ func (s *Storage) GetNodeByKey(ctx context.Context, nodeType, key string) (*grap
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, uri, key, name, data, generation, root, created_at, updated_at
+		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at
 		FROM nodes WHERE type = ? AND key = ?
 	`, nodeType, key)
 	return s.scanNode(row)
@@ -397,10 +492,10 @@ func (s *Storage) GetNodeByKey(ctx context.Context, nodeType, key string) (*grap
 
 func (s *Storage) scanNode(row *sql.Row) (*graph.Node, error) {
 	var node graph.Node
-	var dataStr, createdAt, updatedAt string
+	var labelsStr, dataStr, createdAt, updatedAt string
 	var uri, key, name, generation, root sql.NullString
 
-	err := row.Scan(&node.ID, &node.Type, &uri, &key, &name, &dataStr, &generation, &root, &createdAt, &updatedAt)
+	err := row.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, storage.ErrNodeNotFound
 	}
@@ -413,6 +508,12 @@ func (s *Storage) scanNode(row *sql.Row) (*graph.Node, error) {
 	node.Name = name.String
 	node.Generation = generation.String
 	_ = root // Column still exists in schema but no longer used
+
+	if labelsStr != "" && labelsStr != "[]" {
+		if err := json.Unmarshal([]byte(labelsStr), &node.Labels); err != nil {
+			return nil, err
+		}
+	}
 
 	if dataStr != "" {
 		var data any
@@ -448,17 +549,19 @@ func (s *Storage) DeleteNode(ctx context.Context, id string) error {
 }
 
 func (s *Storage) PutEdge(ctx context.Context, edge *graph.Edge) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	// Copy the edge to avoid external mutation
 	edgeCopy := *edge
-	s.edgeBuffer = append(s.edgeBuffer, &edgeCopy)
-
-	if s.shouldFlush() {
-		return s.flushLocked(ctx)
+	s.pendingOps.Add(1)
+	select {
+	case s.writeCh <- writeOp{Edge: &edgeCopy}:
+		return nil
+	case <-s.closeCh:
+		s.pendingOps.Add(-1)
+		return fmt.Errorf("storage closed")
+	case <-ctx.Done():
+		s.pendingOps.Add(-1)
+		return ctx.Err()
 	}
-	return nil
 }
 
 func (s *Storage) GetEdge(ctx context.Context, id string) (*graph.Edge, error) {
@@ -577,33 +680,21 @@ func (s *Storage) scanEdges(rows *sql.Rows) ([]*graph.Edge, error) {
 	return edges, rows.Err()
 }
 
-func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter) ([]*graph.Node, error) {
+func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter, opts graph.QueryOptions) ([]*graph.Node, error) {
 	if err := s.Flush(ctx); err != nil {
 		return nil, err
 	}
 
-	query := `SELECT id, type, uri, key, name, data, generation, root, created_at, updated_at FROM nodes WHERE 1=1`
-	var args []any
+	query := `SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at FROM nodes WHERE 1=1`
+	args := s.buildNodeFilterArgs(&query, filter)
 
-	if filter.Type != "" {
-		query += ` AND type = ?`
-		args = append(args, filter.Type)
-	}
-	if filter.TypePattern != "" {
-		query += ` AND type GLOB ?`
-		args = append(args, filter.TypePattern)
-	}
-	if filter.URIPrefix != "" {
-		query += ` AND uri LIKE ?`
-		args = append(args, filter.URIPrefix+"%")
-	}
-	if filter.Name != "" {
-		query += ` AND name = ?`
-		args = append(args, filter.Name)
-	}
-	if filter.NamePattern != "" {
-		query += ` AND name GLOB ?`
-		args = append(args, filter.NamePattern)
+	// ORDER BY
+	query += s.buildOrderBy(opts, "name", "updated_at", "type")
+
+	// LIMIT
+	if opts.Limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, opts.Limit)
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -615,10 +706,10 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter) ([]*gr
 	var nodes []*graph.Node
 	for rows.Next() {
 		var node graph.Node
-		var dataStr, createdAt, updatedAt string
+		var labelsStr, dataStr, createdAt, updatedAt string
 		var uri, key, name, generation, root sql.NullString
 
-		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &dataStr, &generation, &root, &createdAt, &updatedAt)
+		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -628,6 +719,12 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter) ([]*gr
 		node.Name = name.String
 		node.Generation = generation.String
 		_ = root // Column still exists in schema but no longer used
+
+		if labelsStr != "" && labelsStr != "[]" {
+			if err := json.Unmarshal([]byte(labelsStr), &node.Labels); err != nil {
+				return nil, err
+			}
+		}
 
 		if dataStr != "" {
 			var data any
@@ -645,13 +742,309 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter) ([]*gr
 	return nodes, rows.Err()
 }
 
+// buildNodeFilterArgs appends WHERE conditions for NodeFilter to query and returns args.
+func (s *Storage) buildNodeFilterArgs(query *string, filter graph.NodeFilter) []any {
+	var args []any
+
+	if filter.Type != "" {
+		*query += ` AND type = ?`
+		args = append(args, filter.Type)
+	}
+	if filter.TypePattern != "" {
+		*query += ` AND type GLOB ?`
+		args = append(args, filter.TypePattern)
+	}
+	if filter.URIPrefix != "" {
+		*query += ` AND uri LIKE ?`
+		args = append(args, filter.URIPrefix+"%")
+	}
+	if filter.Name != "" {
+		*query += ` AND name = ?`
+		args = append(args, filter.Name)
+	}
+	if filter.NamePattern != "" {
+		*query += ` AND name GLOB ?`
+		args = append(args, filter.NamePattern)
+	}
+	// Labels filter: OR logic - node must have at least one of the labels
+	if len(filter.Labels) > 0 {
+		labelConditions := make([]string, len(filter.Labels))
+		for i, label := range filter.Labels {
+			labelConditions[i] = `labels LIKE ?`
+			args = append(args, `%"`+label+`"%`)
+		}
+		*query += ` AND (` + strings.Join(labelConditions, " OR ") + `)`
+	}
+	// Extensions filter: OR logic - node name must end with one of the extensions
+	if len(filter.Extensions) > 0 {
+		extConditions := make([]string, len(filter.Extensions))
+		for i, ext := range filter.Extensions {
+			extConditions[i] = `name LIKE ?`
+			args = append(args, "%."+ext)
+		}
+		*query += ` AND (` + strings.Join(extConditions, " OR ") + `)`
+	}
+
+	return args
+}
+
+// buildOrderBy builds ORDER BY clause based on QueryOptions.
+// validColumns maps OrderBy values to actual column names.
+func (s *Storage) buildOrderBy(opts graph.QueryOptions, validColumns ...string) string {
+	if opts.OrderBy == "" {
+		return ""
+	}
+
+	// Map of allowed OrderBy values to column names
+	columnMap := make(map[string]string)
+	for _, col := range validColumns {
+		columnMap[col] = col
+	}
+	// Common aliases
+	columnMap["updated"] = "updated_at"
+	columnMap["created"] = "created_at"
+
+	col, ok := columnMap[opts.OrderBy]
+	if !ok {
+		return ""
+	}
+
+	order := "ASC"
+	if opts.Desc {
+		order = "DESC"
+	}
+	return fmt.Sprintf(` ORDER BY %s %s`, col, order)
+}
+
+func (s *Storage) CountNodes(ctx context.Context, filter graph.NodeFilter, opts graph.QueryOptions) (map[string]int, error) {
+	if err := s.Flush(ctx); err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]int)
+
+	switch opts.GroupBy {
+	case "type":
+		query := `SELECT type, COUNT(*) FROM nodes WHERE 1=1`
+		args := s.buildNodeFilterArgs(&query, filter)
+		query += ` GROUP BY type`
+		query += s.buildCountOrderBy(opts)
+		if opts.Limit > 0 {
+			query += ` LIMIT ?`
+			args = append(args, opts.Limit)
+		}
+
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var typeName string
+			var count int
+			if err := rows.Scan(&typeName, &count); err != nil {
+				return nil, err
+			}
+			result[typeName] = count
+		}
+		return result, rows.Err()
+
+	case "label":
+		// Use json_each to extract labels from JSON array
+		// Filter out nodes with empty/null labels arrays
+		query := `SELECT j.value, COUNT(*) FROM nodes, json_each(nodes.labels) AS j WHERE j.value IS NOT NULL`
+		args := s.buildNodeFilterArgs(&query, filter)
+		query += ` GROUP BY j.value`
+		query += s.buildCountOrderBy(opts)
+		if opts.Limit > 0 {
+			query += ` LIMIT ?`
+			args = append(args, opts.Limit)
+		}
+
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var label string
+			var count int
+			if err := rows.Scan(&label, &count); err != nil {
+				return nil, err
+			}
+			result[label] = count
+		}
+		return result, rows.Err()
+
+	default:
+		// No grouping - just total count
+		query := `SELECT COUNT(*) FROM nodes WHERE 1=1`
+		args := s.buildNodeFilterArgs(&query, filter)
+
+		var count int
+		if err := s.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+			return nil, err
+		}
+		result[""] = count
+		return result, nil
+	}
+}
+
+func (s *Storage) CountEdges(ctx context.Context, filter graph.EdgeFilter, opts graph.QueryOptions) (map[string]int, error) {
+	if err := s.Flush(ctx); err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]int)
+
+	// Build query with optional JOINs for From/To filters
+	var query string
+	var args []any
+
+	// Determine if we need JOINs
+	needFromJoin := filter.From != nil
+	needToJoin := filter.To != nil
+
+	switch opts.GroupBy {
+	case "type":
+		query = `SELECT e.type, COUNT(*) FROM edges e`
+	default:
+		query = `SELECT COUNT(*) FROM edges e`
+	}
+
+	if needFromJoin {
+		query += ` JOIN nodes nf ON e.from_id = nf.id`
+	}
+	if needToJoin {
+		query += ` JOIN nodes nt ON e.to_id = nt.id`
+	}
+
+	query += ` WHERE 1=1`
+
+	// Edge type filter
+	if filter.Type != "" {
+		query += ` AND e.type = ?`
+		args = append(args, filter.Type)
+	}
+
+	// From node filter
+	if filter.From != nil {
+		args = append(args, s.buildNodeFilterArgsWithPrefix(&query, *filter.From, "nf")...)
+	}
+
+	// To node filter
+	if filter.To != nil {
+		args = append(args, s.buildNodeFilterArgsWithPrefix(&query, *filter.To, "nt")...)
+	}
+
+	if opts.GroupBy == "type" {
+		query += ` GROUP BY e.type`
+		query += s.buildCountOrderBy(opts)
+		if opts.Limit > 0 {
+			query += ` LIMIT ?`
+			args = append(args, opts.Limit)
+		}
+
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var edgeType string
+			var count int
+			if err := rows.Scan(&edgeType, &count); err != nil {
+				return nil, err
+			}
+			result[edgeType] = count
+		}
+		return result, rows.Err()
+	}
+
+	// No grouping - just total count
+	var count int
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return nil, err
+	}
+	result[""] = count
+	return result, nil
+}
+
+// buildNodeFilterArgsWithPrefix is like buildNodeFilterArgs but uses a table prefix for JOINs.
+func (s *Storage) buildNodeFilterArgsWithPrefix(query *string, filter graph.NodeFilter, prefix string) []any {
+	var args []any
+
+	if filter.Type != "" {
+		*query += fmt.Sprintf(` AND %s.type = ?`, prefix)
+		args = append(args, filter.Type)
+	}
+	if filter.TypePattern != "" {
+		*query += fmt.Sprintf(` AND %s.type GLOB ?`, prefix)
+		args = append(args, filter.TypePattern)
+	}
+	if filter.URIPrefix != "" {
+		*query += fmt.Sprintf(` AND %s.uri LIKE ?`, prefix)
+		args = append(args, filter.URIPrefix+"%")
+	}
+	if filter.Name != "" {
+		*query += fmt.Sprintf(` AND %s.name = ?`, prefix)
+		args = append(args, filter.Name)
+	}
+	if filter.NamePattern != "" {
+		*query += fmt.Sprintf(` AND %s.name GLOB ?`, prefix)
+		args = append(args, filter.NamePattern)
+	}
+	if len(filter.Labels) > 0 {
+		labelConditions := make([]string, len(filter.Labels))
+		for i, label := range filter.Labels {
+			labelConditions[i] = fmt.Sprintf(`%s.labels LIKE ?`, prefix)
+			args = append(args, `%"`+label+`"%`)
+		}
+		*query += ` AND (` + strings.Join(labelConditions, " OR ") + `)`
+	}
+	if len(filter.Extensions) > 0 {
+		extConditions := make([]string, len(filter.Extensions))
+		for i, ext := range filter.Extensions {
+			extConditions[i] = fmt.Sprintf(`%s.name LIKE ?`, prefix)
+			args = append(args, "%."+ext)
+		}
+		*query += ` AND (` + strings.Join(extConditions, " OR ") + `)`
+	}
+
+	return args
+}
+
+// buildCountOrderBy builds ORDER BY for count queries.
+func (s *Storage) buildCountOrderBy(opts graph.QueryOptions) string {
+	if opts.OrderBy == "" {
+		return ""
+	}
+
+	order := "ASC"
+	if opts.Desc {
+		order = "DESC"
+	}
+
+	switch opts.OrderBy {
+	case "count":
+		return fmt.Sprintf(` ORDER BY COUNT(*) %s`, order)
+	case "name":
+		return fmt.Sprintf(` ORDER BY 1 %s`, order) // Column 1 is the group key
+	default:
+		return ""
+	}
+}
+
 func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGen string) ([]*graph.Node, error) {
 	if err := s.Flush(ctx); err != nil {
 		return nil, err
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, type, uri, key, name, data, generation, root, created_at, updated_at
+		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at
 		FROM nodes WHERE uri LIKE ? AND generation != ?
 	`, uriPrefix+"%", currentGen)
 	if err != nil {
@@ -662,10 +1055,10 @@ func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGe
 	var nodes []*graph.Node
 	for rows.Next() {
 		var node graph.Node
-		var dataStr, createdAt, updatedAt string
+		var labelsStr, dataStr, createdAt, updatedAt string
 		var uri, key, name, generation, root sql.NullString
 
-		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &dataStr, &generation, &root, &createdAt, &updatedAt)
+		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -674,6 +1067,12 @@ func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGe
 		node.Key = key.String
 		node.Name = name.String
 		node.Generation = generation.String
+
+		if labelsStr != "" && labelsStr != "[]" {
+			if err := json.Unmarshal([]byte(labelsStr), &node.Labels); err != nil {
+				return nil, err
+			}
+		}
 
 		if dataStr != "" {
 			var data any
@@ -751,6 +1150,20 @@ func (s *Storage) DeleteOrphanedEdges(ctx context.Context) (int, error) {
 	}
 	rows, err := result.RowsAffected()
 	return int(rows), err
+}
+
+func (s *Storage) CountOrphanedEdges(ctx context.Context) (int, error) {
+	if err := s.Flush(ctx); err != nil {
+		return 0, err
+	}
+
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM edges 
+		WHERE from_id NOT IN (SELECT id FROM nodes) 
+		   OR to_id NOT IN (SELECT id FROM nodes)
+	`).Scan(&count)
+	return count, err
 }
 
 // URIPrefix helper for building LIKE patterns

@@ -63,22 +63,23 @@ func (i *Indexer) Subscriptions() []indexer.Subscription {
 }
 
 func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
-	if ictx.TriggerEvent == nil {
-		return nil // Only triggered by events
-	}
+	// Markdown indexer is event-driven only, direct invocation is a no-op
+	return nil
+}
 
+func (i *Indexer) HandleEvent(ctx context.Context, ictx *indexer.Context, event indexer.Event) error {
 	// Handle deletion
-	if ictx.TriggerEvent.Type == indexer.EventNodeDeleting {
-		return i.cleanup(ctx, ictx)
+	if event.Type == indexer.EventNodeDeleting {
+		return i.cleanupEvent(ctx, ictx, event)
 	}
 
 	// Index the markdown file
-	return i.indexFile(ctx, ictx)
+	return i.indexFileEvent(ctx, ictx, event)
 }
 
-func (i *Indexer) indexFile(ctx context.Context, ictx *indexer.Context) error {
-	filePath := ictx.TriggerEvent.Path
-	fileNodeID := ictx.TriggerEvent.NodeID
+func (i *Indexer) indexFileEvent(ctx context.Context, ictx *indexer.Context, event indexer.Event) error {
+	filePath := event.Path
+	fileNodeID := event.NodeID
 
 	// Read file content
 	content, err := os.ReadFile(filePath)
@@ -127,13 +128,16 @@ func (i *Indexer) indexFile(ctx context.Context, ictx *indexer.Context) error {
 	return walker.walk(doc)
 }
 
-// cleanup removes all markdown nodes for the given file.
-func (i *Indexer) cleanup(ctx context.Context, ictx *indexer.Context) error {
-	filePath := ictx.TriggerEvent.Path
+// cleanupEvent removes all markdown nodes for the given file.
+func (i *Indexer) cleanupEvent(ctx context.Context, ictx *indexer.Context, event indexer.Event) error {
+	filePath := event.Path
 	docURI := types.MarkdownFileToURI(filePath)
 
-	// Delete all nodes under this document's URI prefix
-	_, err := ictx.Graph.Storage().DeleteByURIPrefix(ctx, docURI)
+	// Delete all nodes under this document's URI prefix and track count
+	deleted, err := ictx.Graph.Storage().DeleteByURIPrefix(ctx, docURI)
+	if deleted > 0 {
+		ictx.AddNodesDeleted(deleted)
+	}
 	return err
 }
 

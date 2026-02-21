@@ -108,6 +108,7 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 						Name:     d.Name(),
 						NodeType: node.Type,
 						NodeID:   node.ID,
+						Node:     node,
 					}
 				}
 
@@ -188,6 +189,7 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 				Name:     d.Name(),
 				NodeType: node.Type,
 				NodeID:   node.ID,
+				Node:     node,
 			}
 		}
 
@@ -252,13 +254,22 @@ func (i *Indexer) cleanupStale(ctx context.Context, ictx *indexer.Context) error
 				Name:     filepath.Base(types.URIToPath(node.URI)),
 				NodeType: node.Type,
 				NodeID:   node.ID,
+				Node:     node,
 			}
 		}
 	}
 
-	// Delete stale nodes
-	_, err = ictx.Graph.Storage().DeleteStaleByURIPrefix(ctx, ictx.Root, ictx.Generation)
+	// Delete stale nodes and track count
+	deleted, err := ictx.Graph.Storage().DeleteStaleByURIPrefix(ctx, ictx.Root, ictx.Generation)
+	if deleted > 0 {
+		ictx.AddNodesDeleted(deleted)
+	}
 	return err
+}
+
+func (i *Indexer) HandleEvent(ctx context.Context, ictx *indexer.Context, event indexer.Event) error {
+	// FS indexer doesn't subscribe to events, so this should not be called.
+	return nil
 }
 
 func (i *Indexer) shouldIgnore(path, name string) bool {

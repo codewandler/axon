@@ -3,6 +3,8 @@ package indexer
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/codewandler/axon/graph"
 )
 
 // EventType represents the type of indexing event.
@@ -36,6 +38,10 @@ type Event struct {
 
 	// NodeID is the ID of the emitted node (empty if entry was skipped/ignored).
 	NodeID string
+
+	// Node is the node that was created (if available).
+	// This allows subscribers to modify the node without a DB round-trip.
+	Node *graph.Node
 }
 
 // Subscription defines what events an indexer wants to receive.

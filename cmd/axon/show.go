@@ -107,7 +107,7 @@ func runShow(cmd *cobra.Command, args []string) error {
 func findNodesByPrefix(ctx context.Context, g *graph.Graph, prefix string) ([]*graph.Node, error) {
 	// Get all nodes and filter by prefix
 	// TODO: Add a more efficient prefix search to storage
-	allNodes, err := g.FindNodes(ctx, graph.NodeFilter{})
+	allNodes, err := g.FindNodes(ctx, graph.NodeFilter{}, graph.QueryOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +191,9 @@ func showNodeDetails(ctx context.Context, g *graph.Graph, node *graph.Node) erro
 	}
 	if node.Key != "" {
 		fmt.Printf("%s %s\n", headerLabelStyle.Render("Key: "), node.Key)
+	}
+	if len(node.Labels) > 0 {
+		fmt.Printf("%s %s\n", headerLabelStyle.Render("Labels:"), strings.Join(node.Labels, ", "))
 	}
 
 	// Print data fields (or render markdown content)

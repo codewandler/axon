@@ -4,11 +4,28 @@ import "context"
 
 // NodeFilter specifies criteria for finding nodes.
 type NodeFilter struct {
-	Type        string // Filter by exact node type (empty = any)
-	TypePattern string // Filter by node type with glob pattern (empty = any)
-	URIPrefix   string // Filter by URI prefix (empty = any)
-	Name        string // Filter by exact name (empty = any)
-	NamePattern string // Filter by name with glob pattern (empty = any)
+	Type        string   // Filter by exact node type (empty = any)
+	TypePattern string   // Filter by node type with glob pattern (empty = any)
+	URIPrefix   string   // Filter by URI prefix (empty = any)
+	Name        string   // Filter by exact name (empty = any)
+	NamePattern string   // Filter by name with glob pattern (empty = any)
+	Labels      []string // Filter by labels (OR logic - node must have at least one)
+	Extensions  []string // Filter by file extension without dot (OR logic, e.g., "go", "py")
+}
+
+// EdgeFilter specifies criteria for finding/counting edges.
+type EdgeFilter struct {
+	Type string      // Filter by exact edge type (empty = any)
+	From *NodeFilter // Filter by from-node properties (nil = any)
+	To   *NodeFilter // Filter by to-node properties (nil = any)
+}
+
+// QueryOptions specifies aggregation, ordering, and limiting for queries.
+type QueryOptions struct {
+	GroupBy string // "type", "label", or "" for no grouping
+	OrderBy string // "count", "name" for counts; "name", "updated", "type" for nodes
+	Desc    bool   // true for descending order
+	Limit   int    // 0 for no limit
 }
 
 // Storage defines the interface for graph persistence.
@@ -30,7 +47,15 @@ type Storage interface {
 	GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)
 
 	// Queries
-	FindNodes(ctx context.Context, filter NodeFilter) ([]*Node, error)
+	FindNodes(ctx context.Context, filter NodeFilter, opts QueryOptions) ([]*Node, error)
+
+	// CountNodes returns node counts. With GroupBy="", returns {"": total}.
+	// With GroupBy="type", returns counts per type. With GroupBy="label", returns counts per label.
+	CountNodes(ctx context.Context, filter NodeFilter, opts QueryOptions) (map[string]int, error)
+
+	// CountEdges returns edge counts. With GroupBy="", returns {"": total}.
+	// With GroupBy="type", returns counts per edge type.
+	CountEdges(ctx context.Context, filter EdgeFilter, opts QueryOptions) (map[string]int, error)
 
 	// Staleness management (used by indexers for cleanup)
 
@@ -52,6 +77,9 @@ type Storage interface {
 	// DeleteOrphanedEdges removes edges where either endpoint node no longer exists.
 	// Returns the number of deleted edges.
 	DeleteOrphanedEdges(ctx context.Context) (int, error)
+
+	// CountOrphanedEdges returns the number of edges where either endpoint node no longer exists.
+	CountOrphanedEdges(ctx context.Context) (int, error)
 
 	// Flush writes any buffered data to persistent storage.
 	// Implementations without buffering can no-op.

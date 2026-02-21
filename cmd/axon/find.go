@@ -23,6 +23,8 @@ var (
 	findName       string
 	findQuery      string
 	findData       []string
+	findLabels     []string
+	findExt        []string
 	findCount      bool
 	findLimit      int
 	findOutput     string
@@ -53,7 +55,19 @@ Examples:
   axon find --type vcs:repo --count
 
   # Show nodes with parent chain
-  axon find --type vcs:branch --show-parent`,
+  axon find --type vcs:branch --show-parent
+
+  # Find CI configuration files
+  axon find --label ci:config
+
+  # Find files with multiple labels (OR logic)
+  axon find --label build:config --label lang:go
+
+  # Find Go test files
+  axon find --label test:file --ext go
+
+  # Find all Go and Python files
+  axon find --ext go --ext py`,
 	RunE: runFind,
 }
 
@@ -62,6 +76,8 @@ func init() {
 	findCmd.Flags().StringVar(&findName, "name", "", "Exact name match")
 	findCmd.Flags().StringVarP(&findQuery, "query", "q", "", "Name pattern with wildcards ('README*', '*test*')")
 	findCmd.Flags().StringArrayVar(&findData, "data", nil, "Match on data field (key=value). Can be repeated.")
+	findCmd.Flags().StringArrayVarP(&findLabels, "label", "l", nil, "Filter by label (OR logic). Can be repeated.")
+	findCmd.Flags().StringArrayVarP(&findExt, "ext", "e", nil, "Filter by file extension without dot (e.g., 'go', 'py'). Can be repeated.")
 	findCmd.Flags().BoolVarP(&findCount, "count", "c", false, "Just show count")
 	findCmd.Flags().IntVarP(&findLimit, "limit", "n", 0, "Limit results (0 for unlimited)")
 	findCmd.Flags().StringVarP(&findOutput, "output", "o", "path", "Output format: path, uri, json, table")
@@ -129,6 +145,16 @@ func runFind(cmd *cobra.Command, args []string) error {
 		filter.NamePattern = findQuery
 	}
 
+	// Label filtering (OR logic - node has at least one of the labels)
+	if len(findLabels) > 0 {
+		filter.Labels = findLabels
+	}
+
+	// Extension filtering (OR logic - node has one of the extensions)
+	if len(findExt) > 0 {
+		filter.Extensions = findExt
+	}
+
 	// Find nodes
 	var allNodes []*graph.Node
 
@@ -141,14 +167,14 @@ func runFind(cmd *cobra.Command, args []string) error {
 			} else {
 				f.Type = tp
 			}
-			nodes, err := g.FindNodes(ctx, f)
+			nodes, err := g.FindNodes(ctx, f, graph.QueryOptions{})
 			if err != nil {
 				return fmt.Errorf("failed to find nodes: %w", err)
 			}
 			allNodes = append(allNodes, nodes...)
 		}
 	} else {
-		nodes, err := g.FindNodes(ctx, filter)
+		nodes, err := g.FindNodes(ctx, filter, graph.QueryOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to find nodes: %w", err)
 		}
@@ -417,13 +443,17 @@ func outputJSON(nodes []*graph.Node) error {
 
 func outputTable(nodes []*graph.Node) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tTYPE\tNAME\tURI")
+	fmt.Fprintln(w, "ID\tTYPE\tNAME\tLABELS\tURI")
 	for _, node := range nodes {
 		name := node.Name
 		if name == "" {
 			name = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", shortID(node.ID), node.Type, name, node.URI)
+		labels := "-"
+		if len(node.Labels) > 0 {
+			labels = strings.Join(node.Labels, ", ")
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", shortID(node.ID), node.Type, name, labels, node.URI)
 	}
 	return w.Flush()
 }

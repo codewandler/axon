@@ -190,7 +190,7 @@ func TestGraphFindNodes(t *testing.T) {
 	_ = g.AddNode(ctx, dir)
 	_ = g.AddNode(ctx, file)
 
-	nodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: "fs:file"})
+	nodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: "fs:file"}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}

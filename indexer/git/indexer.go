@@ -51,10 +51,16 @@ func (i *Indexer) Subscriptions() []indexer.Subscription {
 }
 
 func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
-	repoPath := types.URIToRepoPath(ictx.Root)
+	// Git indexer is event-driven only, direct invocation is a no-op
+	return nil
+}
+
+func (i *Indexer) HandleEvent(ctx context.Context, ictx *indexer.Context, event indexer.Event) error {
+	// Determine repo path from event - .git is in the visited directory
+	repoPath := filepath.Dir(event.Path)
 
 	// Check if triggered by a deletion event - clean up instead of indexing
-	if ictx.TriggerEvent != nil && ictx.TriggerEvent.Type == indexer.EventNodeDeleting {
+	if event.Type == indexer.EventNodeDeleting {
 		return i.cleanup(ctx, ictx, repoPath)
 	}
 
@@ -234,7 +240,10 @@ func (i *Indexer) indexTags(ctx context.Context, ictx *indexer.Context, repo *gi
 func (i *Indexer) cleanup(ctx context.Context, ictx *indexer.Context, repoPath string) error {
 	repoURI := types.RepoPathToURI(repoPath)
 
-	// Delete all nodes under this repo's URI prefix
-	_, err := ictx.Graph.Storage().DeleteByURIPrefix(ctx, repoURI)
+	// Delete all nodes under this repo's URI prefix and track count
+	deleted, err := ictx.Graph.Storage().DeleteByURIPrefix(ctx, repoURI)
+	if deleted > 0 {
+		ictx.AddNodesDeleted(deleted)
+	}
 	return err
 }

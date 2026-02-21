@@ -11,6 +11,7 @@ import (
 	"github.com/codewandler/axon/indexer/fs"
 	"github.com/codewandler/axon/indexer/git"
 	"github.com/codewandler/axon/indexer/markdown"
+	"github.com/codewandler/axon/indexer/tagger"
 	"github.com/codewandler/axon/progress"
 	"github.com/codewandler/axon/types"
 )
@@ -78,6 +79,7 @@ func New(cfg Config) (*Axon, error) {
 	idxRegistry.Register(fs.New(fs.Config{Ignore: ignore}))
 	idxRegistry.Register(git.New())
 	idxRegistry.Register(markdown.New())
+	idxRegistry.Register(tagger.New(tagger.Config{}))
 
 	return &Axon{
 		graph:    g,
@@ -92,15 +94,36 @@ func (a *Axon) Graph() *graph.Graph {
 	return a.graph
 }
 
+// IndexOptions configures the indexing behavior.
+type IndexOptions struct {
+	// Path is the path to index. If empty, uses the configured directory.
+	Path string
+
+	// Progress is an optional channel for reporting indexing progress.
+	Progress chan<- progress.Event
+
+	// SkipGC skips garbage collection (orphaned edge cleanup) after indexing.
+	// This can speed up indexing when you know cleanup isn't needed,
+	// or when you plan to run `axon gc` separately.
+	SkipGC bool
+}
+
 // Index indexes the given path and updates the graph.
 // If path is empty, indexes the configured directory.
 func (a *Axon) Index(ctx context.Context, path string) (*IndexResult, error) {
-	return a.IndexWithProgress(ctx, path, nil)
+	return a.IndexWithOptions(ctx, IndexOptions{Path: path})
 }
 
 // IndexWithProgress indexes the given path and reports progress on the provided channel.
 // If progress is nil, progress reporting is disabled.
 func (a *Axon) IndexWithProgress(ctx context.Context, path string, prog chan<- progress.Event) (*IndexResult, error) {
+	return a.IndexWithOptions(ctx, IndexOptions{Path: path, Progress: prog})
+}
+
+// IndexWithOptions indexes with the provided options.
+func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexResult, error) {
+	path := opts.Path
+	prog := opts.Progress
 	if path == "" {
 		path = a.config.Dir
 	}
@@ -136,64 +159,100 @@ func (a *Axon) IndexWithProgress(ctx context.Context, path string, prog chan<- p
 		Events:     events,
 	}
 
-	// Track active indexers
-	var wg sync.WaitGroup
+	// Track errors
 	var indexerErrors []error
 	var errorsMu sync.Mutex
 
-	// Event dispatcher goroutine
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for event := range events {
-			// Find subscribers for this event
-			subscribers := a.indexers.SubscribersFor(event)
-			for _, sub := range subscribers {
-				// Determine the root path for the subscriber
-				// For git indexer reacting to .git, root is parent dir
-				subRoot := event.Path
-				if event.Name == ".git" {
-					subRoot = filepath.Dir(event.Path)
-				}
+	// Create per-subscriber channels and goroutines
+	// Each subscriber gets ONE goroutine that processes events sequentially
+	type subscriberInfo struct {
+		idx     indexer.Indexer
+		eventCh chan indexer.Event
+	}
+	subscriberMap := make(map[string]*subscriberInfo)
 
-				// Capture event for closure
-				triggerEvent := event
+	var subscriberWg sync.WaitGroup
+	for _, idx := range a.indexers.All() {
+		if len(idx.Subscriptions()) > 0 {
+			ch := make(chan indexer.Event, 100)
+			subscriberMap[idx.Name()] = &subscriberInfo{idx: idx, eventCh: ch}
 
-				wg.Add(1)
-				go func(subIdx indexer.Indexer, root string, trigger indexer.Event) {
-					defer wg.Done()
+			subscriberWg.Add(1)
+			go func(subIdx indexer.Indexer, eventCh <-chan indexer.Event) {
+				defer subscriberWg.Done()
 
-					// Create context for subscribed indexer
-					subCtx := &indexer.Context{
-						Root:         types.RepoPathToURI(root),
-						Generation:   generation,
-						Graph:        a.graph,
-						Emitter:      emitter,
-						Progress:     prog,
-						Events:       events, // Allow chaining events
-						TriggerEvent: &trigger,
+				for event := range eventCh {
+					// Determine the root URI for the subscriber
+					// Most indexers use the original root, but the git indexer
+					// reacting to .git needs the repo path (parent of .git)
+					eventRoot := uri
+					if subIdx.Name() == "git" && event.Name == ".git" {
+						eventRoot = types.RepoPathToURI(filepath.Dir(event.Path))
 					}
 
-					if err := subIdx.Index(ctx, subCtx); err != nil {
+					// Create event-specific context that shares the parent context's counters
+					// We must create a new context per event because Root varies
+					eventCtx := &indexer.Context{
+						Root:       eventRoot,
+						Generation: ictx.Generation,
+						Graph:      ictx.Graph,
+						Emitter:    ictx.Emitter,
+						Progress:   ictx.Progress,
+						Events:     ictx.Events,
+					}
+
+					if err := subIdx.HandleEvent(ctx, eventCtx, event); err != nil {
 						errorsMu.Lock()
 						indexerErrors = append(indexerErrors, err)
 						errorsMu.Unlock()
 					}
-				}(sub, subRoot, triggerEvent)
+
+					// Aggregate deletions back to main context
+					if deleted := eventCtx.NodesDeleted(); deleted > 0 {
+						ictx.AddNodesDeleted(int(deleted))
+					}
+				}
+			}(idx, ch)
+		}
+	}
+
+	// Event dispatcher goroutine - routes events to subscriber channels
+	var dispatcherWg sync.WaitGroup
+	dispatcherWg.Add(1)
+	go func() {
+		defer dispatcherWg.Done()
+		for event := range events {
+			// Find subscribers for this event and route to their channels
+			for _, sub := range a.indexers.SubscribersFor(event) {
+				if info, ok := subscriberMap[sub.Name()]; ok {
+					info.eventCh <- event
+				}
 			}
+		}
+		// Close all subscriber channels when events channel closes
+		for _, info := range subscriberMap {
+			close(info.eventCh)
 		}
 	}()
 
 	// Run primary indexer
 	if err := idx.Index(ctx, ictx); err != nil {
 		close(events)
-		wg.Wait()
+		dispatcherWg.Wait()
+		subscriberWg.Wait()
 		return nil, err
 	}
 
-	// Close events channel and wait for all indexers
+	// Close events channel and wait for dispatcher and all subscribers
 	close(events)
-	wg.Wait()
+	dispatcherWg.Wait()
+	subscriberWg.Wait()
+
+	// Cleanup phase - report progress
+	if prog != nil {
+		prog <- progress.Started("cleanup")
+		prog <- progress.Progress("cleanup", 1, "flushing writes...")
+	}
 
 	// Flush storage buffer before post-index (so all nodes are queryable)
 	if err := a.storage.Flush(ctx); err != nil {
@@ -201,6 +260,9 @@ func (a *Axon) IndexWithProgress(ctx context.Context, path string, prog chan<- p
 	}
 
 	// Run post-index stage for indexers that implement PostIndexer
+	if prog != nil {
+		prog <- progress.Progress("cleanup", 2, "post-processing...")
+	}
 	for _, idx := range a.indexers.All() {
 		if post, ok := idx.(indexer.PostIndexer); ok {
 			postCtx := &indexer.Context{
@@ -219,6 +281,9 @@ func (a *Axon) IndexWithProgress(ctx context.Context, path string, prog chan<- p
 	}
 
 	// Flush again after post-index
+	if prog != nil {
+		prog <- progress.Progress("cleanup", 3, "flushing...")
+	}
 	if err := a.storage.Flush(ctx); err != nil {
 		return nil, err
 	}
@@ -227,33 +292,36 @@ func (a *Axon) IndexWithProgress(ctx context.Context, path string, prog chan<- p
 	// Note: We don't use DeleteStaleEdges because it's global and would delete
 	// edges from other indexed directories. Indexers clean up their own stale
 	// nodes, and orphaned edges are removed here.
-	orphanedEdges, err := a.storage.DeleteOrphanedEdges(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Count what we indexed
-	nodes, err := a.graph.FindNodes(ctx, graph.NodeFilter{})
-	if err != nil {
-		return nil, err
-	}
-
-	var files, dirs, repos int
-	for _, n := range nodes {
-		switch n.Type {
-		case types.TypeFile:
-			files++
-		case types.TypeDir:
-			dirs++
-		case types.TypeRepo:
-			repos++
+	// Optimization: Skip if no nodes were deleted (common case for re-indexing).
+	// Also skip if SkipGC option is set.
+	var orphanedEdges int
+	if !opts.SkipGC && ictx.NodesDeleted() > 0 {
+		if prog != nil {
+			prog <- progress.Progress("cleanup", 4, "removing orphaned edges...")
+		}
+		orphanedEdges, err = a.storage.DeleteOrphanedEdges(ctx)
+		if err != nil {
+			return nil, err
 		}
 	}
 
+	// Count what we indexed using efficient COUNT queries
+	if prog != nil {
+		prog <- progress.Progress("cleanup", 5, "counting results...")
+	}
+	typeCounts, err := a.storage.CountNodes(ctx, graph.NodeFilter{}, graph.QueryOptions{GroupBy: "type"})
+	if err != nil {
+		return nil, err
+	}
+
+	if prog != nil {
+		prog <- progress.Completed("cleanup", 5)
+	}
+
 	return &IndexResult{
-		Files:        files,
-		Directories:  dirs,
-		Repos:        repos,
+		Files:        typeCounts[types.TypeFile],
+		Directories:  typeCounts[types.TypeDir],
+		Repos:        typeCounts[types.TypeRepo],
 		StaleRemoved: orphanedEdges,
 		RootURI:      uri,
 		Generation:   generation,

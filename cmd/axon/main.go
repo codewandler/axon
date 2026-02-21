@@ -39,6 +39,10 @@ func init() {
 	rootCmd.AddCommand(treeCmd)
 	rootCmd.AddCommand(showCmd)
 	rootCmd.AddCommand(findCmd)
+	rootCmd.AddCommand(labelsCmd)
+	rootCmd.AddCommand(typesCmd)
+	rootCmd.AddCommand(edgesCmd)
+	rootCmd.AddCommand(gcCmd)
 
 	rootCmd.Version = version
 }

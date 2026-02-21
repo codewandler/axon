@@ -94,12 +94,28 @@ func TestIndexerBasic(t *testing.T) {
 		Emitter:    emitter,
 	}
 
-	if err := idx.Index(ctx, ictx); err != nil {
-		t.Fatalf("Index failed: %v", err)
+	// Simulate the event that FS indexer would send when visiting .git
+	gitDir := filepath.Join(dir, ".git")
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(gitDir),
+		Path:     gitDir,
+		Name:     ".git",
+		NodeType: types.TypeDir,
+		NodeID:   "test-git-dir-id",
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent failed: %v", err)
+	}
+
+	// Flush storage
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
 	}
 
 	// Should have repo node
-	repos, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeRepo})
+	repos, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeRepo}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
@@ -127,7 +143,7 @@ func TestIndexerBasic(t *testing.T) {
 	}
 
 	// Should have branch node (master or main)
-	branches, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeBranch})
+	branches, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeBranch}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
@@ -136,7 +152,7 @@ func TestIndexerBasic(t *testing.T) {
 	}
 
 	// Should have tag node
-	tags, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeTag})
+	tags, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeTag}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
@@ -170,12 +186,28 @@ func TestIndexerWithRemote(t *testing.T) {
 		Emitter:    emitter,
 	}
 
-	if err := idx.Index(ctx, ictx); err != nil {
-		t.Fatalf("Index failed: %v", err)
+	// Simulate the event that FS indexer would send when visiting .git
+	gitDir := filepath.Join(dir, ".git")
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(gitDir),
+		Path:     gitDir,
+		Name:     ".git",
+		NodeType: types.TypeDir,
+		NodeID:   "test-git-dir-id",
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent failed: %v", err)
+	}
+
+	// Flush storage
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
 	}
 
 	// Should have remote node
-	remotes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeRemote})
+	remotes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeRemote}, graph.QueryOptions{})
 	if err != nil {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
@@ -184,7 +216,7 @@ func TestIndexerWithRemote(t *testing.T) {
 	}
 
 	// Check edges from repo to remote (now using 'has' edge type)
-	repos, _ := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeRepo})
+	repos, _ := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeRepo}, graph.QueryOptions{})
 	if len(repos) > 0 {
 		edges, _ := g.GetEdgesFrom(ctx, repos[0].ID)
 		hasRemoteEdge := false

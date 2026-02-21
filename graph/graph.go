@@ -183,8 +183,18 @@ func (g *Graph) Parents(ctx context.Context, nodeID string) ([]*Node, error) {
 }
 
 // FindNodes finds nodes matching the given filter.
-func (g *Graph) FindNodes(ctx context.Context, filter NodeFilter) ([]*Node, error) {
-	return g.storage.FindNodes(ctx, filter)
+func (g *Graph) FindNodes(ctx context.Context, filter NodeFilter, opts QueryOptions) ([]*Node, error) {
+	return g.storage.FindNodes(ctx, filter, opts)
+}
+
+// CountNodes returns node counts grouped by the specified field.
+func (g *Graph) CountNodes(ctx context.Context, filter NodeFilter, opts QueryOptions) (map[string]int, error) {
+	return g.storage.CountNodes(ctx, filter, opts)
+}
+
+// CountEdges returns edge counts grouped by the specified field.
+func (g *Graph) CountEdges(ctx context.Context, filter EdgeFilter, opts QueryOptions) (map[string]int, error) {
+	return g.storage.CountEdges(ctx, filter, opts)
 }
 
 // GetEdgesFrom returns all edges originating from the given node.
