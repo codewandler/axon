@@ -124,3 +124,17 @@ func (n *Node) AddLabels(labels ...string) {
 		}
 	}
 }
+
+// Clone returns a shallow copy of the node with a cloned Labels slice.
+// The Data field is shared (not deep-copied) since it's typically read-only.
+func (n *Node) Clone() *Node {
+	if n == nil {
+		return nil
+	}
+	clone := *n // Shallow copy
+	if n.Labels != nil {
+		clone.Labels = make([]string, len(n.Labels))
+		copy(clone.Labels, n.Labels)
+	}
+	return &clone
+}

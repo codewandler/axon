@@ -255,11 +255,19 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 					return // Events channel closed
 				}
 				// Find subscribers for this event and route to their channels
-				for _, sub := range a.indexers.SubscribersFor(event) {
+				subscribers := a.indexers.SubscribersFor(event)
+				for i, sub := range subscribers {
 					if info, ok := subscriberMap[sub.Name()]; ok {
+						// Clone the event's node for each subscriber to prevent data races
+						// when multiple subscribers modify the node concurrently.
+						// Only clone for 2nd+ subscriber to avoid unnecessary allocations.
+						eventCopy := event
+						if i > 0 && event.Node != nil {
+							eventCopy.Node = event.Node.Clone()
+						}
 						// Use select to avoid blocking on full subscriber channel when context is cancelled
 						select {
-						case info.eventCh <- event:
+						case info.eventCh <- eventCopy:
 						case <-ctx.Done():
 							return
 						}

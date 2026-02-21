@@ -221,7 +221,7 @@ No package-level doc comments.
 
 - [x] 1. Fix SQLite `flushBatch` silent error swallowing
 - [x] 2. Add context cancellation checks to goroutines in `axon.go`
-- [ ] 3. Fix shared mutable node across subscribers (potential data race)
+- [x] 3. Fix shared mutable node across subscribers (potential data race)
 - [ ] 4. Add consistent error wrapping throughout codebase
 - [ ] 5. Break up Storage interface into smaller composable interfaces
 - [ ] 6. Add context to SQLite init/migrate operations
