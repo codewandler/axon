@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/codewandler/axon/graph"
 	"github.com/spf13/cobra"
 )
 
@@ -42,16 +41,25 @@ func runLabels(cmd *cobra.Command, args []string) error {
 	}
 	defer cmdCtx.Close()
 
-	// Build scoped filter
-	scope := resolveScope(labelsGlobal, cmdCtx.Cwd)
-	filter := buildScopedNodeFilter(scope)
+	// Get Axon instance for potential auto-indexing
+	ax, err := cmdCtx.Axon()
+	if err != nil {
+		return err
+	}
 
-	// Query label counts
-	counts, err := cmdCtx.Storage.CountNodes(cmdCtx.Ctx, filter, graph.QueryOptions{
-		GroupBy: "label",
-		OrderBy: "count",
-		Desc:    true,
-	})
+	// Resolve scope using graph traversal
+	traverseOpts, err := resolveScopeTraversal(cmdCtx.Ctx, cmdCtx.Storage, ax, labelsGlobal, cmdCtx.Cwd, 0)
+	if err != nil {
+		return err
+	}
+
+	// Traverse and count labels
+	results, err := cmdCtx.Storage.Traverse(cmdCtx.Ctx, traverseOpts)
+	if err != nil {
+		return fmt.Errorf("failed to traverse graph: %w", err)
+	}
+
+	counts, err := countTraversalLabels(results)
 	if err != nil {
 		return fmt.Errorf("failed to count labels: %w", err)
 	}

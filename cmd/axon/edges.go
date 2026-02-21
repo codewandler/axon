@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/codewandler/axon/graph"
 	"github.com/spf13/cobra"
 )
 
@@ -40,18 +39,27 @@ func runEdges(cmd *cobra.Command, args []string) error {
 	}
 	defer cmdCtx.Close()
 
-	// Build scoped filter
-	scope := resolveScope(edgesGlobal, cmdCtx.Cwd)
-	filter := buildScopedEdgeFilter(scope)
-
-	// Query edge type counts
-	counts, err := cmdCtx.Storage.CountEdges(cmdCtx.Ctx, filter, graph.QueryOptions{
-		GroupBy: "type",
-		OrderBy: "count",
-		Desc:    true,
-	})
+	// Get Axon instance for potential auto-indexing
+	ax, err := cmdCtx.Axon()
 	if err != nil {
-		return fmt.Errorf("failed to count edges: %w", err)
+		return err
+	}
+
+	// Resolve scope using graph traversal
+	traverseOpts, err := resolveScopeTraversal(cmdCtx.Ctx, cmdCtx.Storage, ax, edgesGlobal, cmdCtx.Cwd, 0)
+	if err != nil {
+		return err
+	}
+
+	// Traverse and count edge types
+	results, err := cmdCtx.Storage.Traverse(cmdCtx.Ctx, traverseOpts)
+	if err != nil {
+		return fmt.Errorf("failed to traverse graph: %w", err)
+	}
+
+	counts, err := countTraversalEdgeTypes(results)
+	if err != nil {
+		return fmt.Errorf("failed to count edge types: %w", err)
 	}
 
 	// Build result

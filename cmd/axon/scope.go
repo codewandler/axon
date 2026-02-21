@@ -126,49 +126,33 @@ func countTraversalTypes(results <-chan graph.TraverseResult) (map[string]int, e
 	return counts, nil
 }
 
-// Legacy functions for backwards compatibility - can be removed later
-
-// buildScopedNodeFilter creates a NodeFilter scoped to the given path.
-// If path is empty, returns an unscoped filter.
-// The filter uses URIPrefix which matches nodes with URIs starting with file://<path>.
-// DEPRECATED: Use resolveScopeTraversal instead for proper graph traversal.
-func buildScopedNodeFilter(path string) graph.NodeFilter {
-	if path == "" {
-		return graph.NodeFilter{}
+// countTraversalLabels counts labels from a traversal.
+func countTraversalLabels(results <-chan graph.TraverseResult) (map[string]int, error) {
+	counts := make(map[string]int)
+	for r := range results {
+		if r.Err != nil {
+			return nil, r.Err
+		}
+		for _, label := range r.Node.Labels {
+			counts[label]++
+		}
 	}
-	// Use file:// prefix - this covers most nodes
-	// Note: This won't match file+md:// or git+file:// URIs directly,
-	// but for counting purposes we handle this in the SQL with multiple LIKE conditions
-	return graph.NodeFilter{
-		URIPrefix: SchemeFile + path,
-	}
+	return counts, nil
 }
 
-// buildScopedEdgeFilter creates an EdgeFilter scoped to the given path.
-// Scopes by the "from" node's URI prefix.
-// DEPRECATED: Use resolveScopeTraversal instead for proper graph traversal.
-func buildScopedEdgeFilter(path string) graph.EdgeFilter {
-	if path == "" {
-		return graph.EdgeFilter{}
+// countTraversalEdgeTypes counts edge types from a traversal.
+func countTraversalEdgeTypes(results <-chan graph.TraverseResult) (map[string]int, error) {
+	counts := make(map[string]int)
+	seen := make(map[string]bool)
+	for r := range results {
+		if r.Err != nil {
+			return nil, r.Err
+		}
+		// Count the edge that led to this node (if any)
+		if r.Via != nil && !seen[r.Via.ID] {
+			seen[r.Via.ID] = true
+			counts[r.Via.Type]++
+		}
 	}
-	return graph.EdgeFilter{
-		From: &graph.NodeFilter{
-			URIPrefix: SchemeFile + path,
-		},
-	}
-}
-
-// resolveScope returns the scope path based on flags.
-// If global is true, returns empty string (no scope).
-// Otherwise, returns the absolute path of cwd.
-// DEPRECATED: Use resolveScopeTraversal instead for proper graph traversal.
-func resolveScope(global bool, cwd string) string {
-	if global {
-		return ""
-	}
-	absPath, err := filepath.Abs(cwd)
-	if err != nil {
-		return cwd
-	}
-	return absPath
+	return counts, nil
 }
