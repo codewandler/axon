@@ -224,7 +224,7 @@ No package-level doc comments.
 - [x] 3. Fix shared mutable node across subscribers (potential data race)
 - [x] 4. Add consistent error wrapping throughout codebase (core paths in axon.go, sqlite init/migrate)
 - [x] 5. Break up Storage interface into smaller composable interfaces
-- [ ] 6. Add context to SQLite init/migrate operations
+- [x] 6. Add context to SQLite init/migrate operations
 - [ ] 7. Extract CLI boilerplate into shared helpers
 - [ ] 8. Refactor `IndexWithOptions` into smaller functions
 - [ ] 9. Fix silent error suppression in graph `Neighbors`/`Children`/`Parents`

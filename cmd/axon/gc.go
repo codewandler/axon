@@ -1,10 +1,8 @@
 package main
 
 import (
-	"context"
 	"fmt"
 
-	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/spf13/cobra"
 )
 
@@ -30,26 +28,17 @@ func init() {
 }
 
 func runGC(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
-
-	// Resolve database location
-	dbLoc, err := resolveDB(flagDBDir, flagLocal, ".", false)
+	cmdCtx, err := openDB(false)
 	if err != nil {
-		return fmt.Errorf("failed to resolve database location: %w", err)
+		return err
 	}
+	defer cmdCtx.Close()
 
-	fmt.Printf("Using database: %s\n", dbLoc.Path)
-
-	// Open SQLite storage
-	storage, err := sqlite.New(dbLoc.Path)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-	defer storage.Close()
+	fmt.Printf("Using database: %s\n", cmdCtx.DBLoc.Path)
 
 	if flagGCDryRun {
 		// Count orphaned edges without deleting
-		count, err := storage.CountOrphanedEdges(ctx)
+		count, err := cmdCtx.Storage.CountOrphanedEdges(cmdCtx.Ctx)
 		if err != nil {
 			return fmt.Errorf("failed to count orphaned edges: %w", err)
 		}
@@ -60,7 +49,7 @@ func runGC(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		// Actually delete orphaned edges
-		deleted, err := storage.DeleteOrphanedEdges(ctx)
+		deleted, err := cmdCtx.Storage.DeleteOrphanedEdges(cmdCtx.Ctx)
 		if err != nil {
 			return fmt.Errorf("failed to delete orphaned edges: %w", err)
 		}

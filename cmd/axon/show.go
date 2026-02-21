@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -12,8 +11,6 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/codewandler/axon"
-	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/types"
 	"github.com/spf13/cobra"
@@ -42,46 +39,29 @@ The output includes:
 }
 
 func runShow(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
 	nodeID := args[0]
 
 	if len(nodeID) < 4 {
 		return fmt.Errorf("node ID must be at least 4 characters")
 	}
 
-	// Get current directory for auto-lookup
-	cwd, err := os.Getwd()
+	cmdCtx, err := openDB(false)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return err
 	}
+	defer cmdCtx.Close()
 
-	// Resolve database location (read-only, so forWrite=false)
-	dbLoc, err := resolveDB(flagDBDir, flagLocal, cwd, false)
+	// Print database location
+	fmt.Printf("Using database: %s\n", cmdCtx.DBLoc.Path)
+
+	// Get Axon instance
+	ax, err := cmdCtx.Axon()
 	if err != nil {
 		return err
 	}
 
-	// Print database location
-	fmt.Printf("Using database: %s\n", dbLoc.Path)
-
-	// Open SQLite storage
-	storage, err := sqlite.New(dbLoc.Path)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-	defer storage.Close()
-
-	// Create axon instance
-	ax, err := axon.New(axon.Config{
-		Dir:     filepath.Dir(dbLoc.Dir),
-		Storage: storage,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create axon: %w", err)
-	}
-
 	// Find node(s) matching the ID prefix
-	nodes, err := findNodesByPrefix(ctx, ax.Graph(), nodeID)
+	nodes, err := findNodesByPrefix(cmdCtx.Ctx, ax.Graph(), nodeID)
 	if err != nil {
 		return err
 	}
@@ -100,7 +80,7 @@ func runShow(cmd *cobra.Command, args []string) error {
 
 	// Single match - show full details
 	node := nodes[0]
-	return showNodeDetails(ctx, ax.Graph(), node)
+	return showNodeDetails(cmdCtx.Ctx, ax.Graph(), node)
 }
 
 // findNodesByPrefix finds all nodes whose ID starts with the given prefix

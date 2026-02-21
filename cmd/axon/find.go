@@ -9,8 +9,6 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/codewandler/axon"
-	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/render"
 	"github.com/codewandler/axon/types"
@@ -87,37 +85,21 @@ func init() {
 }
 
 func runFind(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
-
-	// Get current directory for scoping
-	cwd, err := filepath.Abs(".")
+	cmdCtx, err := openDB(false)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return err
 	}
+	defer cmdCtx.Close()
 
-	// Resolve database location
-	dbLoc, err := resolveDB(flagDBDir, flagLocal, cwd, false)
+	// Get Axon instance
+	ax, err := cmdCtx.Axon()
 	if err != nil {
 		return err
 	}
 
-	// Open SQLite storage
-	storage, err := sqlite.New(dbLoc.Path)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-	defer storage.Close()
-
-	// Create axon instance
-	ax, err := axon.New(axon.Config{
-		Dir:     cwd,
-		Storage: storage,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create axon: %w", err)
-	}
-
 	g := ax.Graph()
+	ctx := cmdCtx.Ctx
+	cwd := cmdCtx.Cwd
 
 	// Build filter
 	filter := graph.NodeFilter{}

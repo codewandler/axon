@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/codewandler/axon"
+	"github.com/codewandler/axon/adapters/sqlite"
 )
 
 const (
@@ -170,4 +175,82 @@ func resolveDB(dbDir string, local bool, startPath string, forWrite bool) (*DBLo
 	}
 
 	return nil, ErrNoDatabase
+}
+
+// CommandContext holds common resources for CLI commands.
+// Use openDB() to create one. Always call Close() when done.
+type CommandContext struct {
+	// Ctx is a background context for the command.
+	Ctx context.Context
+	// Cwd is the current working directory.
+	Cwd string
+	// DBLoc contains database location information.
+	DBLoc *DBLocation
+	// Storage is the SQLite storage instance.
+	Storage *sqlite.Storage
+	// ax is the Axon instance (optional, created lazily).
+	ax *axon.Axon
+}
+
+// Axon returns the Axon instance, creating it lazily if needed.
+func (c *CommandContext) Axon() (*axon.Axon, error) {
+	if c.ax != nil {
+		return c.ax, nil
+	}
+	ax, err := axon.New(axon.Config{
+		Dir:     c.Cwd,
+		Storage: c.Storage,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create axon instance: %w", err)
+	}
+	c.ax = ax
+	return ax, nil
+}
+
+// Close closes the storage connection.
+func (c *CommandContext) Close() error {
+	if c.Storage != nil {
+		return c.Storage.Close()
+	}
+	return nil
+}
+
+// openDB opens the database and returns a CommandContext.
+// The caller must call Close() when done (typically via defer).
+//
+// Parameters:
+//   - forWrite: if true, creates the database directory if needed
+//
+// Example:
+//
+//	cmdCtx, err := openDB(false)
+//	if err != nil {
+//	    return err
+//	}
+//	defer cmdCtx.Close()
+func openDB(forWrite bool) (*CommandContext, error) {
+	ctx := context.Background()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	dbLoc, err := resolveDB(flagDBDir, flagLocal, cwd, forWrite)
+	if err != nil {
+		return nil, err
+	}
+
+	storage, err := sqlite.New(dbLoc.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	return &CommandContext{
+		Ctx:     ctx,
+		Cwd:     cwd,
+		DBLoc:   dbLoc,
+		Storage: storage,
+	}, nil
 }

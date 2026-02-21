@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 
-	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/graph"
 	"github.com/spf13/cobra"
 )
@@ -36,33 +34,18 @@ func init() {
 }
 
 func runEdges(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
-
-	// Get current directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
-	}
-
-	// Resolve database location
-	dbLoc, err := resolveDB(flagDBDir, flagLocal, cwd, false)
+	cmdCtx, err := openDB(false)
 	if err != nil {
 		return err
 	}
-
-	// Open SQLite storage
-	storage, err := sqlite.New(dbLoc.Path)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-	defer storage.Close()
+	defer cmdCtx.Close()
 
 	// Build scoped filter
-	scope := resolveScope(edgesGlobal, cwd)
+	scope := resolveScope(edgesGlobal, cmdCtx.Cwd)
 	filter := buildScopedEdgeFilter(scope)
 
 	// Query edge type counts
-	counts, err := storage.CountEdges(ctx, filter, graph.QueryOptions{
+	counts, err := cmdCtx.Storage.CountEdges(cmdCtx.Ctx, filter, graph.QueryOptions{
 		GroupBy: "type",
 		OrderBy: "count",
 		Desc:    true,

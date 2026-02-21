@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codewandler/axon"
-	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/spf13/cobra"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -68,39 +65,21 @@ type lastIndexedData struct {
 }
 
 func runStats(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
-
-	// Get current directory
-	cwd, err := os.Getwd()
+	cmdCtx, err := openDB(false)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return err
 	}
+	defer cmdCtx.Close()
 
-	// Resolve database location
-	dbLoc, err := resolveDB(flagDBDir, flagLocal, cwd, false)
+	// Get Axon instance for potential auto-indexing
+	ax, err := cmdCtx.Axon()
 	if err != nil {
 		return err
 	}
 
-	// Open SQLite storage
-	storage, err := sqlite.New(dbLoc.Path)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-	defer storage.Close()
-
-	// Create Axon instance for potential auto-indexing
-	ax, err := axon.New(axon.Config{
-		Dir:     cwd,
-		Storage: storage,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create axon instance: %w", err)
-	}
-
 	// Gather stats
 	data := statsData{
-		Database: storage.GetDatabasePath(),
+		Database: cmdCtx.Storage.GetDatabasePath(),
 	}
 
 	// File size
@@ -110,13 +89,13 @@ func runStats(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve scope using graph traversal
-	traverseOpts, err := resolveScopeTraversal(ctx, storage, ax, statsGlobal, cwd, 0)
+	traverseOpts, err := resolveScopeTraversal(cmdCtx.Ctx, cmdCtx.Storage, ax, statsGlobal, cmdCtx.Cwd, 0)
 	if err != nil {
 		return err
 	}
 
 	// Traverse and collect stats
-	results, err := storage.Traverse(ctx, traverseOpts)
+	results, err := cmdCtx.Storage.Traverse(cmdCtx.Ctx, traverseOpts)
 	if err != nil {
 		return fmt.Errorf("failed to traverse graph: %w", err)
 	}
@@ -162,7 +141,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 	}
 
 	// Last indexed (always from database, not affected by scope)
-	lastRun, err := storage.GetLastIndexRun(ctx)
+	lastRun, err := cmdCtx.Storage.GetLastIndexRun(cmdCtx.Ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get last index run: %w", err)
 	}

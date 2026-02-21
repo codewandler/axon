@@ -1,12 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 
-	"github.com/codewandler/axon"
-	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/spf13/cobra"
 )
 
@@ -35,44 +32,26 @@ func init() {
 }
 
 func runTypes(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
-
-	// Get current directory
-	cwd, err := os.Getwd()
+	cmdCtx, err := openDB(false)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return err
 	}
+	defer cmdCtx.Close()
 
-	// Resolve database location
-	dbLoc, err := resolveDB(flagDBDir, flagLocal, cwd, false)
+	// Get Axon instance for potential auto-indexing
+	ax, err := cmdCtx.Axon()
 	if err != nil {
 		return err
 	}
 
-	// Open SQLite storage
-	storage, err := sqlite.New(dbLoc.Path)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-	defer storage.Close()
-
-	// Create Axon instance for potential auto-indexing
-	ax, err := axon.New(axon.Config{
-		Dir:     cwd,
-		Storage: storage,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create axon instance: %w", err)
-	}
-
 	// Resolve scope using graph traversal
-	traverseOpts, err := resolveScopeTraversal(ctx, storage, ax, typesGlobal, cwd, 0)
+	traverseOpts, err := resolveScopeTraversal(cmdCtx.Ctx, cmdCtx.Storage, ax, typesGlobal, cmdCtx.Cwd, 0)
 	if err != nil {
 		return err
 	}
 
 	// Traverse and count types
-	results, err := storage.Traverse(ctx, traverseOpts)
+	results, err := cmdCtx.Storage.Traverse(cmdCtx.Ctx, traverseOpts)
 	if err != nil {
 		return fmt.Errorf("failed to traverse graph: %w", err)
 	}

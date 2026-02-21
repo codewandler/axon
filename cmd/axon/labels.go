@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 
-	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/graph"
 	"github.com/spf13/cobra"
 )
@@ -38,33 +36,18 @@ func init() {
 }
 
 func runLabels(cmd *cobra.Command, args []string) error {
-	ctx := context.Background()
-
-	// Get current directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
-	}
-
-	// Resolve database location
-	dbLoc, err := resolveDB(flagDBDir, flagLocal, cwd, false)
+	cmdCtx, err := openDB(false)
 	if err != nil {
 		return err
 	}
-
-	// Open SQLite storage
-	storage, err := sqlite.New(dbLoc.Path)
-	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-	defer storage.Close()
+	defer cmdCtx.Close()
 
 	// Build scoped filter
-	scope := resolveScope(labelsGlobal, cwd)
+	scope := resolveScope(labelsGlobal, cmdCtx.Cwd)
 	filter := buildScopedNodeFilter(scope)
 
 	// Query label counts
-	counts, err := storage.CountNodes(ctx, filter, graph.QueryOptions{
+	counts, err := cmdCtx.Storage.CountNodes(cmdCtx.Ctx, filter, graph.QueryOptions{
 		GroupBy: "label",
 		OrderBy: "count",
 		Desc:    true,
