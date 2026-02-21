@@ -39,6 +39,9 @@ var aqlLexer = lexer.MustStateful(lexer.Rules{
 		// Glob wildcards (standalone)
 		{Name: "Glob", Pattern: `[*?]+`},
 
+		// Pipe for edge type alternatives (must come before Punct)
+		{Name: "Pipe", Pattern: `\|`},
+
 		// Single character operators and punctuation
 		{Name: "Punct", Pattern: `[-(),.:[\]=<>]`},
 	},
@@ -57,5 +60,6 @@ const (
 	TokenPosParam   = "PosParam"
 	TokenIdent      = "Ident"
 	TokenGlob       = "Glob"
+	TokenPipe       = "Pipe"
 	TokenPunct      = "Punct"
 )

@@ -165,7 +165,8 @@ func (*NodePattern) patternElement() {}
 type EdgePattern struct {
 	Position  Position
 	Variable  string    // optional
-	Type      string    // optional, supports glob (*, con*)
+	Type      string    // single type, optional, supports glob (*, con*)
+	Types     []string  // multiple types with OR logic (e.g., [:contains|has])
 	Direction Direction // Outgoing, Incoming, Undirected
 	MinHops   *int      // nil = 1 (single hop)
 	MaxHops   *int      // nil = unbounded (only valid when MinHops != nil)
@@ -177,6 +178,23 @@ func (*EdgePattern) patternElement() {}
 // IsVariableLength returns true if this is a variable-length edge pattern.
 func (e *EdgePattern) IsVariableLength() bool {
 	return e.MinHops != nil
+}
+
+// HasMultipleTypes returns true if this edge matches multiple types (OR logic).
+func (e *EdgePattern) HasMultipleTypes() bool {
+	return len(e.Types) > 1
+}
+
+// AllTypes returns all edge types this pattern matches.
+// Returns Types if set, otherwise returns a single-element slice with Type (or empty if no type).
+func (e *EdgePattern) AllTypes() []string {
+	if len(e.Types) > 0 {
+		return e.Types
+	}
+	if e.Type != "" {
+		return []string{e.Type}
+	}
+	return nil
 }
 
 // Direction represents edge direction in a pattern.

@@ -253,6 +253,20 @@ func AnyEdgeOfType(edgeType string) *EdgePattern {
 	return &EdgePattern{Type: edgeType}
 }
 
+// EdgeTypes creates an anonymous edge pattern matching any of the given types (OR logic).
+// Example: EdgeTypes("contains", "has") matches [:contains|has]
+func EdgeTypes(types ...string) *EdgePattern {
+	return &EdgePattern{Types: types}
+}
+
+// WithTypes sets multiple edge types (OR logic) and returns the edge pattern for chaining.
+// Example: Edge("e").WithTypes("contains", "has") matches [e:contains|has]
+func (e *EdgePattern) WithTypes(types ...string) *EdgePattern {
+	e.Types = types
+	e.Type = "" // Clear single type when multi-type is set
+	return e
+}
+
 // WithHops sets variable-length edge hops (min..max).
 // Use -1 for unbounded max (e.g., VarHops(1, -1) for 1..* hops).
 func (e *EdgePattern) WithHops(min, max int) *EdgePattern {

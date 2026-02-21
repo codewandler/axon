@@ -132,12 +132,17 @@ IncomingEdge   = "<-" "[" [ EdgeInner ] "]" "-" ;
 UndirectedEdge = "-" "[" [ EdgeInner ] "]" "-" ;
 
 EdgeInner     = [ Variable ] [ ":" EdgeType ] [ Quantifier ] ;
-EdgeType      = Identifier | GlobPattern | "*" ;
+EdgeType      = Identifier { "|" Identifier } | GlobPattern | "*" ;
 Quantifier    = "*" [ HopRange ] ;
 HopRange      = Integer [ ".." Integer ] ;
 ```
 
-Edge quantifiers for variable-length paths:
+**Edge types** support multiple types with OR semantics:
+- `:contains` - single type
+- `:contains|has` - matches either "contains" OR "has" edges
+- `:contains|has|located_at` - matches any of the three types
+
+**Edge quantifiers** for variable-length paths:
 - `*` - one or more hops (1..unlimited)
 - `*3` - exactly 3 hops
 - `*1..3` - between 1 and 3 hops
@@ -288,6 +293,11 @@ WHERE root.name = 'src'
 SELECT child
 FROM (parent:fs:dir)-[:contains*1..3]->(child)
 WHERE parent.name = 'project'
+
+-- Multi-type edges (OR logic)
+SELECT child
+FROM (parent)-[:contains|has]->(child)
+WHERE parent.type = 'fs:dir'
 
 -- Incoming edges
 SELECT repo

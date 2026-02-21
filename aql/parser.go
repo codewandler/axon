@@ -258,11 +258,13 @@ type edgePatternGrammar struct {
 type edgeInnerGrammar struct {
 	Pos lexer.Position
 	// Simple capture: optionally colon, optionally ident, optionally colon, optionally ident
-	// This matches: [], [:type], [var], [var:type], [var:]
+	// This matches: [], [:type], [var], [var:type], [var:], [:type1|type2|...]
 	Colon1 bool   `parser:"@':'?"`
 	Ident1 string `parser:"@Ident?"`
 	Colon2 bool   `parser:"@':'?"`
 	Ident2 string `parser:"@Ident?"`
+	// Additional types for multi-type syntax: [:type1|type2]
+	RestTypes []string `parser:"( '|' @Ident )*"`
 }
 
 func (g *edgePatternGrammar) toAST() *EdgePattern {
@@ -272,19 +274,32 @@ func (g *edgePatternGrammar) toAST() *EdgePattern {
 
 	// Handle variable and type from inner struct
 	// Parsing results:
-	// []        -> C1=false I1="" C2=false I2=""
-	// [:type]   -> C1=true  I1="type" C2=false I2=""
-	// [var]     -> C1=false I1="var" C2=false I2=""
-	// [var:type]-> C1=false I1="var" C2=true I2="type"
-	// [var:]    -> C1=false I1="var" C2=true I2=""
+	// []           -> C1=false I1="" C2=false I2=""
+	// [:type]      -> C1=true  I1="type" C2=false I2=""
+	// [var]        -> C1=false I1="var" C2=false I2=""
+	// [var:type]   -> C1=false I1="var" C2=true I2="type"
+	// [var:]       -> C1=false I1="var" C2=true I2=""
+	// [:type1|t2]  -> C1=true  I1="type1" C2=false I2="" RestTypes=["t2"]
 	if g.Inner != nil {
 		if g.Inner.Colon1 && g.Inner.Ident1 != "" {
-			// [:type]
-			ep.Type = g.Inner.Ident1
+			// [:type] or [:type1|type2|...]
+			if len(g.Inner.RestTypes) > 0 {
+				// Multi-type: [:type1|type2]
+				ep.Types = append([]string{g.Inner.Ident1}, g.Inner.RestTypes...)
+			} else {
+				// Single type: [:type]
+				ep.Type = g.Inner.Ident1
+			}
 		} else if g.Inner.Ident1 != "" && g.Inner.Colon2 {
 			// [var:type] or [var:]
 			ep.Variable = g.Inner.Ident1
-			ep.Type = g.Inner.Ident2
+			if len(g.Inner.RestTypes) > 0 {
+				// Multi-type with variable: [var:type1|type2]
+				ep.Types = append([]string{g.Inner.Ident2}, g.Inner.RestTypes...)
+			} else {
+				// Single type: [var:type]
+				ep.Type = g.Inner.Ident2
+			}
 		} else if g.Inner.Ident1 != "" {
 			// [var]
 			ep.Variable = g.Inner.Ident1

@@ -816,6 +816,57 @@ func TestParser_Pattern(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:  "multi-type edge two types",
+			input: "SELECT child FROM (parent)-[:contains|has]->(child)",
+			check: func(t *testing.T, q *Query) {
+				ps := q.Select.From.(*PatternSource)
+				edge := ps.Patterns[0].Elements[1].(*EdgePattern)
+				if !edge.HasMultipleTypes() {
+					t.Fatal("expected multiple types")
+				}
+				if len(edge.Types) != 2 {
+					t.Fatalf("expected 2 types, got %d", len(edge.Types))
+				}
+				if edge.Types[0] != "contains" || edge.Types[1] != "has" {
+					t.Fatalf("expected [contains, has], got %v", edge.Types)
+				}
+				if edge.Type != "" {
+					t.Fatalf("expected Type to be empty when Types is set, got %q", edge.Type)
+				}
+			},
+		},
+		{
+			name:  "multi-type edge three types",
+			input: "SELECT child FROM (parent)-[:contains|has|located_at]->(child)",
+			check: func(t *testing.T, q *Query) {
+				ps := q.Select.From.(*PatternSource)
+				edge := ps.Patterns[0].Elements[1].(*EdgePattern)
+				if len(edge.Types) != 3 {
+					t.Fatalf("expected 3 types, got %d", len(edge.Types))
+				}
+				if edge.Types[0] != "contains" || edge.Types[1] != "has" || edge.Types[2] != "located_at" {
+					t.Fatalf("expected [contains, has, located_at], got %v", edge.Types)
+				}
+			},
+		},
+		{
+			name:  "multi-type edge with variable",
+			input: "SELECT e FROM (a)-[e:contains|has]->(b)",
+			check: func(t *testing.T, q *Query) {
+				ps := q.Select.From.(*PatternSource)
+				edge := ps.Patterns[0].Elements[1].(*EdgePattern)
+				if edge.Variable != "e" {
+					t.Fatalf("expected variable 'e', got %q", edge.Variable)
+				}
+				if len(edge.Types) != 2 {
+					t.Fatalf("expected 2 types, got %d", len(edge.Types))
+				}
+				if edge.Types[0] != "contains" || edge.Types[1] != "has" {
+					t.Fatalf("expected [contains, has], got %v", edge.Types)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -392,6 +392,62 @@ func TestBuilder_Distinct(t *testing.T) {
 	}
 }
 
+func TestBuilder_MultiTypeEdge(t *testing.T) {
+	// EdgeTypes function
+	pattern := Pat(N("parent")).
+		To(EdgeTypes("contains", "has"), N("child")).
+		Build()
+
+	edge := pattern.Elements[1].(*EdgePattern)
+	if !edge.HasMultipleTypes() {
+		t.Fatal("expected HasMultipleTypes() = true")
+	}
+	if len(edge.Types) != 2 {
+		t.Fatalf("expected 2 types, got %d", len(edge.Types))
+	}
+	if edge.Types[0] != "contains" || edge.Types[1] != "has" {
+		t.Fatalf("expected [contains, has], got %v", edge.Types)
+	}
+}
+
+func TestBuilder_WithTypes(t *testing.T) {
+	// WithTypes method
+	pattern := Pat(N("parent")).
+		To(Edge("e").WithTypes("contains", "has", "located_at"), N("child")).
+		Build()
+
+	edge := pattern.Elements[1].(*EdgePattern)
+	if edge.Variable != "e" {
+		t.Fatalf("expected variable 'e', got %q", edge.Variable)
+	}
+	if len(edge.Types) != 3 {
+		t.Fatalf("expected 3 types, got %d", len(edge.Types))
+	}
+	if edge.Type != "" {
+		t.Fatalf("expected Type to be empty when Types is set, got %q", edge.Type)
+	}
+}
+
+func TestBuilder_AllTypes(t *testing.T) {
+	// Single type
+	e1 := &EdgePattern{Type: "contains"}
+	if types := e1.AllTypes(); len(types) != 1 || types[0] != "contains" {
+		t.Fatalf("expected [contains], got %v", types)
+	}
+
+	// Multiple types
+	e2 := &EdgePattern{Types: []string{"contains", "has"}}
+	if types := e2.AllTypes(); len(types) != 2 || types[0] != "contains" || types[1] != "has" {
+		t.Fatalf("expected [contains, has], got %v", types)
+	}
+
+	// No type
+	e3 := &EdgePattern{}
+	if types := e3.AllTypes(); types != nil {
+		t.Fatalf("expected nil, got %v", types)
+	}
+}
+
 func TestBuilder_Validation(t *testing.T) {
 	// Build a query and validate it
 	// Note: Col("file", "data", "ext") creates selector file.data.ext
