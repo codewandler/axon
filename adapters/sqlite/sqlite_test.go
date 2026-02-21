@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -483,5 +484,62 @@ func TestNewCreatesFile(t *testing.T) {
 	// File should exist now
 	if _, err := os.Stat(dbPath); err != nil {
 		t.Errorf("database file should exist: %v", err)
+	}
+}
+
+func TestConcurrentWrites(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	const numGoroutines = 10
+	const nodesPerGoroutine = 20
+
+	errCh := make(chan error, numGoroutines)
+	doneCh := make(chan bool, numGoroutines)
+
+	// Spawn multiple goroutines writing nodes concurrently
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			for j := 0; j < nodesPerGoroutine; j++ {
+				uri := filepath.Join("file:///", "test", fmt.Sprintf("%d-%d.txt", id, j))
+				key := filepath.Join("/test", fmt.Sprintf("%d-%d.txt", id, j))
+				node := graph.NewNode("fs:file").
+					WithURI(uri).
+					WithKey(key).
+					WithGeneration("gen-1")
+
+				if err := s.PutNode(ctx, node); err != nil {
+					errCh <- err
+					return
+				}
+			}
+			doneCh <- true
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case err := <-errCh:
+			t.Fatalf("concurrent write failed: %v", err)
+		case <-doneCh:
+			// Success
+		}
+	}
+
+	// Flush to ensure all writes are persisted
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	// Verify all nodes were written
+	nodes, err := s.FindNodes(ctx, graph.NodeFilter{}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes failed: %v", err)
+	}
+
+	expectedCount := numGoroutines * nodesPerGoroutine
+	if len(nodes) != expectedCount {
+		t.Errorf("expected %d nodes, got %d", expectedCount, len(nodes))
 	}
 }

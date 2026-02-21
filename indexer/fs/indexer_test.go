@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/codewandler/axon/adapters/sqlite"
@@ -206,5 +207,68 @@ func TestIndexerMeta(t *testing.T) {
 
 	if idx.Handles("https://example.com") {
 		t.Error("should not handle https:// URIs")
+	}
+}
+
+func TestIndexSymlink(t *testing.T) {
+	ctx := context.Background()
+	testDir := t.TempDir()
+	g := setupGraph(t)
+
+	// Create a file and a symlink to it
+	targetFile := filepath.Join(testDir, "target.txt")
+	if err := os.WriteFile(targetFile, []byte("content"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	symlinkPath := filepath.Join(testDir, "link.txt")
+	if err := os.Symlink(targetFile, symlinkPath); err != nil {
+		if os.IsPermission(err) {
+			t.Skip("symlink creation not permitted")
+		}
+		t.Fatalf("Symlink failed: %v", err)
+	}
+
+	// Index the directory
+	idx := New(Config{})
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+
+	ictx := &indexer.Context{
+		Root:       types.PathToURI(testDir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	if err := idx.Index(ctx, ictx); err != nil {
+		t.Fatalf("Index failed: %v", err)
+	}
+
+	// Flush to ensure writes are visible
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	// Verify both file and symlink were indexed
+	nodes, err := g.FindNodes(ctx, graph.NodeFilter{}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes failed: %v", err)
+	}
+
+	var foundTarget, foundSymlink bool
+	for _, node := range nodes {
+		if node.Type == types.TypeFile && strings.HasSuffix(node.URI, "target.txt") {
+			foundTarget = true
+		}
+		if node.Type == types.TypeLink && strings.HasSuffix(node.URI, "link.txt") {
+			foundSymlink = true
+		}
+	}
+
+	if !foundTarget {
+		t.Error("target file not indexed")
+	}
+	if !foundSymlink {
+		t.Error("symlink not indexed")
 	}
 }
