@@ -222,7 +222,7 @@ No package-level doc comments.
 - [x] 1. Fix SQLite `flushBatch` silent error swallowing
 - [x] 2. Add context cancellation checks to goroutines in `axon.go`
 - [x] 3. Fix shared mutable node across subscribers (potential data race)
-- [ ] 4. Add consistent error wrapping throughout codebase
+- [x] 4. Add consistent error wrapping throughout codebase (core paths in axon.go, sqlite init/migrate)
 - [ ] 5. Break up Storage interface into smaller composable interfaces
 - [ ] 6. Add context to SQLite init/migrate operations
 - [ ] 7. Extract CLI boilerplate into shared helpers

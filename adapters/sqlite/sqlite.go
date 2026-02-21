@@ -69,7 +69,7 @@ func New(path string) (*Storage, error) {
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("opening database %s: %w", path, err)
 	}
 
 	// For in-memory with shared cache, we need to keep at least one connection
@@ -90,7 +90,7 @@ func New(path string) (*Storage, error) {
 
 	if err := s.init(); err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("initializing database: %w", err)
 	}
 
 	// Start background flush loop
@@ -119,11 +119,14 @@ func (s *Storage) init() error {
 		PRAGMA busy_timeout=30000;
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("setting pragmas: %w", err)
 	}
 
 	// Run migrations
-	return s.migrate()
+	if err := s.migrate(); err != nil {
+		return fmt.Errorf("running migrations: %w", err)
+	}
+	return nil
 }
 
 // migrate runs database migrations to bring schema to current version.
@@ -135,14 +138,14 @@ func (s *Storage) migrate() error {
 		);
 	`)
 	if err != nil {
-		return err
+		return fmt.Errorf("creating schema_version table: %w", err)
 	}
 
 	// Get current version
 	var version int
 	row := s.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`)
 	if err := row.Scan(&version); err != nil {
-		return err
+		return fmt.Errorf("reading schema version: %w", err)
 	}
 
 	// Define migrations
@@ -291,17 +294,17 @@ func (s *Storage) migrate() error {
 			if hasRoot {
 				// Column already exists (from migration 1 on fresh db), just record version
 				if _, err := s.db.Exec(`INSERT INTO schema_version (version) VALUES (?)`, m.version); err != nil {
-					return err
+					return fmt.Errorf("recording migration version %d: %w", m.version, err)
 				}
 				continue
 			}
 		}
 
 		if _, err := s.db.Exec(m.sql); err != nil {
-			return err
+			return fmt.Errorf("executing migration %d: %w", m.version, err)
 		}
 		if _, err := s.db.Exec(`INSERT INTO schema_version (version) VALUES (?)`, m.version); err != nil {
-			return err
+			return fmt.Errorf("recording migration version %d: %w", m.version, err)
 		}
 	}
 

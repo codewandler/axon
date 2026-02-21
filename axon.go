@@ -2,6 +2,7 @@ package axon
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"time"
@@ -46,7 +47,7 @@ func New(cfg Config) (*Axon, error) {
 	// Resolve to absolute path
 	absDir, err := filepath.Abs(cfg.Dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolving directory %q: %w", cfg.Dir, err)
 	}
 	cfg.Dir = absDir
 
@@ -54,7 +55,7 @@ func New(cfg Config) (*Axon, error) {
 	if cfg.Storage == nil {
 		s, err := sqlite.New(":memory:")
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("creating default storage: %w", err)
 		}
 		cfg.Storage = s
 	}
@@ -134,7 +135,7 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 	// Resolve to absolute path
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolving path %q: %w", path, err)
 	}
 
 	uri := types.PathToURI(absPath)
@@ -282,7 +283,7 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 		close(events)
 		dispatcherWg.Wait()
 		subscriberWg.Wait()
-		return nil, err
+		return nil, fmt.Errorf("indexing %s: %w", uri, err)
 	}
 
 	// Close events channel and wait for dispatcher and all subscribers
@@ -292,7 +293,7 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 
 	// Flush storage buffer before post-index (so all nodes are queryable)
 	if err := a.storage.Flush(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("flushing storage: %w", err)
 	}
 
 	// Run post-index stage for indexers that implement PostIndexer
@@ -316,7 +317,7 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 
 	// Flush again after post-index
 	if err := a.storage.Flush(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("flushing storage after post-index: %w", err)
 	}
 
 	// Clean up orphaned edges (edges pointing to deleted nodes)
@@ -329,7 +330,7 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 		}
 		orphanedEdges, err = a.storage.DeleteOrphanedEdges(ctx)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("deleting orphaned edges: %w", err)
 		}
 		if prog != nil {
 			prog <- progress.Completed("gc", orphanedEdges)
