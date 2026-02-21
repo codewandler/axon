@@ -1,6 +1,9 @@
 package graph
 
-import "context"
+import (
+	"context"
+	"log"
+)
 
 // Direction specifies the traversal direction for neighbors.
 type Direction int
@@ -128,7 +131,9 @@ func (g *Graph) Neighbors(ctx context.Context, nodeID string, dir Direction) ([]
 	for id := range neighborIDs {
 		node, err := g.storage.GetNode(ctx, id)
 		if err != nil {
-			continue // Skip nodes that can't be found (shouldn't happen normally)
+			// Log warning - this indicates a data integrity issue (orphaned edge)
+			log.Printf("graph: Neighbors: failed to get node %s: %v (possible orphaned edge)", id, err)
+			continue
 		}
 		nodes = append(nodes, node)
 	}
@@ -150,6 +155,8 @@ func (g *Graph) Children(ctx context.Context, nodeID string) ([]*Node, error) {
 		if e.Type == "contains" || e.Type == "has" {
 			node, err := g.storage.GetNode(ctx, e.To)
 			if err != nil {
+				// Log warning - this indicates a data integrity issue (orphaned edge)
+				log.Printf("graph: Children: failed to get node %s: %v (possible orphaned edge)", e.To, err)
 				continue
 			}
 			nodes = append(nodes, node)
@@ -173,6 +180,8 @@ func (g *Graph) Parents(ctx context.Context, nodeID string) ([]*Node, error) {
 		if e.Type == "contained_by" || e.Type == "belongs_to" {
 			node, err := g.storage.GetNode(ctx, e.To)
 			if err != nil {
+				// Log warning - this indicates a data integrity issue (orphaned edge)
+				log.Printf("graph: Parents: failed to get node %s: %v (possible orphaned edge)", e.To, err)
 				continue
 			}
 			nodes = append(nodes, node)
