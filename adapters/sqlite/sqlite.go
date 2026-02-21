@@ -110,8 +110,12 @@ func (s *Storage) Close() error {
 }
 
 func (s *Storage) init() error {
+	// Use a timeout context for initialization to prevent hangs
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Enable WAL mode and performance settings
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
 		PRAGMA journal_mode=WAL;
 		PRAGMA synchronous=NORMAL;
 		PRAGMA cache_size=10000;
@@ -123,16 +127,16 @@ func (s *Storage) init() error {
 	}
 
 	// Run migrations
-	if err := s.migrate(); err != nil {
+	if err := s.migrate(ctx); err != nil {
 		return fmt.Errorf("running migrations: %w", err)
 	}
 	return nil
 }
 
 // migrate runs database migrations to bring schema to current version.
-func (s *Storage) migrate() error {
+func (s *Storage) migrate(ctx context.Context) error {
 	// Create migrations table if not exists
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_version (
 			version INTEGER PRIMARY KEY
 		);
@@ -143,7 +147,7 @@ func (s *Storage) migrate() error {
 
 	// Get current version
 	var version int
-	row := s.db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_version`)
+	row := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_version`)
 	if err := row.Scan(&version); err != nil {
 		return fmt.Errorf("reading schema version: %w", err)
 	}
@@ -271,9 +275,9 @@ func (s *Storage) migrate() error {
 		// For migration 2 (adding root column), check if column already exists
 		if m.version == 2 {
 			var hasRoot bool
-			rows, err := s.db.Query(`PRAGMA table_info(nodes)`)
+			rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(nodes)`)
 			if err != nil {
-				return err
+				return fmt.Errorf("checking table info for migration %d: %w", m.version, err)
 			}
 			for rows.Next() {
 				var cid int
@@ -282,7 +286,7 @@ func (s *Storage) migrate() error {
 				var dfltValue any
 				if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
 					rows.Close()
-					return err
+					return fmt.Errorf("scanning table info for migration %d: %w", m.version, err)
 				}
 				if name == "root" {
 					hasRoot = true
@@ -293,17 +297,17 @@ func (s *Storage) migrate() error {
 
 			if hasRoot {
 				// Column already exists (from migration 1 on fresh db), just record version
-				if _, err := s.db.Exec(`INSERT INTO schema_version (version) VALUES (?)`, m.version); err != nil {
+				if _, err := s.db.ExecContext(ctx, `INSERT INTO schema_version (version) VALUES (?)`, m.version); err != nil {
 					return fmt.Errorf("recording migration version %d: %w", m.version, err)
 				}
 				continue
 			}
 		}
 
-		if _, err := s.db.Exec(m.sql); err != nil {
+		if _, err := s.db.ExecContext(ctx, m.sql); err != nil {
 			return fmt.Errorf("executing migration %d: %w", m.version, err)
 		}
-		if _, err := s.db.Exec(`INSERT INTO schema_version (version) VALUES (?)`, m.version); err != nil {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO schema_version (version) VALUES (?)`, m.version); err != nil {
 			return fmt.Errorf("recording migration version %d: %w", m.version, err)
 		}
 	}
