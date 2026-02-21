@@ -76,8 +76,16 @@ func Tree(ctx context.Context, g *graph.Graph, rootID string, opts Options) (str
 		return "", err
 	}
 
+	// Pre-compute which nodes have matching descendants (optimization to avoid O(N²))
+	// This set contains node IDs that either match the filter or have descendants that match.
+	var hasMatchingDescendants map[string]bool
+	if len(opts.TypeFilter) > 0 {
+		hasMatchingDescendants = make(map[string]bool)
+		precomputeMatchingDescendants(ctx, g, root, opts.TypeFilter, opts.MaxDepth, 0, hasMatchingDescendants)
+	}
+
 	var sb strings.Builder
-	err = renderNode(ctx, g, root, &sb, "", true, 0, opts)
+	err = renderNode(ctx, g, root, &sb, "", true, 0, opts, hasMatchingDescendants)
 	if err != nil {
 		return "", err
 	}
@@ -94,7 +102,7 @@ func TreeFromURI(ctx context.Context, g *graph.Graph, uri string, opts Options) 
 	return Tree(ctx, g, node.ID, opts)
 }
 
-func renderNode(ctx context.Context, g *graph.Graph, node *graph.Node, sb *strings.Builder, prefix string, isLast bool, depth int, opts Options) error {
+func renderNode(ctx context.Context, g *graph.Graph, node *graph.Node, sb *strings.Builder, prefix string, isLast bool, depth int, opts Options, matchCache map[string]bool) error {
 	// Check if this node matches the type filter
 	showNode := matchesTypeFilter(node.Type, opts.TypeFilter)
 
@@ -110,17 +118,10 @@ func renderNode(ctx context.Context, g *graph.Graph, node *graph.Node, sb *strin
 	})
 
 	// If type filter is set and this node doesn't match,
-	// we still need to check if any descendants match
+	// check the pre-computed cache to see if any descendants match
 	if len(opts.TypeFilter) > 0 && !showNode {
-		// Check if any children would be rendered (recursively)
-		hasMatchingDescendants := false
-		for _, child := range children {
-			if hasDescendantsMatching(ctx, g, child, opts.TypeFilter, opts.MaxDepth, depth+1) {
-				hasMatchingDescendants = true
-				break
-			}
-		}
-		if !hasMatchingDescendants {
+		// Use pre-computed cache (O(1) lookup instead of O(N) traversal)
+		if matchCache != nil && !matchCache[node.ID] {
 			return nil // Skip this entire subtree
 		}
 	}
@@ -189,7 +190,7 @@ func renderNode(ctx context.Context, g *graph.Graph, node *graph.Node, sb *strin
 
 	for i, child := range children {
 		isLastChild := i == len(children)-1
-		if err := renderNode(ctx, g, child, sb, childPrefix, isLastChild, depth+1, opts); err != nil {
+		if err := renderNode(ctx, g, child, sb, childPrefix, isLastChild, depth+1, opts, matchCache); err != nil {
 			return err
 		}
 	}
@@ -226,25 +227,43 @@ func matchGlob(pattern, s string) bool {
 	return matched
 }
 
-// hasDescendantsMatching checks if any descendants of a node match the type filter.
-func hasDescendantsMatching(ctx context.Context, g *graph.Graph, node *graph.Node, filter []string, maxDepth, currentDepth int) bool {
-	if matchesTypeFilter(node.Type, filter) {
-		return true
-	}
+// precomputeMatchingDescendants performs a single traversal to mark all nodes
+// that either match the filter or have descendants that match.
+// This replaces the O(N²) hasDescendantsMatching approach with O(N).
+// Returns true if this node or any descendant matches.
+func precomputeMatchingDescendants(ctx context.Context, g *graph.Graph, node *graph.Node, filter []string, maxDepth, currentDepth int, cache map[string]bool) bool {
+	// Check if this node matches
+	nodeMatches := matchesTypeFilter(node.Type, filter)
 
+	// If at depth limit, only this node's match matters
 	if maxDepth > 0 && currentDepth >= maxDepth {
-		return false
+		if nodeMatches {
+			cache[node.ID] = true
+		}
+		return nodeMatches
 	}
 
+	// Recursively check children
 	children, err := g.Children(ctx, node.ID)
 	if err != nil {
-		return false
+		if nodeMatches {
+			cache[node.ID] = true
+		}
+		return nodeMatches
 	}
 
+	hasMatchingDescendant := false
 	for _, child := range children {
-		if hasDescendantsMatching(ctx, g, child, filter, maxDepth, currentDepth+1) {
-			return true
+		if precomputeMatchingDescendants(ctx, g, child, filter, maxDepth, currentDepth+1, cache) {
+			hasMatchingDescendant = true
+			// Don't break - need to process all children to build complete cache
 		}
+	}
+
+	// Mark this node if it or any descendant matches
+	if nodeMatches || hasMatchingDescendant {
+		cache[node.ID] = true
+		return true
 	}
 	return false
 }
