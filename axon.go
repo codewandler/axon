@@ -3,6 +3,7 @@ package axon
 import (
 	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 	"sync"
 	"time"
@@ -266,11 +267,18 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 						if i > 0 && event.Node != nil {
 							eventCopy.Node = event.Node.Clone()
 						}
-						// Use select to avoid blocking on full subscriber channel when context is cancelled
+						// Non-blocking send to subscriber channel
+						// If channel is full, log warning and drop to prevent blocking the dispatcher.
+						// This is intentional backpressure handling - subscribers should be fast.
 						select {
 						case info.eventCh <- eventCopy:
+							// Event sent successfully
 						case <-ctx.Done():
 							return
+						default:
+							// Channel full - log warning and skip to prevent blocking
+							log.Printf("axon: dispatcher: subscriber %s channel full, dropping event %v at %s",
+								sub.Name(), eventCopy.Type, eventCopy.Path)
 						}
 					}
 				}
