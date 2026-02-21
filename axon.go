@@ -19,6 +19,22 @@ import (
 	"github.com/codewandler/axon/types"
 )
 
+const (
+	// eventChannelBuffer is the buffer size for event channels.
+	// This provides backpressure - if subscribers are slow, events will queue
+	// up to this limit before the dispatcher drops them with a warning.
+	eventChannelBuffer = 100
+)
+
+// DefaultFSIgnore contains the default patterns to ignore when indexing.
+var DefaultFSIgnore = []string{
+	".git",
+	".axon",
+	"node_modules",
+	"__pycache__",
+	".DS_Store",
+}
+
 // Config holds configuration for an Axon instance.
 type Config struct {
 	// Dir is the working directory. Defaults to current directory.
@@ -77,7 +93,7 @@ func New(cfg Config) (*Axon, error) {
 	// Default ignore patterns
 	ignore := cfg.FSIgnore
 	if len(ignore) == 0 {
-		ignore = []string{".git", ".axon", "node_modules", "__pycache__", ".DS_Store"}
+		ignore = DefaultFSIgnore
 	}
 	idxRegistry.Register(fs.New(fs.Config{Ignore: ignore}))
 	idxRegistry.Register(git.New())
@@ -149,7 +165,7 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 	}
 
 	// Create event channel for indexer communication
-	events := make(chan indexer.Event, 100)
+	events := make(chan indexer.Event, eventChannelBuffer)
 
 	// Create index context first (emitter needs it for counting)
 	ictx := &indexer.Context{
@@ -179,7 +195,7 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 	var subscriberWg sync.WaitGroup
 	for _, idx := range a.indexers.All() {
 		if len(idx.Subscriptions()) > 0 {
-			ch := make(chan indexer.Event, 100)
+			ch := make(chan indexer.Event, eventChannelBuffer)
 			subscriberMap[idx.Name()] = &subscriberInfo{idx: idx, eventCh: ch}
 
 			subscriberWg.Add(1)
