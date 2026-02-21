@@ -1,0 +1,181 @@
+package axon
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/codewandler/axon/graph"
+	"github.com/codewandler/axon/types"
+)
+
+func setupTestDir(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	// Create structure:
+	// dir/
+	//   file1.txt
+	//   subdir/
+	//     file2.txt
+	//   .git/        (should be ignored)
+	//     config
+
+	if err := os.WriteFile(filepath.Join(dir, "file1.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	subdir := filepath.Join(dir, "subdir")
+	if err := os.Mkdir(subdir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "file2.txt"), []byte("world"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.Mkdir(gitDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[core]"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	return dir
+}
+
+func TestAxonNew(t *testing.T) {
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	if ax.Graph() == nil {
+		t.Error("Graph() returned nil")
+	}
+}
+
+func TestAxonIndex(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	result, err := ax.Index(ctx, "")
+	if err != nil {
+		t.Fatalf("Index failed: %v", err)
+	}
+
+	// Should have file1.txt, file2.txt = 2 files
+	if result.Files != 2 {
+		t.Errorf("expected 2 files, got %d", result.Files)
+	}
+
+	// Should have dir, subdir = 2 directories
+	if result.Directories != 2 {
+		t.Errorf("expected 2 directories, got %d", result.Directories)
+	}
+
+	// .git should be ignored
+	nodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{URIPrefix: types.PathToURI(filepath.Join(dir, ".git"))})
+	if err != nil {
+		t.Fatalf("FindNodes failed: %v", err)
+	}
+	if len(nodes) != 0 {
+		t.Errorf("expected .git to be ignored, found %d nodes", len(nodes))
+	}
+}
+
+func TestAxonReindex(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// First index
+	_, err = ax.Index(ctx, "")
+	if err != nil {
+		t.Fatalf("First Index failed: %v", err)
+	}
+
+	// Add a new file
+	if err := os.WriteFile(filepath.Join(dir, "newfile.txt"), []byte("new"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove an existing file
+	if err := os.Remove(filepath.Join(dir, "file1.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reindex
+	result, err := ax.Index(ctx, "")
+	if err != nil {
+		t.Fatalf("Reindex failed: %v", err)
+	}
+
+	// Should have newfile.txt, file2.txt = 2 files
+	if result.Files != 2 {
+		t.Errorf("expected 2 files after reindex, got %d", result.Files)
+	}
+
+	// Should have removed 1 stale node (file1.txt)
+	if result.StaleRemoved < 1 {
+		t.Errorf("expected at least 1 stale entry removed, got %d", result.StaleRemoved)
+	}
+
+	// file1.txt should no longer exist
+	_, err = ax.Graph().GetNodeByURI(ctx, types.PathToURI(filepath.Join(dir, "file1.txt")))
+	if err == nil {
+		t.Error("file1.txt should have been removed from graph")
+	}
+
+	// newfile.txt should exist
+	_, err = ax.Graph().GetNodeByURI(ctx, types.PathToURI(filepath.Join(dir, "newfile.txt")))
+	if err != nil {
+		t.Error("newfile.txt should exist in graph")
+	}
+}
+
+func TestAxonCustomIgnore(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestDir(t)
+
+	// Don't ignore .git, but ignore subdir
+	ax, err := New(Config{
+		Dir:      dir,
+		FSIgnore: []string{"subdir"},
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	result, err := ax.Index(ctx, "")
+	if err != nil {
+		t.Fatalf("Index failed: %v", err)
+	}
+
+	// Should have file1.txt, config = 2 files (.git not ignored, but subdir is)
+	if result.Files != 2 {
+		t.Errorf("expected 2 files, got %d", result.Files)
+	}
+
+	// subdir should be ignored
+	nodes, err := ax.Graph().FindNodes(ctx, graph.NodeFilter{URIPrefix: types.PathToURI(filepath.Join(dir, "subdir"))})
+	if err != nil {
+		t.Fatalf("FindNodes failed: %v", err)
+	}
+	if len(nodes) != 0 {
+		t.Errorf("expected subdir to be ignored, found %d nodes", len(nodes))
+	}
+}

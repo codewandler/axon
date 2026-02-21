@@ -1,0 +1,44 @@
+package graph
+
+import "context"
+
+// NodeFilter specifies criteria for finding nodes.
+type NodeFilter struct {
+	Type      string // Filter by node type (empty = any)
+	URIPrefix string // Filter by URI prefix (empty = any)
+}
+
+// Storage defines the interface for graph persistence.
+type Storage interface {
+	// Node operations
+	PutNode(ctx context.Context, node *Node) error
+	GetNode(ctx context.Context, id string) (*Node, error)
+	GetNodeByURI(ctx context.Context, uri string) (*Node, error)
+	GetNodeByKey(ctx context.Context, nodeType, key string) (*Node, error)
+	DeleteNode(ctx context.Context, id string) error
+
+	// Edge operations
+	PutEdge(ctx context.Context, edge *Edge) error
+	GetEdge(ctx context.Context, id string) (*Edge, error)
+	DeleteEdge(ctx context.Context, id string) error
+
+	// Traversal
+	GetEdgesFrom(ctx context.Context, nodeID string) ([]*Edge, error)
+	GetEdgesTo(ctx context.Context, nodeID string) ([]*Edge, error)
+
+	// Queries
+	FindNodes(ctx context.Context, filter NodeFilter) ([]*Node, error)
+
+	// Staleness management
+	// DeleteStaleNodes removes nodes with the given URI prefix that don't have the current generation.
+	// Returns the number of deleted nodes.
+	DeleteStaleNodes(ctx context.Context, uriPrefix, currentGen string) (int, error)
+
+	// DeleteStaleEdges removes edges that reference deleted nodes or don't have the current generation.
+	// Returns the number of deleted edges.
+	DeleteStaleEdges(ctx context.Context, currentGen string) (int, error)
+
+	// DeleteOrphanedEdges removes edges where either endpoint node no longer exists.
+	// Returns the number of deleted edges.
+	DeleteOrphanedEdges(ctx context.Context) (int, error)
+}

@@ -1,0 +1,97 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/codewandler/axon"
+	"github.com/codewandler/axon/render"
+	"github.com/codewandler/axon/types"
+	"github.com/spf13/cobra"
+)
+
+var (
+	treeDepth     int
+	treeShowIDs   bool
+	treeShowTypes bool
+)
+
+var treeCmd = &cobra.Command{
+	Use:   "tree [node-id|path]",
+	Short: "Display graph as a tree",
+	Long: `Display the indexed graph as a tree structure.
+
+If no argument is provided, shows the tree from the current directory.
+You can specify a node ID or a path to start from.
+
+The output includes node IDs that can be used for further queries.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runTree,
+}
+
+func init() {
+	treeCmd.Flags().IntVarP(&treeDepth, "depth", "d", 3, "Maximum depth to display (0 for unlimited)")
+	treeCmd.Flags().BoolVar(&treeShowIDs, "ids", true, "Show node IDs")
+	treeCmd.Flags().BoolVar(&treeShowTypes, "types", true, "Show node types")
+}
+
+func runTree(cmd *cobra.Command, args []string) error {
+	ctx := context.Background()
+
+	// Determine starting point
+	startPath := "."
+	if len(args) > 0 {
+		startPath = args[0]
+	}
+
+	// Resolve to absolute path
+	absPath, err := filepath.Abs(startPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve path: %w", err)
+	}
+
+	// Check path exists
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return fmt.Errorf("path does not exist: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("path is not a directory: %s", absPath)
+	}
+
+	// Create axon instance and index
+	ax, err := axon.New(axon.Config{Dir: absPath})
+	if err != nil {
+		return fmt.Errorf("failed to create axon: %w", err)
+	}
+
+	// Index first (since we're using in-memory storage)
+	_, err = ax.Index(ctx, "")
+	if err != nil {
+		return fmt.Errorf("indexing failed: %w", err)
+	}
+
+	// Find root node
+	uri := types.PathToURI(absPath)
+	rootNode, err := ax.Graph().GetNodeByURI(ctx, uri)
+	if err != nil {
+		return fmt.Errorf("failed to find root node: %w", err)
+	}
+
+	// Render tree
+	opts := render.Options{
+		MaxDepth:  treeDepth,
+		ShowIDs:   treeShowIDs,
+		ShowTypes: treeShowTypes,
+	}
+
+	output, err := render.Tree(ctx, ax.Graph(), rootNode.ID, opts)
+	if err != nil {
+		return fmt.Errorf("failed to render tree: %w", err)
+	}
+
+	fmt.Print(output)
+	return nil
+}
