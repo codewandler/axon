@@ -1356,64 +1356,35 @@ func (s *Storage) compileVariableLengthPattern(q *aql.Query, src *aql.PatternSou
 		maxHops = *edge.MaxHops
 	}
 
+	// For bounded hops with a reasonable max (<=10), use unrolled JOIN chains.
+	// This is dramatically faster than CTEs because SQLite can push LIMIT
+	// through JOINs but must fully materialize CTEs before applying LIMIT.
+	if maxHops > 0 && maxHops <= 10 {
+		return s.compileUnrolledVariableLength(q, startNode, edge, endNode, minHops, maxHops)
+	}
+
+	// Unbounded or very deep: use recursive CTE with optimizations
+	return s.compileCTEVariableLength(q, startNode, edge, endNode, minHops, maxHops)
+}
+
+// compileUnrolledVariableLength generates a UNION ALL of JOIN chains for each
+// hop depth. This is dramatically faster than a recursive CTE because SQLite
+// can push LIMIT through JOINs, whereas CTEs are fully materialized first.
+//
+// For (start:T1)-[:type*1..3]->(end:T2) LIMIT 5, this generates:
+//
+//	SELECT n_end.* FROM edges e0 ... JOIN nodes n_end ... WHERE ... -- 1 hop
+//	UNION ALL
+//	SELECT n_end.* FROM edges e0 JOIN edges e1 ... JOIN nodes n_end ... -- 2 hops
+//	UNION ALL
+//	SELECT n_end.* FROM edges e0 JOIN edges e1 JOIN edges e2 ... -- 3 hops
+//	LIMIT 5
+func (s *Storage) compileUnrolledVariableLength(q *aql.Query, startNode *aql.NodePattern, edge *aql.EdgePattern, endNode *aql.NodePattern, minHops, maxHops int) (string, []any, graph.ResultType, error) {
 	var args []any
-	var whereClauses []string
+	var sql strings.Builder
+	hasEdgeType := edge.Type != "" || len(edge.Types) > 0
 
-	// Build CTE for recursive path finding
-	cteSQL := "WITH RECURSIVE paths(start_id, end_id, depth) AS (\n"
-
-	// Base case: direct edges
-	cteSQL += "  SELECT e.from_id, e.to_id, 1\n"
-	cteSQL += "  FROM edges e\n"
-
-	// Edge type filter
-	if len(edge.Types) > 1 {
-		placeholders := make([]string, len(edge.Types))
-		for i := range edge.Types {
-			placeholders[i] = "?"
-			args = append(args, edge.Types[i])
-		}
-		cteSQL += fmt.Sprintf("  WHERE e.type IN (%s)\n", strings.Join(placeholders, ", "))
-	} else if edge.Type != "" {
-		cteSQL += "  WHERE e.type = ?\n"
-		args = append(args, edge.Type)
-	}
-
-	cteSQL += "\n  UNION ALL\n\n"
-
-	// Recursive case: extend paths
-	cteSQL += "  SELECT p.start_id, e.to_id, p.depth + 1\n"
-	cteSQL += "  FROM paths p\n"
-	cteSQL += "  JOIN edges e ON e.from_id = p.end_id\n"
-
-	var recursiveWhere []string
-
-	// Edge type filter in recursive case
-	if len(edge.Types) > 1 {
-		placeholders := make([]string, len(edge.Types))
-		for i := range edge.Types {
-			placeholders[i] = "?"
-			args = append(args, edge.Types[i])
-		}
-		recursiveWhere = append(recursiveWhere, fmt.Sprintf("e.type IN (%s)", strings.Join(placeholders, ", ")))
-	} else if edge.Type != "" {
-		recursiveWhere = append(recursiveWhere, "e.type = ?")
-		args = append(args, edge.Type)
-	}
-
-	// Max depth limit
-	if maxHops > 0 {
-		recursiveWhere = append(recursiveWhere, fmt.Sprintf("p.depth < %d", maxHops))
-	}
-
-	if len(recursiveWhere) > 0 {
-		cteSQL += "  WHERE " + strings.Join(recursiveWhere, " AND ") + "\n"
-	}
-
-	cteSQL += ")\n"
-
-	// Determine which node to select based on query
-	// For now, support simple single-variable selection
+	// Determine which node to select
 	selectVar := ""
 	if len(q.Select.Columns) > 0 {
 		if sel, ok := q.Select.Columns[0].Expr.(*aql.Selector); ok {
@@ -1422,33 +1393,212 @@ func (s *Storage) compileVariableLengthPattern(q *aql.Query, src *aql.PatternSou
 			}
 		}
 	}
+	selectingEndNode := selectVar == endNode.Variable
 
-	// Main query - select the requested variable
-	if selectVar == endNode.Variable {
-		cteSQL += "SELECT DISTINCT n1.*\n"
-	} else {
-		// Default to start node
-		cteSQL += "SELECT DISTINCT n0.*\n"
+	// Build a UNION ALL of JOIN chains for each hop depth from minHops to maxHops
+	first := true
+	for depth := minHops; depth <= maxHops; depth++ {
+		if !first {
+			sql.WriteString("\nUNION ALL\n")
+		}
+		first = false
+
+		if selectingEndNode {
+			sql.WriteString(fmt.Sprintf("SELECT n_end.*\nFROM edges e0\n"))
+		} else {
+			sql.WriteString(fmt.Sprintf("SELECT n_start.*\nFROM edges e0\n"))
+		}
+
+		// INDEXED BY hint on first edge
+		if hasEdgeType {
+			sql.WriteString("INDEXED BY idx_edges_from_type\n")
+		}
+
+		// JOIN start node with type filter
+		sql.WriteString("JOIN nodes n_start ON n_start.id = e0.from_id")
+		if startNode.Type != "" {
+			sql.WriteString(" AND n_start.type = ?")
+			args = append(args, startNode.Type)
+		}
+		sql.WriteString("\n")
+
+		// Chain additional edge JOINs for hops > 1
+		for i := 1; i < depth; i++ {
+			prev := fmt.Sprintf("e%d", i-1)
+			cur := fmt.Sprintf("e%d", i)
+			if hasEdgeType {
+				sql.WriteString(fmt.Sprintf("JOIN edges %s INDEXED BY idx_edges_from_type ON %s.from_id = %s.to_id", cur, cur, prev))
+			} else {
+				sql.WriteString(fmt.Sprintf("JOIN edges %s ON %s.from_id = %s.to_id", cur, cur, prev))
+			}
+			// Edge type on chained edges
+			if len(edge.Types) > 1 {
+				placeholders := make([]string, len(edge.Types))
+				for j := range edge.Types {
+					placeholders[j] = "?"
+					args = append(args, edge.Types[j])
+				}
+				sql.WriteString(fmt.Sprintf(" AND %s.type IN (%s)", cur, strings.Join(placeholders, ", ")))
+			} else if edge.Type != "" {
+				sql.WriteString(fmt.Sprintf(" AND %s.type = ?", cur))
+				args = append(args, edge.Type)
+			}
+			sql.WriteString("\n")
+		}
+
+		// JOIN end node
+		lastEdge := fmt.Sprintf("e%d", depth-1)
+		sql.WriteString(fmt.Sprintf("JOIN nodes n_end ON n_end.id = %s.to_id", lastEdge))
+		if endNode.Type != "" {
+			sql.WriteString(" AND n_end.type = ?")
+			args = append(args, endNode.Type)
+		}
+		sql.WriteString("\n")
+
+		// WHERE clause for first edge type
+		if len(edge.Types) > 1 {
+			placeholders := make([]string, len(edge.Types))
+			for j := range edge.Types {
+				placeholders[j] = "?"
+				args = append(args, edge.Types[j])
+			}
+			sql.WriteString(fmt.Sprintf("WHERE e0.type IN (%s)\n", strings.Join(placeholders, ", ")))
+		} else if edge.Type != "" {
+			sql.WriteString("WHERE e0.type = ?\n")
+			args = append(args, edge.Type)
+		}
 	}
 
-	cteSQL += "FROM nodes n0\n"
-	cteSQL += "JOIN paths p ON p.start_id = n0.id\n"
-	cteSQL += "JOIN nodes n1 ON n1.id = p.end_id\n"
+	// Add LIMIT if present
+	if q.Select.Limit != nil {
+		sql.WriteString("LIMIT ?")
+		args = append(args, *q.Select.Limit)
+	}
 
-	// Depth constraints
+	return sql.String(), args, graph.ResultTypeNodes, nil
+}
+
+// compileCTEVariableLength generates a recursive CTE for unbounded or very deep
+// variable-length paths. Uses INDEXED BY hints and pushes start node type into
+// the CTE base case for better performance.
+func (s *Storage) compileCTEVariableLength(q *aql.Query, startNode *aql.NodePattern, edge *aql.EdgePattern, endNode *aql.NodePattern, minHops, maxHops int) (string, []any, graph.ResultType, error) {
+	var args []any
+	var sql strings.Builder
+	hasEdgeType := edge.Type != "" || len(edge.Types) > 0
+
+	// Determine which node to select
+	selectVar := ""
+	if len(q.Select.Columns) > 0 {
+		if sel, ok := q.Select.Columns[0].Expr.(*aql.Selector); ok {
+			if len(sel.Parts) == 1 {
+				selectVar = sel.Parts[0]
+			}
+		}
+	}
+	selectingEndNode := selectVar == endNode.Variable
+	startTypePushed := startNode.Type != "" && hasEdgeType
+	trackStartID := !selectingEndNode || !startTypePushed
+
+	if trackStartID {
+		sql.WriteString("WITH RECURSIVE paths(start_id, node_id, depth) AS (\n")
+	} else {
+		sql.WriteString("WITH RECURSIVE paths(node_id, depth) AS (\n")
+	}
+
+	// Base case
+	if trackStartID {
+		sql.WriteString("  SELECT e.from_id, e.to_id, 1\n")
+	} else {
+		sql.WriteString("  SELECT e.to_id, 1\n")
+	}
+	sql.WriteString("  FROM edges e\n")
+
+	if startTypePushed {
+		sql.WriteString("  INDEXED BY idx_edges_from_type\n")
+		sql.WriteString("  JOIN nodes n_start ON n_start.id = e.from_id AND n_start.type = ?\n")
+		args = append(args, startNode.Type)
+	}
+
+	if len(edge.Types) > 1 {
+		placeholders := make([]string, len(edge.Types))
+		for i := range edge.Types {
+			placeholders[i] = "?"
+			args = append(args, edge.Types[i])
+		}
+		sql.WriteString(fmt.Sprintf("  WHERE e.type IN (%s)\n", strings.Join(placeholders, ", ")))
+	} else if edge.Type != "" {
+		sql.WriteString("  WHERE e.type = ?\n")
+		args = append(args, edge.Type)
+	}
+
+	sql.WriteString("\n  UNION ALL\n\n")
+
+	// Recursive case
+	if trackStartID {
+		sql.WriteString("  SELECT p.start_id, e.to_id, p.depth + 1\n")
+	} else {
+		sql.WriteString("  SELECT e.to_id, p.depth + 1\n")
+	}
+	sql.WriteString("  FROM paths p\n")
+	if hasEdgeType {
+		sql.WriteString("  JOIN edges e INDEXED BY idx_edges_from_type\n")
+		sql.WriteString("    ON e.from_id = p.node_id")
+	} else {
+		sql.WriteString("  JOIN edges e ON e.from_id = p.node_id")
+	}
+
+	var recursiveWhere []string
+	if len(edge.Types) > 1 {
+		placeholders := make([]string, len(edge.Types))
+		for i := range edge.Types {
+			placeholders[i] = "?"
+			args = append(args, edge.Types[i])
+		}
+		recursiveWhere = append(recursiveWhere, fmt.Sprintf("e.type IN (%s)", strings.Join(placeholders, ", ")))
+	} else if edge.Type != "" {
+		sql.WriteString(" AND e.type = ?")
+		args = append(args, edge.Type)
+	}
+	sql.WriteString("\n")
+
+	if maxHops > 0 {
+		recursiveWhere = append(recursiveWhere, fmt.Sprintf("p.depth < %d", maxHops))
+	}
+
+	if len(recursiveWhere) > 0 {
+		sql.WriteString("  WHERE " + strings.Join(recursiveWhere, " AND ") + "\n")
+	}
+
+	sql.WriteString(")\n")
+
+	// Outer query
+	if selectingEndNode && !trackStartID {
+		sql.WriteString("SELECT DISTINCT n1.*\n")
+		sql.WriteString("FROM paths p\n")
+		sql.WriteString("JOIN nodes n1 ON n1.id = p.node_id\n")
+	} else if selectingEndNode {
+		sql.WriteString("SELECT DISTINCT n1.*\n")
+		sql.WriteString("FROM nodes n0\n")
+		sql.WriteString("JOIN paths p ON p.start_id = n0.id\n")
+		sql.WriteString("JOIN nodes n1 ON n1.id = p.node_id\n")
+	} else {
+		sql.WriteString("SELECT DISTINCT n0.*\n")
+		sql.WriteString("FROM nodes n0\n")
+		sql.WriteString("JOIN paths p ON p.start_id = n0.id\n")
+		sql.WriteString("JOIN nodes n1 ON n1.id = p.node_id\n")
+	}
+
+	var whereClauses []string
 	if minHops > 1 || maxHops > 0 {
-		depthConstraints := []string{}
 		if minHops > 1 {
-			depthConstraints = append(depthConstraints, fmt.Sprintf("p.depth >= %d", minHops))
+			whereClauses = append(whereClauses, fmt.Sprintf("p.depth >= %d", minHops))
 		}
 		if maxHops > 0 {
-			depthConstraints = append(depthConstraints, fmt.Sprintf("p.depth <= %d", maxHops))
+			whereClauses = append(whereClauses, fmt.Sprintf("p.depth <= %d", maxHops))
 		}
-		whereClauses = append(whereClauses, strings.Join(depthConstraints, " AND "))
 	}
 
-	// Node type constraints
-	if startNode.Type != "" {
+	if startNode.Type != "" && !startTypePushed {
 		whereClauses = append(whereClauses, "n0.type = ?")
 		args = append(args, startNode.Type)
 	}
@@ -1458,19 +1608,15 @@ func (s *Storage) compileVariableLengthPattern(q *aql.Query, src *aql.PatternSou
 	}
 
 	if len(whereClauses) > 0 {
-		cteSQL += "WHERE " + strings.Join(whereClauses, " AND ") + "\n"
+		sql.WriteString("WHERE " + strings.Join(whereClauses, " AND ") + "\n")
 	}
 
-	// Add LIMIT if present
 	if q.Select.Limit != nil {
-		cteSQL += "LIMIT ?"
+		sql.WriteString("LIMIT ?")
 		args = append(args, *q.Select.Limit)
 	}
 
-	// Determine result type - for now always nodes
-	resultType := graph.ResultTypeNodes
-
-	return cteSQL, args, resultType, nil
+	return sql.String(), args, graph.ResultTypeNodes, nil
 }
 
 // compilePatternSelect compiles the SELECT clause for pattern queries.
