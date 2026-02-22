@@ -484,12 +484,18 @@ func (s *Storage) flushBatch(batch []writeOp) {
 	var batchErr error
 	for _, op := range batch {
 		if op.Node != nil {
-			data, err := json.Marshal(op.Node.Data)
-			if err != nil {
-				log.Printf("sqlite: failed to marshal node data for %s: %v", op.Node.ID, err)
-				batchErr = err
-				break
+			// Handle data: use SQL NULL if Data is nil, otherwise marshal to JSON
+			var dataStr sql.NullString
+			if op.Node.Data != nil {
+				data, err := json.Marshal(op.Node.Data)
+				if err != nil {
+					log.Printf("sqlite: failed to marshal node data for %s: %v", op.Node.ID, err)
+					batchErr = err
+					break
+				}
+				dataStr = sql.NullString{String: string(data), Valid: true}
 			}
+
 			labels, err := json.Marshal(op.Node.Labels)
 			if err != nil {
 				log.Printf("sqlite: failed to marshal node labels for %s: %v", op.Node.ID, err)
@@ -498,7 +504,7 @@ func (s *Storage) flushBatch(batch []writeOp) {
 			}
 			_, err = nodeStmt.ExecContext(ctx,
 				op.Node.ID, op.Node.Type, op.Node.URI, op.Node.Key, op.Node.Name,
-				string(labels), string(data), op.Node.Generation,
+				string(labels), dataStr, op.Node.Generation,
 				op.Node.CreatedAt.Format(time.RFC3339), op.Node.UpdatedAt.Format(time.RFC3339))
 			if err != nil {
 				log.Printf("sqlite: failed to insert node %s: %v", op.Node.ID, err)
@@ -507,7 +513,8 @@ func (s *Storage) flushBatch(batch []writeOp) {
 			}
 		}
 		if op.Edge != nil {
-			var data string
+			// Handle data: use SQL NULL if Data is nil, otherwise marshal to JSON
+			var dataStr sql.NullString
 			if op.Edge.Data != nil {
 				dataBytes, err := json.Marshal(op.Edge.Data)
 				if err != nil {
@@ -515,10 +522,10 @@ func (s *Storage) flushBatch(batch []writeOp) {
 					batchErr = err
 					break
 				}
-				data = string(dataBytes)
+				dataStr = sql.NullString{String: string(dataBytes), Valid: true}
 			}
 			_, err = edgeStmt.ExecContext(ctx,
-				op.Edge.ID, op.Edge.Type, op.Edge.From, op.Edge.To, data, op.Edge.Generation,
+				op.Edge.ID, op.Edge.Type, op.Edge.From, op.Edge.To, dataStr, op.Edge.Generation,
 				op.Edge.CreatedAt.Format(time.RFC3339))
 			if err != nil {
 				log.Printf("sqlite: failed to insert edge %s: %v", op.Edge.ID, err)
@@ -578,8 +585,8 @@ func (s *Storage) GetNodeByKey(ctx context.Context, nodeType, key string) (*grap
 
 func (s *Storage) scanNode(row *sql.Row) (*graph.Node, error) {
 	var node graph.Node
-	var labelsStr, dataStr, createdAt, updatedAt string
-	var uri, key, name, generation, root sql.NullString
+	var labelsStr, createdAt, updatedAt string
+	var uri, key, name, dataStr, generation, root sql.NullString
 
 	err := row.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
@@ -601,9 +608,9 @@ func (s *Storage) scanNode(row *sql.Row) (*graph.Node, error) {
 		}
 	}
 
-	if dataStr != "" {
+	if dataStr.Valid && dataStr.String != "" {
 		var data any
-		if err := json.Unmarshal([]byte(dataStr), &data); err != nil {
+		if err := json.Unmarshal([]byte(dataStr.String), &data); err != nil {
 			return nil, err
 		}
 		node.Data = data
@@ -1083,8 +1090,8 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter, opts g
 	var nodes []*graph.Node
 	for rows.Next() {
 		var node graph.Node
-		var labelsStr, dataStr, createdAt, updatedAt string
-		var uri, key, name, generation, root sql.NullString
+		var labelsStr, createdAt, updatedAt string
+		var uri, key, name, dataStr, generation, root sql.NullString
 
 		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt)
 		if err != nil {
@@ -1103,9 +1110,9 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter, opts g
 			}
 		}
 
-		if dataStr != "" {
+		if dataStr.Valid && dataStr.String != "" {
 			var data any
-			if err := json.Unmarshal([]byte(dataStr), &data); err != nil {
+			if err := json.Unmarshal([]byte(dataStr.String), &data); err != nil {
 				return nil, err
 			}
 			node.Data = data
@@ -1519,8 +1526,8 @@ func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGe
 	var nodes []*graph.Node
 	for rows.Next() {
 		var node graph.Node
-		var labelsStr, dataStr, createdAt, updatedAt string
-		var uri, key, name, generation, root sql.NullString
+		var labelsStr, createdAt, updatedAt string
+		var uri, key, name, dataStr, generation, root sql.NullString
 
 		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt)
 		if err != nil {
@@ -1538,9 +1545,9 @@ func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGe
 			}
 		}
 
-		if dataStr != "" {
+		if dataStr.Valid && dataStr.String != "" {
 			var data any
-			if err := json.Unmarshal([]byte(dataStr), &data); err != nil {
+			if err := json.Unmarshal([]byte(dataStr.String), &data); err != nil {
 				return nil, err
 			}
 			node.Data = data

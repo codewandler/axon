@@ -149,6 +149,46 @@ type DatabaseInfo interface {
 	GetDatabasePath() string
 }
 
+// AQLQuerier provides AQL (Axon Query Language) query execution.
+type AQLQuerier interface {
+	Query(ctx context.Context, query interface{}) (*QueryResult, error)
+	Explain(ctx context.Context, query interface{}) (*QueryPlan, error)
+}
+
+// ResultType indicates the type of query result.
+type ResultType int
+
+const (
+	ResultTypeNodes ResultType = iota
+	ResultTypeEdges
+	ResultTypeCounts
+)
+
+// QueryResult holds the results of an AQL query execution.
+// Fields are populated based on the result type:
+// - ResultTypeNodes: Nodes slice is populated
+// - ResultTypeEdges: Edges slice is populated
+// - ResultTypeCounts: Counts map is populated
+//
+// Note: When SELECT specifies specific columns (e.g., "SELECT name, type FROM nodes"),
+// only those fields will be populated in the returned Node/Edge structs.
+// Other fields will have their zero values.
+type QueryResult struct {
+	Type   ResultType
+	Nodes  []*Node
+	Edges  []*Edge
+	Counts map[string]int // For GROUP BY queries (key → count)
+}
+
+// QueryPlan holds the execution plan for an AQL query.
+// Used for debugging and performance analysis.
+type QueryPlan struct {
+	SQL         string // Generated SQL query
+	Args        []any  // Query arguments
+	SQLitePlan  string // Output of EXPLAIN QUERY PLAN
+	EstimatedMs int64  // Estimated execution time (if available)
+}
+
 // -----------------------------------------------------------------------------
 // Full Storage Interface
 // -----------------------------------------------------------------------------
@@ -165,4 +205,5 @@ type Storage interface {
 	IndexRunTracker
 	Flusher
 	DatabaseInfo
+	AQLQuerier
 }

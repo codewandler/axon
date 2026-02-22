@@ -1,5 +1,7 @@
 package aql
 
+import "strings"
+
 // Builder provides a fluent API for constructing AQL queries programmatically.
 // Use Select() to start building a query.
 //
@@ -139,6 +141,13 @@ func (b *Builder) Build() *Query {
 
 // Col creates a selector for a column name.
 func Col(parts ...string) *Selector {
+	return &Selector{Parts: parts}
+}
+
+// parseFieldSelector parses a dot-separated field string into a Selector.
+// For example, "data.ext" → Selector{Parts: ["data", "ext"]}.
+func parseFieldSelector(field string) *Selector {
+	parts := strings.Split(field, ".")
 	return &Selector{Parts: parts}
 }
 
@@ -298,7 +307,7 @@ func (e *EdgePattern) WithExactHops(n int) *EdgePattern {
 // Eq creates an equality comparison: selector = value.
 func Eq(field string, value Value) *ComparisonExpr {
 	return &ComparisonExpr{
-		Left:  Col(field),
+		Left:  parseFieldSelector(field),
 		Op:    OpEq,
 		Right: value,
 	}
@@ -307,7 +316,7 @@ func Eq(field string, value Value) *ComparisonExpr {
 // Ne creates a not-equal comparison: selector != value.
 func Ne(field string, value Value) *ComparisonExpr {
 	return &ComparisonExpr{
-		Left:  Col(field),
+		Left:  parseFieldSelector(field),
 		Op:    OpNe,
 		Right: value,
 	}
@@ -316,7 +325,7 @@ func Ne(field string, value Value) *ComparisonExpr {
 // Lt creates a less-than comparison: selector < value.
 func Lt(field string, value Value) *ComparisonExpr {
 	return &ComparisonExpr{
-		Left:  Col(field),
+		Left:  parseFieldSelector(field),
 		Op:    OpLt,
 		Right: value,
 	}
@@ -325,7 +334,7 @@ func Lt(field string, value Value) *ComparisonExpr {
 // Le creates a less-than-or-equal comparison: selector <= value.
 func Le(field string, value Value) *ComparisonExpr {
 	return &ComparisonExpr{
-		Left:  Col(field),
+		Left:  parseFieldSelector(field),
 		Op:    OpLe,
 		Right: value,
 	}
@@ -334,7 +343,7 @@ func Le(field string, value Value) *ComparisonExpr {
 // Gt creates a greater-than comparison: selector > value.
 func Gt(field string, value Value) *ComparisonExpr {
 	return &ComparisonExpr{
-		Left:  Col(field),
+		Left:  parseFieldSelector(field),
 		Op:    OpGt,
 		Right: value,
 	}
@@ -343,7 +352,7 @@ func Gt(field string, value Value) *ComparisonExpr {
 // Ge creates a greater-than-or-equal comparison: selector >= value.
 func Ge(field string, value Value) *ComparisonExpr {
 	return &ComparisonExpr{
-		Left:  Col(field),
+		Left:  parseFieldSelector(field),
 		Op:    OpGe,
 		Right: value,
 	}
@@ -352,7 +361,7 @@ func Ge(field string, value Value) *ComparisonExpr {
 // Like creates a LIKE comparison: selector LIKE value.
 func Like(field string, value Value) *ComparisonExpr {
 	return &ComparisonExpr{
-		Left:  Col(field),
+		Left:  parseFieldSelector(field),
 		Op:    OpLike,
 		Right: value,
 	}
@@ -361,7 +370,7 @@ func Like(field string, value Value) *ComparisonExpr {
 // Glob creates a GLOB comparison: selector GLOB value.
 func Glob(field string, value Value) *ComparisonExpr {
 	return &ComparisonExpr{
-		Left:  Col(field),
+		Left:  parseFieldSelector(field),
 		Op:    OpGlob,
 		Right: value,
 	}
@@ -418,7 +427,7 @@ func Paren(expr Expression) *ParenExpr {
 // In creates an IN expression: selector IN (values...).
 func In(field string, values ...Value) *InExpr {
 	return &InExpr{
-		Left:   Col(field),
+		Left:   parseFieldSelector(field),
 		Values: values,
 	}
 }
@@ -426,7 +435,7 @@ func In(field string, values ...Value) *InExpr {
 // Between creates a BETWEEN expression: selector BETWEEN low AND high.
 func Between(field string, low, high Value) *BetweenExpr {
 	return &BetweenExpr{
-		Left: Col(field),
+		Left: parseFieldSelector(field),
 		Low:  low,
 		High: high,
 	}
@@ -435,7 +444,7 @@ func Between(field string, low, high Value) *BetweenExpr {
 // IsNull creates an IS NULL expression.
 func IsNull(field string) *IsNullExpr {
 	return &IsNullExpr{
-		Selector: Col(field),
+		Selector: parseFieldSelector(field),
 		Not:      false,
 	}
 }
@@ -443,7 +452,7 @@ func IsNull(field string) *IsNullExpr {
 // IsNotNull creates an IS NOT NULL expression.
 func IsNotNull(field string) *IsNullExpr {
 	return &IsNullExpr{
-		Selector: Col(field),
+		Selector: parseFieldSelector(field),
 		Not:      true,
 	}
 }

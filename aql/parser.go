@@ -46,6 +46,13 @@ func (p *Parser) Parse(input string) (*Query, error) {
 	return g.toAST(), nil
 }
 
+// Parse is a convenience function that creates a parser and parses the input.
+// For repeated parsing, create a Parser once with NewParser() and reuse it.
+func Parse(input string) (*Query, error) {
+	p := NewParser()
+	return p.Parse(input)
+}
+
 // ParseWithFilename parses with a filename for better error messages.
 func (p *Parser) ParseWithFilename(filename, input string) (*Query, error) {
 	g, err := p.parser.ParseString(filename, input)
