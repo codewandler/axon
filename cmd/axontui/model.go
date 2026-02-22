@@ -187,21 +187,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "up", "k":
 			m.activeP().CursorUp()
-			m.showHoveredPreview()
-			return m, nil
+			return m.navigateToFocused()
 
 		case "down", "j":
 			m.activeP().CursorDown()
-			m.showHoveredPreview()
-			return m, nil
+			return m.navigateToFocused()
 
 		case "left", "h":
-			// Go back in history (up the tree)
+			if m.activePane == 1 {
+				// Right → left: jump focus at same Y level
+				row := m.rightPane.VisualRow()
+				m.activePane = 0
+				m.leftPane.active = true
+				m.rightPane.active = false
+				m.leftPane.SetCursorToVisualRow(row)
+				return m.navigateToFocused()
+			}
+			// Already on left: navigate up (go to parent)
 			return m.goBack()
 
-		case "right", "l", "enter":
-			// Drill into selected node (deeper into the tree)
-			return m.drillIn()
+		case "right", "l":
+			if m.activePane == 0 {
+				// Left → right: jump focus at same Y level
+				if !m.rightPane.HasItems() {
+					return m, nil
+				}
+				row := m.leftPane.VisualRow()
+				m.activePane = 1
+				m.leftPane.active = false
+				m.rightPane.active = true
+				m.rightPane.SetCursorToVisualRow(row)
+				return m.navigateToFocused()
+			}
+			// Already on right: navigate deeper (selected child becomes center)
+			return m.navigateToFocused()
+
+		case "enter":
+			return m.navigateToFocused()
 
 		case "backspace":
 			return m.goBack()
@@ -362,9 +384,8 @@ func (m model) View() string {
 	// === Top section (flexible) ===
 	var top []string
 
-	// Breadcrumb
-	crumbs := m.nav.Breadcrumbs()
-	breadcrumb := renderBreadcrumb(crumbs, m.width, m.nav.depth)
+	// Path bar
+	breadcrumb := renderBreadcrumb(m.nav.center, m.width, m.nav.depth)
 	top = append(top, breadcrumb)
 
 	// Top divider
@@ -591,14 +612,21 @@ func (m model) overlayPreview(panesContent string, paneHeight int) string {
 	return strings.Join(result, "\n")
 }
 
-// drillIn navigates into the selected node.
-func (m model) drillIn() (tea.Model, tea.Cmd) {
+// navigateToFocused makes the currently focused (cursor) node the new center.
+// Called on every cursor movement — the focused item IS the center.
+func (m model) navigateToFocused() (tea.Model, tea.Cmd) {
 	node := m.activeP().SelectedNode()
 	if node == nil {
 		return m, nil
 	}
 
-	// Immediately clear preview (will be reloaded async after edges arrive)
+	// Already centered on this node — just update preview
+	if m.nav.center != nil && m.nav.center.ID == node.ID {
+		m.showHoveredPreview()
+		return m, nil
+	}
+
+	// Clear preview (will be reloaded after edges arrive)
 	m.previewContent = ""
 	m.hasPreview = false
 	m.previewLoading = false

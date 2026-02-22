@@ -282,6 +282,30 @@ func (p *pane) renderItem(item paneItem, selected bool) string {
 	return line
 }
 
+// VisualRow returns the cursor's row relative to the visible viewport (0-based).
+func (p *pane) VisualRow() int {
+	return p.cursor - p.offset
+}
+
+// SetCursorToVisualRow moves the cursor to the item at the given visual row
+// (relative to the current scroll offset). Skips headers — if the target row
+// is a header, moves to the nearest non-header item below, then above.
+func (p *pane) SetCursorToVisualRow(row int) {
+	if len(p.items) == 0 {
+		return
+	}
+	target := p.offset + row
+	if target >= len(p.items) {
+		target = len(p.items) - 1
+	}
+	if target < 0 {
+		target = 0
+	}
+	p.cursor = target
+	p.skipHeaders(1)
+	p.ensureVisible()
+}
+
 // HasItems returns whether the pane has any non-header items.
 func (p *pane) HasItems() bool {
 	for _, item := range p.items {

@@ -4,38 +4,21 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/codewandler/axon/graph"
 )
 
-// renderBreadcrumb renders the navigation breadcrumb trail.
-func renderBreadcrumb(crumbs []string, width int, depth int) string {
-	var b strings.Builder
-
-	if len(crumbs) == 0 {
+// renderBreadcrumb renders the path bar for the center node.
+// For filesystem nodes, shows the file/dir path extracted from the URI.
+// For other nodes, shows the node name and type.
+func renderBreadcrumb(node *graph.Node, width int, depth int) string {
+	if node == nil {
 		return ""
 	}
 
-	// Render crumbs: dim for history, bright for current
-	maxCrumbs := 6
-	start := 0
-	if len(crumbs) > maxCrumbs {
-		start = len(crumbs) - maxCrumbs
-		b.WriteString(breadcrumbStyle.Render("... "))
-	}
+	var b strings.Builder
 
-	for i := start; i < len(crumbs); i++ {
-		if i > start {
-			b.WriteString(breadcrumbSepStyle.Render(" > "))
-		}
-		name := crumbs[i]
-		if len(name) > 20 {
-			name = name[:17] + "..."
-		}
-		if i == len(crumbs)-1 {
-			b.WriteString(breadcrumbActiveStyle.Render(name))
-		} else {
-			b.WriteString(breadcrumbStyle.Render(name))
-		}
-	}
+	path := extractPath(node)
+	b.WriteString(breadcrumbActiveStyle.Render(path))
 
 	// Zoom indicator on the right
 	if depth > 1 {
@@ -48,4 +31,23 @@ func renderBreadcrumb(crumbs []string, width int, depth int) string {
 	}
 
 	return b.String()
+}
+
+// extractPath returns a human-readable path for the node.
+// Strips file:// and git+file:// URI prefixes to show the filesystem path.
+// For non-URI nodes, returns the display name with type.
+func extractPath(node *graph.Node) string {
+	uri := node.URI
+	if uri != "" {
+		if strings.HasPrefix(uri, "file://") {
+			return strings.TrimPrefix(uri, "file://")
+		}
+		if strings.HasPrefix(uri, "git+file://") {
+			return strings.TrimPrefix(uri, "git+file://")
+		}
+		return uri
+	}
+	// No URI — use name
+	name := displayName(node)
+	return name
 }

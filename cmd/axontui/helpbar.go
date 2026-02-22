@@ -33,8 +33,7 @@ func renderHelpBar(width int, queryFocused bool, previewVisible bool, previewFoc
 		}
 	} else {
 		entries = []helpEntry{
-			{"←", "back"},
-			{"→", "open"},
+			{"←→", "navigate"},
 			{"↑↓", "select"},
 			{"+/-", "zoom"},
 			{"Tab", "filter"},
