@@ -688,10 +688,13 @@ func (s *Storage) compileJoinedTableQuery(q *aql.Query, src *aql.JoinedTableSour
 	}
 
 	var resultType graph.ResultType
-	if hasCount || len(q.Select.GroupBy) > 0 {
+	if hasCount {
+		resultType = graph.ResultTypeCounts
+	} else if len(q.Select.GroupBy) > 0 {
 		resultType = graph.ResultTypeCounts
 	} else {
-		resultType = graph.ResultTypeCounts
+		// No aggregation - return as nodes
+		resultType = graph.ResultTypeNodes
 	}
 
 	var sqlBuilder strings.Builder
