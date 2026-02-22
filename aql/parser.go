@@ -20,7 +20,7 @@ func NewParser() *Parser {
 		participle.Lexer(aqlLexer),
 		participle.CaseInsensitive("Ident"),
 		participle.Map(unquoteString, "String"),
-		participle.UseLookahead(3),
+		participle.UseLookahead(4),
 		participle.Elide("Whitespace", "Comment"),
 	)
 	return &Parser{parser: p}
@@ -548,14 +548,18 @@ type comparisonExprGrammar struct {
 	In       bool            `parser:"  | @'IN'"`
 	InValues []*valueGrammar `parser:"    '(' @@ (',' @@)* ')'"`
 
+	// NOT IN (...)
+	NotIn       bool            `parser:"  | @('NOT' 'IN')"`
+	NotInValues []*valueGrammar `parser:"    '(' @@ (',' @@)* ')'"`
+
 	// BETWEEN ... AND ...
 	Between     bool          `parser:"  | @'BETWEEN'"`
 	BetweenLow  *valueGrammar `parser:"    @@"`
 	BetweenAnd  bool          `parser:"    'AND'"`
 	BetweenHigh *valueGrammar `parser:"    @@"`
 
-	// Comparison operators
-	Op    string        `parser:"  | @( '<=' | '>=' | '!=' | '=' | '<' | '>' | 'LIKE' | 'GLOB' )"`
+	// Comparison operators (including NOT LIKE / NOT GLOB)
+	Op    string        `parser:"  | @( 'NOT' 'LIKE' | 'NOT' 'GLOB' | '<=' | '>=' | '!=' | '=' | '<' | '>' | 'LIKE' | 'GLOB' )"`
 	Value *valueGrammar `parser:"    @@ )? )"`
 }
 
@@ -621,6 +625,20 @@ func (g *comparisonExprGrammar) toAST() Expression {
 			Position: toPosition(g.Pos),
 			Left:     sel,
 			Values:   values,
+		}
+	}
+
+	// NOT IN
+	if g.NotIn {
+		var values []Value
+		for _, v := range g.NotInValues {
+			values = append(values, v.toAST())
+		}
+		return &InExpr{
+			Position: toPosition(g.Pos),
+			Left:     sel,
+			Values:   values,
+			Not:      true,
 		}
 	}
 
@@ -727,6 +745,10 @@ func parseComparisonOp(s string) ComparisonOp {
 		return OpLike
 	case "GLOB":
 		return OpGlob
+	case "NOT LIKE", "NOTLIKE":
+		return OpNotLike
+	case "NOT GLOB", "NOTGLOB":
+		return OpNotGlob
 	default:
 		// Unreachable: grammar only allows valid operators
 		return OpEq

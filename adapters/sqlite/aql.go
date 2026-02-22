@@ -1621,6 +1621,10 @@ func (s *Storage) compilePatternComparison(e *aql.ComparisonExpr, nodeAliases ma
 		op = " LIKE "
 	case aql.OpGlob:
 		op = " GLOB "
+	case aql.OpNotLike:
+		op = " NOT LIKE "
+	case aql.OpNotGlob:
+		op = " NOT GLOB "
 	default:
 		return "", nil, fmt.Errorf("unsupported comparison operator: %v", e.Op)
 	}
@@ -1647,9 +1651,11 @@ func (s *Storage) compilePatternIn(e *aql.InExpr, nodeAliases map[string]string,
 	}
 
 	sql := fmt.Sprintf("%s IN (%s)", field, strings.Join(placeholders, ", "))
+	if e.Not {
+		sql = fmt.Sprintf("%s NOT IN (%s)", field, strings.Join(placeholders, ", "))
+	}
 	return sql, args, nil
 }
-
 func (s *Storage) compilePatternBetween(e *aql.BetweenExpr, nodeAliases map[string]string, edgeAliases map[string]string) (string, []any, error) {
 	field, err := s.resolvePatternSelector(e.Left, nodeAliases, edgeAliases)
 	if err != nil {
@@ -1953,6 +1959,10 @@ func (s *Storage) compileComparisonOp(op aql.ComparisonOp) string {
 		return "LIKE"
 	case aql.OpGlob:
 		return "GLOB"
+	case aql.OpNotLike:
+		return "NOT LIKE"
+	case aql.OpNotGlob:
+		return "NOT GLOB"
 	default:
 		return "="
 	}
@@ -2015,6 +2025,9 @@ func (s *Storage) compileIn(e *aql.InExpr, table string) (string, []any, error) 
 	}
 
 	sql := fmt.Sprintf("%s IN (%s)", field, strings.Join(placeholders, ", "))
+	if e.Not {
+		sql = fmt.Sprintf("%s NOT IN (%s)", field, strings.Join(placeholders, ", "))
+	}
 	return sql, args, nil
 }
 

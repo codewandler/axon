@@ -358,14 +358,16 @@ func (*ComparisonExpr) expr()           {}
 type ComparisonOp int
 
 const (
-	OpEq   ComparisonOp = iota // =
-	OpNe                       // !=
-	OpLt                       // <
-	OpLe                       // <=
-	OpGt                       // >
-	OpGe                       // >=
-	OpLike                     // LIKE
-	OpGlob                     // GLOB
+	OpEq      ComparisonOp = iota // =
+	OpNe                          // !=
+	OpLt                          // <
+	OpLe                          // <=
+	OpGt                          // >
+	OpGe                          // >=
+	OpLike                        // LIKE
+	OpGlob                        // GLOB
+	OpNotLike                     // NOT LIKE
+	OpNotGlob                     // NOT GLOB
 )
 
 func (op ComparisonOp) String() string {
@@ -386,16 +388,21 @@ func (op ComparisonOp) String() string {
 		return "LIKE"
 	case OpGlob:
 		return "GLOB"
+	case OpNotLike:
+		return "NOT LIKE"
+	case OpNotGlob:
+		return "NOT GLOB"
 	default:
 		return "?"
 	}
 }
 
-// InExpr represents field IN (value1, value2, ...).
+// InExpr represents field IN (value1, value2, ...) or field NOT IN (...).
 type InExpr struct {
 	Position Position
 	Left     *Selector
 	Values   []Value
+	Not      bool // NOT IN
 }
 
 func (i *InExpr) Pos() Position { return i.Position }
