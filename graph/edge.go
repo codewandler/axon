@@ -4,13 +4,13 @@ import "time"
 
 // Edge represents a directed relationship between two nodes.
 type Edge struct {
-	ID         string    `json:"id"`
-	Type       string    `json:"type"`
-	From       string    `json:"from"`
-	To         string    `json:"to"`
+	ID         string    `json:"id,omitempty"`
+	Type       string    `json:"type,omitempty"`
+	From       string    `json:"from,omitempty"`
+	To         string    `json:"to,omitempty"`
 	Data       any       `json:"data,omitempty"`
 	Generation string    `json:"generation,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	CreatedAt  time.Time `json:"created_at,omitempty"`
 }
 
 // NewEdge creates a new edge with the given type and endpoints.
