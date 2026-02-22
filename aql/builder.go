@@ -76,7 +76,7 @@ func (b *Builder) GroupBy(selectors ...Selector) *Builder {
 func (b *Builder) GroupByCol(columns ...string) *Builder {
 	b.stmt.GroupBy = make([]Selector, len(columns))
 	for i, c := range columns {
-		b.stmt.GroupBy[i] = Selector{Parts: []string{c}}
+		b.stmt.GroupBy[i] = *parseFieldSelector(c)
 	}
 	return b
 }
@@ -91,7 +91,7 @@ func (b *Builder) Having(expr Expression) *Builder {
 func (b *Builder) OrderBy(columns ...string) *Builder {
 	for _, c := range columns {
 		b.stmt.OrderBy = append(b.stmt.OrderBy, OrderSpec{
-			Expr:       &Selector{Parts: []string{c}},
+			Expr:       parseFieldSelector(c),
 			Descending: false,
 		})
 	}
@@ -102,7 +102,7 @@ func (b *Builder) OrderBy(columns ...string) *Builder {
 func (b *Builder) OrderByDesc(columns ...string) *Builder {
 	for _, c := range columns {
 		b.stmt.OrderBy = append(b.stmt.OrderBy, OrderSpec{
-			Expr:       &Selector{Parts: []string{c}},
+			Expr:       parseFieldSelector(c),
 			Descending: true,
 		})
 	}

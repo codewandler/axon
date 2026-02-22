@@ -92,7 +92,7 @@
 //	(variable:type)              - node pattern (✅ implemented)
 //	-[:type]->                   - outgoing edge (✅ implemented)
 //	<-[:type]-                   - incoming edge (✅ implemented)
-//	-[:type]-                    - undirected edge (🚧 scaffolded, needs OR logic)
+//	-[:type]-                    - undirected edge (✅ implemented)
 //	-[:type1|type2]->            - multi-type edge (✅ implemented)
 //	-[variable:type]->           - edge variable binding (✅ implemented)
 //	-[:type*min..max]->          - variable-length path (Phase 3)
@@ -104,7 +104,12 @@
 //
 // Multiple patterns are comma-separated and share variables (implicit JOIN):
 //
-//	SELECT a, c FROM (a)-[:x]->(b), (b)-[:y]->(c)  -- TODO: Phase 2
+//	SELECT file FROM (repo:vcs:repo)-[:located_at]->(dir:fs:dir), (dir)-[:contains]->(file:fs:file)
+//
+// ORDER BY and GROUP BY work with pattern variables:
+//
+//	SELECT file FROM (dir)-[:contains]->(file) ORDER BY file.name
+//	SELECT dir.name, COUNT(*) FROM (dir)-[:contains]->(file) GROUP BY dir.name
 //
 // # Expressions
 //
@@ -205,5 +210,34 @@
 //	    FromPattern(pattern).
 //	    Where(aql.Eq("file.data.ext", aql.String("go"))).  // dot notation for JSON fields
 //	    Limit(10).
+//	    Build()
+//
+//	// Undirected edge: (a)-[:references]-(b)
+//	pattern := aql.Pat(aql.N("a")).
+//	    Either(aql.AnyEdgeOfType("references"), aql.N("b")).
+//	    Build()
+//	q := aql.Select(aql.Col("a"), aql.Col("b")).FromPattern(pattern).Build()
+//
+//	// Multiple patterns: (repo)-[:located_at]->(dir), (dir)-[:contains]->(file)
+//	p1 := aql.Pat(aql.NodeType("repo", "vcs:repo")).
+//	    To(aql.AnyEdgeOfType("located_at"), aql.NodeType("dir", "fs:dir")).Build()
+//	p2 := aql.Pat(aql.N("dir")).
+//	    To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).Build()
+//	q := aql.Select(aql.Col("file")).FromPattern(p1, p2).Build()
+//
+//	// Pattern with ORDER BY
+//	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+//	    To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).Build()
+//	q := aql.Select(aql.Col("file")).
+//	    FromPattern(pattern).
+//	    OrderBy("file.name").  // dot notation works
+//	    Build()
+//
+//	// Pattern with GROUP BY
+//	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+//	    To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).Build()
+//	q := aql.Select(aql.Col("dir", "name"), aql.Count()).
+//	    FromPattern(pattern).
+//	    GroupByCol("dir.name").  // dot notation works
 //	    Build()
 package aql

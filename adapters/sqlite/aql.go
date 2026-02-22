@@ -293,8 +293,8 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 		for i := 0; i < len(pattern.Elements); i += 2 {
 			leftNode := pattern.Elements[i].(*aql.NodePattern)
 
-			// First node in the pattern
-			if i == 0 || !nodeVars[leftNode.Variable] {
+			// First node in the pattern - only create alias if not seen before
+			if !nodeVars[leftNode.Variable] {
 				leftAlias := fmt.Sprintf("n%d", len(nodeAliases))
 				nodeAliases[leftNode.Variable] = leftAlias
 				nodeVars[leftNode.Variable] = true
@@ -352,10 +352,9 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 				case aql.Incoming:
 					fmt.Fprintf(&sqlBuilder, "%s.to_id = %s.id", edgeAlias, leftAlias)
 				case aql.Undirected:
-					// For undirected, we need (from=left AND to=right) OR (from=right AND to=left)
-					// This is complex, for now just treat as outgoing with warning
-					fmt.Fprintf(&sqlBuilder, "%s.from_id = %s.id", edgeAlias, leftAlias)
-					// TODO: Proper undirected support
+					// For undirected: (from_id = left.id) OR (to_id = left.id)
+					fmt.Fprintf(&sqlBuilder, "(%s.from_id = %s.id OR %s.to_id = %s.id)",
+						edgeAlias, leftAlias, edgeAlias, leftAlias)
 				}
 
 				// Add JOIN for right node
@@ -373,7 +372,11 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 				case aql.Incoming:
 					fmt.Fprintf(&sqlBuilder, "%s.id = %s.from_id", rightAlias, edgeAlias)
 				case aql.Undirected:
-					fmt.Fprintf(&sqlBuilder, "%s.id = %s.to_id", rightAlias, edgeAlias)
+					// For undirected: match the opposite end of whichever direction matched
+					// (from=left AND right=to) OR (to=left AND right=from)
+					fmt.Fprintf(&sqlBuilder, "((%s.from_id = %s.id AND %s.id = %s.to_id) OR (%s.to_id = %s.id AND %s.id = %s.from_id))",
+						edgeAlias, leftAlias, rightAlias, edgeAlias,
+						edgeAlias, leftAlias, rightAlias, edgeAlias)
 				}
 
 				// Add edge type constraint
@@ -410,14 +413,26 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 	// Determine result type based on what's being selected
 	resultType := graph.ResultTypeNodes // Default
 
-	// Check if we're selecting edge variables
+	// Check if we have COUNT(*) with GROUP BY
+	hasCount := false
 	for _, col := range q.Select.Columns {
-		if sel, ok := col.Expr.(*aql.Selector); ok {
-			if len(sel.Parts) == 1 {
-				varName := sel.Parts[0]
-				if _, ok := edgeAliases[varName]; ok {
-					resultType = graph.ResultTypeEdges
-					break
+		if _, ok := col.Expr.(*aql.CountCall); ok {
+			hasCount = true
+			break
+		}
+	}
+	if hasCount && len(q.Select.GroupBy) > 0 {
+		resultType = graph.ResultTypeCounts
+	} else {
+		// Check if we're selecting edge variables
+		for _, col := range q.Select.Columns {
+			if sel, ok := col.Expr.(*aql.Selector); ok {
+				if len(sel.Parts) == 1 {
+					varName := sel.Parts[0]
+					if _, ok := edgeAliases[varName]; ok {
+						resultType = graph.ResultTypeEdges
+						break
+					}
 				}
 			}
 		}
@@ -454,14 +469,33 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 
 	// Add GROUP BY if present
 	if len(q.Select.GroupBy) > 0 {
-		// TODO: Implement GROUP BY for patterns
-		return "", nil, 0, fmt.Errorf("GROUP BY not yet supported in pattern queries")
+		groupBySQL, err := s.compilePatternGroupBy(q.Select.GroupBy, nodeAliases, edgeAliases)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		sql += "\nGROUP BY " + groupBySQL
+	}
+
+	// Add HAVING if present
+	if q.Select.Having != nil {
+		if len(q.Select.GroupBy) == 0 {
+			return "", nil, 0, fmt.Errorf("HAVING requires GROUP BY")
+		}
+		havingSQL, havingArgs, err := s.compilePatternWhere(q.Select.Having, nodeAliases, edgeAliases)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		sql += "\nHAVING " + havingSQL
+		args = append(args, havingArgs...)
 	}
 
 	// Add ORDER BY if present
 	if len(q.Select.OrderBy) > 0 {
-		// TODO: Implement ORDER BY for patterns
-		return "", nil, 0, fmt.Errorf("ORDER BY not yet supported in pattern queries")
+		orderBySQL, err := s.compilePatternOrderBy(q.Select.OrderBy, nodeAliases, edgeAliases)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		sql += "\nORDER BY " + orderBySQL
 	}
 
 	// Add LIMIT/OFFSET
@@ -517,11 +551,24 @@ func (s *Storage) compilePatternSelect(stmt *aql.SelectStmt, nodeAliases map[str
 				}
 
 				return "", fmt.Errorf("undefined variable: %s", varName)
+			} else if len(sel.Parts) > 1 {
+				// Field selector: SELECT file.name or SELECT file.data.ext
+				resolved, err := s.resolvePatternSelector(sel, nodeAliases, edgeAliases)
+				if err != nil {
+					return "", err
+				}
+				sqlBuilder.WriteString(resolved)
+				continue
 			}
-			// TODO: Handle field selectors like file.name
 		}
 
-		return "", fmt.Errorf("only simple variable selectors supported in Phase 2")
+		// Handle COUNT(*)
+		if _, ok := col.Expr.(*aql.CountCall); ok {
+			sqlBuilder.WriteString("COUNT(*)")
+			continue
+		}
+
+		return "", fmt.Errorf("unsupported SELECT expression in pattern: %T", col.Expr)
 	}
 
 	return sqlBuilder.String(), nil
@@ -1033,6 +1080,48 @@ func (s *Storage) compileOrderBy(specs []aql.OrderSpec, table string) (string, e
 			field = "COUNT(*)"
 		default:
 			return "", fmt.Errorf("unsupported ORDER BY expression: %T", expr)
+		}
+
+		if spec.Descending {
+			field += " DESC"
+		} else {
+			field += " ASC"
+		}
+		parts = append(parts, field)
+	}
+	return strings.Join(parts, ", "), nil
+}
+
+// compilePatternGroupBy compiles GROUP BY clause for pattern queries.
+func (s *Storage) compilePatternGroupBy(selectors []aql.Selector, nodeAliases map[string]string, edgeAliases map[string]string) (string, error) {
+	var parts []string
+	for _, sel := range selectors {
+		resolved, err := s.resolvePatternSelector(&sel, nodeAliases, edgeAliases)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, resolved)
+	}
+	return strings.Join(parts, ", "), nil
+}
+
+// compilePatternOrderBy compiles ORDER BY clause for pattern queries.
+func (s *Storage) compilePatternOrderBy(specs []aql.OrderSpec, nodeAliases map[string]string, edgeAliases map[string]string) (string, error) {
+	var parts []string
+	for _, spec := range specs {
+		var field string
+		switch expr := spec.Expr.(type) {
+		case *aql.Selector:
+			// Resolve selector using pattern variables
+			resolved, err := s.resolvePatternSelector(expr, nodeAliases, edgeAliases)
+			if err != nil {
+				return "", err
+			}
+			field = resolved
+		case *aql.CountCall:
+			field = "COUNT(*)"
+		default:
+			return "", fmt.Errorf("unsupported ORDER BY expression in pattern: %T", expr)
 		}
 
 		if spec.Descending {

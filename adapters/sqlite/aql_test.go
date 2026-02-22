@@ -1025,6 +1025,241 @@ func TestPattern_UndefinedVariableSelect(t *testing.T) {
 	}
 }
 
+// Test undirected edge pattern: (a)-[:references]-(b)
+func TestPattern_UndirectedEdge(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Pattern: (a)-[:references]-(b)
+	// Should match test1.go-references->main.go in BOTH directions
+	pattern := aql.Pat(aql.N("a")).
+		Either(aql.AnyEdgeOfType("references"), aql.N("b")).
+		Build()
+
+	q := aql.Select(aql.Col("a"), aql.Col("b")).
+		FromPattern(pattern).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Undirected pattern query failed: %v", err)
+	}
+
+	// Should get 2 results (one for each direction of the same edge):
+	// 1. a=test1.go, b=main.go (forward)
+	// 2. a=main.go, b=test1.go (reverse)
+	if len(result.Nodes) != 2 {
+		t.Errorf("expected 2 results (both directions), got %d", len(result.Nodes))
+	}
+}
+
+// Test undirected edge with specific node types
+func TestPattern_UndirectedEdgeWithTypes(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Pattern: (file1:fs:file)-[:references]-(file2:fs:file)
+	pattern := aql.Pat(aql.NodeType("file1", "fs:file")).
+		Either(aql.AnyEdgeOfType("references"), aql.NodeType("file2", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("file1"), aql.Col("file2")).
+		FromPattern(pattern).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Undirected pattern query failed: %v", err)
+	}
+
+	// Should still get 2 results
+	if len(result.Nodes) != 2 {
+		t.Errorf("expected 2 results, got %d", len(result.Nodes))
+	}
+
+	// Verify all results are fs:file
+	for _, node := range result.Nodes {
+		if node.Type != "fs:file" {
+			t.Errorf("expected fs:file, got %s", node.Type)
+		}
+	}
+}
+
+// Test multiple patterns with shared variables: (a)-[:x]->(b), (b)-[:y]->(c)
+func TestPattern_MultipleWithShared(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Two patterns sharing variable 'dir':
+	// Pattern 1: (repo:vcs:repo)-[:located_at]->(dir:fs:dir)
+	// Pattern 2: (dir)-[:contains]->(file:fs:file)
+	// This should find: repo -> src dir -> files (test1.go, test2.py)
+
+	pattern1 := aql.Pat(aql.NodeType("repo", "vcs:repo")).
+		To(aql.AnyEdgeOfType("located_at"), aql.NodeType("dir", "fs:dir")).
+		Build()
+
+	pattern2 := aql.Pat(aql.N("dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("file")).
+		FromPattern(pattern1, pattern2).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Multiple pattern query failed: %v", err)
+	}
+
+	// Should get test1.go and test2.py (both in src dir)
+	if len(result.Nodes) != 2 {
+		t.Errorf("expected 2 files, got %d", len(result.Nodes))
+		for _, node := range result.Nodes {
+			t.Logf("  - %s", node.Name)
+		}
+	}
+
+	// Verify all are fs:file
+	for _, node := range result.Nodes {
+		if node.Type != "fs:file" {
+			t.Errorf("expected fs:file, got %s", node.Type)
+		}
+	}
+}
+
+// Test multiple patterns finding transitive relationships
+func TestPattern_MultipleTransitive(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Three-hop pattern using two patterns:
+	// (repo:vcs:repo)-[:located_at]->(dir:fs:dir), (dir)-[:contains]->(file:fs:file)
+	// Then filter by file type
+
+	pattern1 := aql.Pat(aql.NodeType("repo", "vcs:repo")).
+		To(aql.AnyEdgeOfType("located_at"), aql.NodeType("dir", "fs:dir")).
+		Build()
+
+	pattern2 := aql.Pat(aql.N("dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("repo"), aql.Col("file")).
+		FromPattern(pattern1, pattern2).
+		Where(&aql.ComparisonExpr{
+			Left:  aql.Col("file", "data", "ext"),
+			Op:    aql.OpEq,
+			Right: aql.String("go"),
+		}).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Multiple pattern query failed: %v", err)
+	}
+
+	// Should get test1.go (the only .go file in src dir)
+	if len(result.Nodes) != 1 {
+		t.Errorf("expected 1 .go file, got %d", len(result.Nodes))
+	}
+}
+
+// Test pattern with ORDER BY
+func TestPattern_OrderBy(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("file")).
+		FromPattern(pattern).
+		OrderBy("file.name").
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern ORDER BY query failed: %v", err)
+	}
+
+	if len(result.Nodes) != 3 {
+		t.Fatalf("expected 3 files, got %d", len(result.Nodes))
+	}
+
+	// Check ascending order (main.go, test1.go, test2.py)
+	if result.Nodes[0].Name != "main.go" {
+		t.Errorf("expected main.go first, got %s", result.Nodes[0].Name)
+	}
+}
+
+// Test pattern with ORDER BY DESC
+func TestPattern_OrderByDesc(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("file")).
+		FromPattern(pattern).
+		OrderByDesc("file.name").
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern ORDER BY DESC query failed: %v", err)
+	}
+
+	if len(result.Nodes) != 3 {
+		t.Fatalf("expected 3 files, got %d", len(result.Nodes))
+	}
+
+	// Check descending order (test2.py, test1.go, main.go)
+	if result.Nodes[0].Name != "test2.py" {
+		t.Errorf("expected test2.py first, got %s", result.Nodes[0].Name)
+	}
+}
+
+// Test pattern with GROUP BY
+func TestPattern_GroupBy(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Count files by directory
+	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("dir", "name"), aql.Count()).
+		FromPattern(pattern).
+		GroupByCol("dir.name").
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern GROUP BY query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeCounts {
+		t.Errorf("expected ResultTypeCounts, got %v", result.Type)
+	}
+
+	// Should get src: 2, cmd: 1
+	if len(result.Counts) != 2 {
+		t.Errorf("expected 2 groups, got %d", len(result.Counts))
+	}
+
+	if result.Counts["src"] != 2 {
+		t.Errorf("expected src: 2, got %d", result.Counts["src"])
+	}
+
+	if result.Counts["cmd"] != 1 {
+		t.Errorf("expected cmd: 1, got %d", result.Counts["cmd"])
+	}
+}
+
 // Test Explain for pattern query
 func TestPattern_Explain(t *testing.T) {
 	s, ctx := setupAQLTest(t)
