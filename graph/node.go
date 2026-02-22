@@ -10,16 +10,16 @@ import (
 
 // Node represents a vertex in the graph.
 type Node struct {
-	ID         string    `json:"id"`
-	Type       string    `json:"type"`
+	ID         string    `json:"id,omitempty"`
+	Type       string    `json:"type,omitempty"`
 	URI        string    `json:"uri,omitempty"`
 	Key        string    `json:"key,omitempty"`
 	Name       string    `json:"name,omitempty"`   // Human-readable name (filename, branch name, section title)
 	Labels     []string  `json:"labels,omitempty"` // Categorical labels (e.g., "ci:config", "agent:instructions")
 	Data       any       `json:"data,omitempty"`
 	Generation string    `json:"generation,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	CreatedAt  time.Time `json:"created_at,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at,omitempty"`
 }
 
 // NewID generates a new unique node ID using gonanoid.
