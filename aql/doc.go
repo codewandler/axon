@@ -8,8 +8,7 @@
 //
 // Parse a query string into an AST:
 //
-//	p := aql.NewParser()
-//	query, err := p.Parse("SELECT * FROM nodes WHERE type = 'fs:file'")
+//	query, err := aql.Parse("SELECT * FROM nodes WHERE type = 'fs:file'")
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
@@ -23,19 +22,63 @@
 //	    }
 //	}
 //
+// Execute a query against the storage:
+//
+//	result, err := storage.Query(ctx, query)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	// Access results based on type
+//	switch result.Type {
+//	case graph.ResultTypeNodes:
+//	    for _, node := range result.Nodes {
+//	        fmt.Println(node.Name, node.Type)
+//	    }
+//	case graph.ResultTypeEdges:
+//	    for _, edge := range result.Edges {
+//	        fmt.Println(edge.Type, edge.From, edge.To)
+//	    }
+//	case graph.ResultTypeCounts:
+//	    for key, count := range result.Counts {
+//	        fmt.Printf("%s: %d\n", key, count)
+//	    }
+//	}
+//
+// Get query execution plan:
+//
+//	plan, err := storage.Explain(ctx, query)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//	fmt.Println("SQL:", plan.SQL)
+//	fmt.Println("Plan:", plan.SQLitePlan)
+//
 // # Query Syntax
 //
 // AQL supports two types of sources in the FROM clause:
 //
-// Table queries - query the flat nodes or edges tables:
+// Table queries - query the flat nodes or edges tables (Phase 1 - implemented):
 //
 //	SELECT * FROM nodes WHERE type = 'fs:file'
 //	SELECT * FROM edges WHERE type = 'contains'
+//	SELECT type, COUNT(*) FROM nodes GROUP BY type
+//	SELECT name, type FROM nodes WHERE data.ext = 'go'
 //
-// Pattern queries - use graph pattern matching:
+// Pattern queries - use graph pattern matching (Phase 2/3 - planned):
 //
 //	SELECT file FROM (dir:fs:dir)-[:contains]->(file:fs:file)
 //	SELECT a, b FROM (a:fs:dir)-[:contains*1..3]->(b:fs:file)
+//
+// # JSON Field Access
+//
+// The data field can be queried using dot notation (Phase 1):
+//
+//	SELECT * FROM nodes WHERE data.ext = 'go'
+//	SELECT * FROM nodes WHERE data.size > 1000
+//	SELECT * FROM nodes WHERE data.mode BETWEEN 400 AND 500
+//
+// This compiles to efficient json_extract() calls in SQLite
 //
 // # Pattern Matching
 //
@@ -74,9 +117,18 @@
 //	NOT expr                    - boolean NOT
 //	(expr)                      - grouping
 //
+// # Partial Field Selection
+//
+// When selecting specific columns instead of *, the result nodes/edges will
+// only have those fields populated. Other fields will have zero values:
+//
+//	SELECT name, type FROM nodes WHERE type = 'fs:file'
+//	// Returns nodes with only name and type populated
+//	// node.ID == "", node.URI == "", etc.
+//
 // # Parameters
 //
-// Both named and positional parameters are supported:
+// Both named and positional parameters are supported (Phase 2 - planned):
 //
 //	SELECT * FROM nodes WHERE type = $type      -- named
 //	SELECT * FROM nodes WHERE type = $1         -- positional
@@ -89,10 +141,20 @@
 //	    From("nodes").
 //	    Where(aql.And(
 //	        aql.Eq("type", aql.String("fs:file")),
-//	        aql.Gt("size", aql.Int(1000)),
+//	        aql.Gt("data.size", aql.Int(1000)),  // dot notation works in builders
 //	    )).
 //	    OrderBy("name").
 //	    Limit(10).
+//	    Build()
+//
+// For JSON field access, use dot notation directly:
+//
+//	q := aql.SelectStar().
+//	    From("nodes").
+//	    Where(aql.And(
+//	        aql.Eq("data.ext", aql.String("go")),
+//	        aql.Between("data.size", aql.Int(100), aql.Int(1000)),
+//	    )).
 //	    Build()
 //
 // Pattern queries with the builder:
