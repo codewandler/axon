@@ -348,10 +348,12 @@ func (i *Indexer) indexTypeSpec(ctx context.Context, ictx *indexer.Context, pkgI
 	}
 
 	pos := fset.Position(spec.Pos())
+	endPos := fset.Position(spec.End())
 	position := types.Position{
-		File:   pos.Filename,
-		Line:   pos.Line,
-		Column: pos.Column,
+		File:    pos.Filename,
+		Line:    pos.Line,
+		Column:  pos.Column,
+		EndLine: endPos.Line,
 	}
 
 	switch t := spec.Type.(type) {
@@ -431,6 +433,7 @@ func (i *Indexer) indexField(ctx context.Context, ictx *indexer.Context, structI
 		}
 
 		pos := fset.Position(field.Pos())
+		endPos := fset.Position(field.End())
 		fieldURI := structURI + "/field/" + name
 		fieldNode := graph.NewNode(types.TypeGoField).
 			WithURI(fieldURI).
@@ -443,9 +446,10 @@ func (i *Indexer) indexField(ctx context.Context, ictx *indexer.Context, structI
 				Exported: exported,
 				Embedded: true,
 				Position: types.Position{
-					File:   pos.Filename,
-					Line:   pos.Line,
-					Column: pos.Column,
+					File:    pos.Filename,
+					Line:    pos.Line,
+					Column:  pos.Column,
+					EndLine: endPos.Line,
 				},
 			})
 
@@ -465,6 +469,7 @@ func (i *Indexer) indexField(ctx context.Context, ictx *indexer.Context, structI
 		}
 
 		pos := fset.Position(ident.Pos())
+		endPos := fset.Position(field.End())
 		tag := ""
 		if field.Tag != nil {
 			tag = field.Tag.Value
@@ -483,9 +488,10 @@ func (i *Indexer) indexField(ctx context.Context, ictx *indexer.Context, structI
 				Exported: exported,
 				Embedded: false,
 				Position: types.Position{
-					File:   pos.Filename,
-					Line:   pos.Line,
-					Column: pos.Column,
+					File:    pos.Filename,
+					Line:    pos.Line,
+					Column:  pos.Column,
+					EndLine: endPos.Line,
 				},
 			})
 
@@ -573,6 +579,7 @@ func (i *Indexer) indexInterfaceMethod(ctx context.Context, ictx *indexer.Contex
 		}
 
 		pos := fset.Position(ident.Pos())
+		endPos := fset.Position(method.End())
 		params, results := extractFuncSignature(ft)
 
 		methodURI := ifaceURI + "/method/" + name
@@ -589,9 +596,10 @@ func (i *Indexer) indexInterfaceMethod(ctx context.Context, ictx *indexer.Contex
 				Params:    params,
 				Results:   results,
 				Position: types.Position{
-					File:   pos.Filename,
-					Line:   pos.Line,
-					Column: pos.Column,
+					File:    pos.Filename,
+					Line:    pos.Line,
+					Column:  pos.Column,
+					EndLine: endPos.Line,
 				},
 			})
 
@@ -627,10 +635,12 @@ func (i *Indexer) indexValueSpec(ctx context.Context, ictx *indexer.Context, pkg
 		}
 
 		pos := fset.Position(ident.Pos())
+		endPos := fset.Position(spec.End())
 		position := types.Position{
-			File:   pos.Filename,
-			Line:   pos.Line,
-			Column: pos.Column,
+			File:    pos.Filename,
+			Line:    pos.Line,
+			Column:  pos.Column,
+			EndLine: endPos.Line,
 		}
 
 		if tok == token.CONST {
@@ -699,10 +709,12 @@ func (i *Indexer) indexFuncDecl(ctx context.Context, ictx *indexer.Context, pkgI
 	}
 
 	pos := fset.Position(decl.Pos())
+	endPos := fset.Position(decl.End())
 	position := types.Position{
-		File:   pos.Filename,
-		Line:   pos.Line,
-		Column: pos.Column,
+		File:    pos.Filename,
+		Line:    pos.Line,
+		Column:  pos.Column,
+		EndLine: endPos.Line,
 	}
 
 	doc := ""

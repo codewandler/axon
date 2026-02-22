@@ -586,3 +586,163 @@ func TestEdges(t *testing.T) {
 		t.Error("expected package to have 'defines' edges to symbols")
 	}
 }
+
+// TestEndLineCapture verifies that EndLine is captured for all symbol types.
+func TestEndLineCapture(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestModule(t)
+	g := setupGraph(t)
+
+	idx := New()
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+
+	ictx := &indexer.Context{
+		Root:       types.GoModulePathToURI(dir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	// Create fs:file node for go.mod
+	goModPath := filepath.Join(dir, "go.mod")
+	goModNode := graph.NewNode(types.TypeFile).
+		WithURI(types.PathToURI(goModPath)).
+		WithKey(goModPath).
+		WithName("go.mod")
+	if err := emitter.EmitNode(ctx, goModNode); err != nil {
+		t.Fatalf("failed to emit go.mod node: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	// Trigger indexing
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(goModPath),
+		Path:     goModPath,
+		Name:     "go.mod",
+		NodeType: types.TypeFile,
+		NodeID:   goModNode.ID,
+		Node:     goModNode,
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent failed: %v", err)
+	}
+
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	// Check that functions have EndLine > Line
+	funcs, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeGoFunc}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes for functions failed: %v", err)
+	}
+
+	for _, fn := range funcs {
+		data, ok := fn.Data.(map[string]any)
+		if !ok {
+			t.Errorf("expected func data to be map, got %T", fn.Data)
+			continue
+		}
+		pos, ok := data["position"].(map[string]any)
+		if !ok {
+			t.Errorf("expected position in func data, got %v", data)
+			continue
+		}
+		line := int(pos["line"].(float64))
+		endLine := int(pos["end_line"].(float64))
+
+		if endLine < line {
+			t.Errorf("func %s: EndLine (%d) should be >= Line (%d)", fn.Name, endLine, line)
+		}
+
+		// Multi-line functions should have EndLine > Line
+		if fn.Name == "New" || fn.Name == "Max" {
+			if endLine <= line {
+				t.Errorf("func %s: expected EndLine > Line for multi-line function, got Line=%d EndLine=%d", fn.Name, line, endLine)
+			}
+		}
+	}
+
+	// Check that structs have EndLine > Line
+	structs, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeGoStruct}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes for structs failed: %v", err)
+	}
+
+	for _, st := range structs {
+		data, ok := st.Data.(map[string]any)
+		if !ok {
+			continue
+		}
+		pos, ok := data["position"].(map[string]any)
+		if !ok {
+			continue
+		}
+		line := int(pos["line"].(float64))
+		endLine := int(pos["end_line"].(float64))
+
+		if endLine < line {
+			t.Errorf("struct %s: EndLine (%d) should be >= Line (%d)", st.Name, endLine, line)
+		}
+
+		// Multi-line structs should have EndLine > Line
+		if st.Name == "Config" || st.Name == "User" {
+			if endLine <= line {
+				t.Errorf("struct %s: expected EndLine > Line for multi-line struct, got Line=%d EndLine=%d", st.Name, line, endLine)
+			}
+		}
+	}
+
+	// Check interfaces
+	ifaces, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeGoInterface}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes for interfaces failed: %v", err)
+	}
+
+	for _, iface := range ifaces {
+		data, ok := iface.Data.(map[string]any)
+		if !ok {
+			continue
+		}
+		pos, ok := data["position"].(map[string]any)
+		if !ok {
+			continue
+		}
+		line := int(pos["line"].(float64))
+		endLine := int(pos["end_line"].(float64))
+
+		if endLine < line {
+			t.Errorf("interface %s: EndLine (%d) should be >= Line (%d)", iface.Name, endLine, line)
+		}
+	}
+
+	// Check methods
+	methods, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeGoMethod}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes for methods failed: %v", err)
+	}
+
+	for _, m := range methods {
+		data, ok := m.Data.(map[string]any)
+		if !ok {
+			continue
+		}
+		pos, ok := data["position"].(map[string]any)
+		if !ok {
+			continue
+		}
+		line := int(pos["line"].(float64))
+		endLine := int(pos["end_line"].(float64))
+
+		if endLine < line {
+			t.Errorf("method %s: EndLine (%d) should be >= Line (%d)", m.Name, endLine, line)
+		}
+	}
+
+	t.Logf("Verified EndLine for %d functions, %d structs, %d interfaces, %d methods",
+		len(funcs), len(structs), len(ifaces), len(methods))
+}

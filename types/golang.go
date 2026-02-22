@@ -126,9 +126,10 @@ type VarData struct {
 
 // Position represents a source code position.
 type Position struct {
-	File   string `json:"file"`   // Filename
-	Line   int    `json:"line"`   // Line number (1-indexed)
-	Column int    `json:"column"` // Column number (1-indexed)
+	File    string `json:"file"`               // Filename
+	Line    int    `json:"line"`               // Line number (1-indexed)
+	Column  int    `json:"column"`             // Column number (1-indexed)
+	EndLine int    `json:"end_line,omitempty"` // End line number (1-indexed), 0 if unknown
 }
 
 // RefData holds data for a reference (usage site) to a symbol.
