@@ -1356,15 +1356,17 @@ func (s *Storage) compileVariableLengthPattern(q *aql.Query, src *aql.PatternSou
 		maxHops = *edge.MaxHops
 	}
 
-	// For bounded hops with a reasonable max (<=10), use unrolled JOIN chains.
-	// This is dramatically faster than CTEs because SQLite can push LIMIT
-	// through JOINs but must fully materialize CTEs before applying LIMIT.
-	if maxHops > 0 && maxHops <= 10 {
-		return s.compileUnrolledVariableLength(q, startNode, edge, endNode, minHops, maxHops)
+	// For unbounded paths, cap at a reasonable depth limit.
+	// Filesystem trees rarely exceed 20 levels; this avoids the CTE
+	// materialization penalty while covering all practical depths.
+	if maxHops < 0 {
+		maxHops = 20
 	}
 
-	// Unbounded or very deep: use recursive CTE with optimizations
-	return s.compileCTEVariableLength(q, startNode, edge, endNode, minHops, maxHops)
+	// Use unrolled JOIN chains - dramatically faster than CTEs because
+	// SQLite can push LIMIT through JOINs but must fully materialize
+	// CTEs before applying LIMIT.
+	return s.compileUnrolledVariableLength(q, startNode, edge, endNode, minHops, maxHops)
 }
 
 // compileUnrolledVariableLength generates a UNION ALL of JOIN chains for each

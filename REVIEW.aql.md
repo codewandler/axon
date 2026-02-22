@@ -9,7 +9,7 @@ Date: 2026-02-22
 | 1 | `SELECT value FROM nodes, json_each(labels)` | ~~Error: "converting NULL to int"~~ FIXED |
 | 2 | `SELECT data.ext FROM nodes` | ~~JSON field column not returned~~ FIXED |
 | 3 | `SELECT name FROM nodes WHERE type = 'fs:file'` | ~~Column silently dropped~~ FIXED |
-| 4 | `SELECT file FROM (dir)-[:contains*1..2]->(file)` | ~~Times out (>30s)~~ FIXED: 17ms (bounded uses unrolled JOINs). Unbounded `*` still slow (CTE). |
+| 4 | `SELECT file FROM (dir)-[:contains*]->(file)` | ~~Times out (>30s)~~ FIXED: 23ms (unbounded capped at 20 hops, uses unrolled JOINs) |
 | 5 | `WHERE EXISTS (dir)-[:contains]->(:fs:file)` | Compile error: unsupported expression |
 | 6 | `SELECT name, type FROM nodes WHERE type = 'fs:file'` | ~~`name` column dropped~~ FIXED |
 | 7 | `SELECT data.name FROM nodes WHERE type = 'fs:dir'` | ~~JSON field columns not returned~~ FIXED |
