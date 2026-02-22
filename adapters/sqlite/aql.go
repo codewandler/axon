@@ -242,15 +242,25 @@ func (s *Storage) compileFlatQuery(q *aql.Query) (string, []any, graph.ResultTyp
 //
 // Phase 3 (future): Variable-length paths, EXISTS subqueries
 func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (string, []any, graph.ResultType, error) {
-	// Check for Phase 3 features
+	// Check if any patterns have variable-length edges
+	hasVariableLength := false
 	for _, pattern := range src.Patterns {
 		for _, elem := range pattern.Elements {
 			if edge, ok := elem.(*aql.EdgePattern); ok {
 				if edge.IsVariableLength() {
-					return "", nil, 0, fmt.Errorf("variable-length paths not supported in Phase 2 (will be added in Phase 3)")
+					hasVariableLength = true
+					break
 				}
 			}
 		}
+		if hasVariableLength {
+			break
+		}
+	}
+
+	// Use recursive CTE compilation for variable-length patterns
+	if hasVariableLength {
+		return s.compileVariableLengthPattern(q, src)
 	}
 
 	// Build the FROM clause with JOINs
@@ -509,6 +519,170 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 	}
 
 	return sql, args, resultType, nil
+}
+
+// compileVariableLengthPattern compiles patterns with variable-length edges using recursive CTEs.
+// Phase 3: Supports patterns like (a)-[:type*1..3]->(b)
+func (s *Storage) compileVariableLengthPattern(q *aql.Query, src *aql.PatternSource) (string, []any, graph.ResultType, error) {
+	// For now, only support single pattern with single variable-length edge
+	if len(src.Patterns) > 1 {
+		return "", nil, 0, fmt.Errorf("multiple patterns with variable-length edges not yet supported")
+	}
+
+	pattern := src.Patterns[0]
+
+	// Find the variable-length edge
+	var varLenEdgeIdx int = -1
+	for i, elem := range pattern.Elements {
+		if edge, ok := elem.(*aql.EdgePattern); ok {
+			if edge.IsVariableLength() {
+				if varLenEdgeIdx >= 0 {
+					return "", nil, 0, fmt.Errorf("only one variable-length edge per pattern is supported")
+				}
+				varLenEdgeIdx = i
+			}
+		}
+	}
+
+	if varLenEdgeIdx < 0 {
+		return "", nil, 0, fmt.Errorf("no variable-length edge found")
+	}
+
+	// Pattern should be: (start_node) -[edge*min..max]-> (end_node)
+	// varLenEdgeIdx should be 1 (after first node)
+	if varLenEdgeIdx != 1 || len(pattern.Elements) != 3 {
+		return "", nil, 0, fmt.Errorf("variable-length patterns must be: (start)-[:type*min..max]->(end)")
+	}
+
+	startNode := pattern.Elements[0].(*aql.NodePattern)
+	edge := pattern.Elements[1].(*aql.EdgePattern)
+	endNode := pattern.Elements[2].(*aql.NodePattern)
+
+	// Get min/max hops
+	minHops := 1
+	if edge.MinHops != nil {
+		minHops = *edge.MinHops
+	}
+	maxHops := -1 // -1 means unbounded
+	if edge.MaxHops != nil {
+		maxHops = *edge.MaxHops
+	}
+
+	var args []any
+	var whereClauses []string
+
+	// Build CTE for recursive path finding
+	cteSQL := "WITH RECURSIVE paths(start_id, end_id, depth) AS (\n"
+
+	// Base case: direct edges
+	cteSQL += "  SELECT e.from_id, e.to_id, 1\n"
+	cteSQL += "  FROM edges e\n"
+
+	// Edge type filter
+	if len(edge.Types) > 1 {
+		placeholders := make([]string, len(edge.Types))
+		for i := range edge.Types {
+			placeholders[i] = "?"
+			args = append(args, edge.Types[i])
+		}
+		cteSQL += fmt.Sprintf("  WHERE e.type IN (%s)\n", strings.Join(placeholders, ", "))
+	} else if edge.Type != "" {
+		cteSQL += "  WHERE e.type = ?\n"
+		args = append(args, edge.Type)
+	}
+
+	cteSQL += "\n  UNION ALL\n\n"
+
+	// Recursive case: extend paths
+	cteSQL += "  SELECT p.start_id, e.to_id, p.depth + 1\n"
+	cteSQL += "  FROM paths p\n"
+	cteSQL += "  JOIN edges e ON e.from_id = p.end_id\n"
+
+	var recursiveWhere []string
+
+	// Edge type filter in recursive case
+	if len(edge.Types) > 1 {
+		placeholders := make([]string, len(edge.Types))
+		for i := range edge.Types {
+			placeholders[i] = "?"
+			args = append(args, edge.Types[i])
+		}
+		recursiveWhere = append(recursiveWhere, fmt.Sprintf("e.type IN (%s)", strings.Join(placeholders, ", ")))
+	} else if edge.Type != "" {
+		recursiveWhere = append(recursiveWhere, "e.type = ?")
+		args = append(args, edge.Type)
+	}
+
+	// Max depth limit
+	if maxHops > 0 {
+		recursiveWhere = append(recursiveWhere, fmt.Sprintf("p.depth < %d", maxHops))
+	}
+
+	if len(recursiveWhere) > 0 {
+		cteSQL += "  WHERE " + strings.Join(recursiveWhere, " AND ") + "\n"
+	}
+
+	cteSQL += ")\n"
+
+	// Determine which node to select based on query
+	// For now, support simple single-variable selection
+	selectVar := ""
+	if len(q.Select.Columns) > 0 {
+		if sel, ok := q.Select.Columns[0].Expr.(*aql.Selector); ok {
+			if len(sel.Parts) == 1 {
+				selectVar = sel.Parts[0]
+			}
+		}
+	}
+
+	// Main query - select the requested variable
+	if selectVar == endNode.Variable {
+		cteSQL += "SELECT DISTINCT n1.*\n"
+	} else {
+		// Default to start node
+		cteSQL += "SELECT DISTINCT n0.*\n"
+	}
+
+	cteSQL += "FROM nodes n0\n"
+	cteSQL += "JOIN paths p ON p.start_id = n0.id\n"
+	cteSQL += "JOIN nodes n1 ON n1.id = p.end_id\n"
+
+	// Depth constraints
+	if minHops > 1 || maxHops > 0 {
+		depthConstraints := []string{}
+		if minHops > 1 {
+			depthConstraints = append(depthConstraints, fmt.Sprintf("p.depth >= %d", minHops))
+		}
+		if maxHops > 0 {
+			depthConstraints = append(depthConstraints, fmt.Sprintf("p.depth <= %d", maxHops))
+		}
+		whereClauses = append(whereClauses, strings.Join(depthConstraints, " AND "))
+	}
+
+	// Node type constraints
+	if startNode.Type != "" {
+		whereClauses = append(whereClauses, "n0.type = ?")
+		args = append(args, startNode.Type)
+	}
+	if endNode.Type != "" {
+		whereClauses = append(whereClauses, "n1.type = ?")
+		args = append(args, endNode.Type)
+	}
+
+	if len(whereClauses) > 0 {
+		cteSQL += "WHERE " + strings.Join(whereClauses, " AND ") + "\n"
+	}
+
+	// Add LIMIT if present
+	if q.Select.Limit != nil {
+		cteSQL += "LIMIT ?"
+		args = append(args, *q.Select.Limit)
+	}
+
+	// Determine result type - for now always nodes
+	resultType := graph.ResultTypeNodes
+
+	return cteSQL, args, resultType, nil
 }
 
 // compilePatternSelect compiles the SELECT clause for pattern queries.

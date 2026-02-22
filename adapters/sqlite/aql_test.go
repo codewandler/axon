@@ -1306,6 +1306,199 @@ func containsInner(s, substr string) bool {
 	return false
 }
 
+// ============================================================================
+// PHASE 3: VARIABLE-LENGTH PATH TESTS
+// ============================================================================
+
+// Test variable-length path: (a)-[:contains*1..2]->(b)
+func TestPattern_VariableLength(t *testing.T) {
+	// Use a fresh database to avoid interference from setupAQLTest data
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+
+	// Create a deeper hierarchy for testing
+	// root -> level1 -> level2
+	root := graph.NewNode("fs:dir").WithURI("file:///root").WithName("root")
+	level1 := graph.NewNode("fs:dir").WithURI("file:///root/level1").WithName("level1")
+	level2 := graph.NewNode("fs:file").WithURI("file:///root/level1/level2.txt").WithName("level2.txt")
+
+	s.PutNode(ctx, root)
+	s.PutNode(ctx, level1)
+	s.PutNode(ctx, level2)
+
+	s.PutEdge(ctx, graph.NewEdge("contains", root.ID, level1.ID))
+	s.PutEdge(ctx, graph.NewEdge("contains", level1.ID, level2.ID))
+	s.Flush(ctx)
+
+	// Query: find all descendants 1-2 hops away from directories
+	pattern := aql.Pat(aql.NodeType("start", "fs:dir")).
+		To(aql.EdgeType("e", "contains").WithHops(1, 2), aql.N("end")).
+		Build()
+
+	q := aql.Select(aql.Col("end")).
+		FromPattern(pattern).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Variable-length query failed: %v", err)
+	}
+
+	// Should find level1 (1 hop from root) and level2.txt (2 hops from root, 1 hop from level1)
+	// Total: 2 unique nodes
+	if len(result.Nodes) < 2 {
+		t.Errorf("expected at least 2 nodes, got %d", len(result.Nodes))
+		for _, n := range result.Nodes {
+			t.Logf("  - %s", n.Name)
+		}
+	}
+}
+
+// Test variable-length path with exact hops: (a)-[:contains*2]->(b)
+func TestPattern_VariableLengthExact(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+
+	// Create 3-level hierarchy
+	root := graph.NewNode("fs:dir").WithURI("file:///root").WithName("root")
+	level1 := graph.NewNode("fs:dir").WithURI("file:///level1").WithName("level1")
+	level2 := graph.NewNode("fs:file").WithURI("file:///level2.txt").WithName("level2.txt")
+
+	s.PutNode(ctx, root)
+	s.PutNode(ctx, level1)
+	s.PutNode(ctx, level2)
+
+	s.PutEdge(ctx, graph.NewEdge("contains", root.ID, level1.ID))
+	s.PutEdge(ctx, graph.NewEdge("contains", level1.ID, level2.ID))
+	s.Flush(ctx)
+
+	// Query: find nodes EXACTLY 2 hops away (only level2.txt)
+	pattern := aql.Pat(aql.N("start")).
+		To(aql.AnyEdgeOfType("contains").WithHops(2, 2), aql.N("end")).
+		Build()
+
+	q := aql.Select(aql.Col("end")).
+		FromPattern(pattern).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Exact hops query failed: %v", err)
+	}
+
+	// Only level2.txt is exactly 2 hops from root
+	if len(result.Nodes) != 1 {
+		t.Errorf("expected 1 node, got %d", len(result.Nodes))
+	}
+
+	if len(result.Nodes) > 0 && result.Nodes[0].Name != "level2.txt" {
+		t.Errorf("expected level2.txt, got %s", result.Nodes[0].Name)
+	}
+}
+
+// Test variable-length path with unbounded max: (a)-[:contains*2..]->(b)
+func TestPattern_VariableLengthUnbounded(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+
+	// Create 4-level hierarchy to test unbounded
+	l0 := graph.NewNode("fs:dir").WithURI("file:///l0").WithName("l0")
+	l1 := graph.NewNode("fs:dir").WithURI("file:///l1").WithName("l1")
+	l2 := graph.NewNode("fs:dir").WithURI("file:///l2").WithName("l2")
+	l3 := graph.NewNode("fs:file").WithURI("file:///l3.txt").WithName("l3.txt")
+
+	s.PutNode(ctx, l0)
+	s.PutNode(ctx, l1)
+	s.PutNode(ctx, l2)
+	s.PutNode(ctx, l3)
+
+	s.PutEdge(ctx, graph.NewEdge("contains", l0.ID, l1.ID))
+	s.PutEdge(ctx, graph.NewEdge("contains", l1.ID, l2.ID))
+	s.PutEdge(ctx, graph.NewEdge("contains", l2.ID, l3.ID))
+	s.Flush(ctx)
+
+	// Query: find nodes 2+ hops away (l2, l3.txt)
+	pattern := aql.Pat(aql.N("start")).
+		To(aql.AnyEdgeOfType("contains").WithMinHops(2), aql.N("end")).
+		Build()
+
+	q := aql.Select(aql.Col("end")).
+		FromPattern(pattern).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Unbounded query failed: %v", err)
+	}
+
+	// Should find l2 (2 hops) and l3.txt (3 hops)
+	// But also l3.txt can be reached from l1 in 2 hops, and from l0 in 3 hops
+	// So we get: from l0: l2(2), l3(3); from l1: l3(2)
+	// Distinct nodes: l2, l3
+	if len(result.Nodes) < 2 {
+		t.Errorf("expected at least 2 nodes, got %d", len(result.Nodes))
+	}
+}
+
+// Test variable-length with multi-type edges
+func TestPattern_VariableLengthMultiType(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+
+	// Create mixed hierarchy with contains and has
+	root := graph.NewNode("vcs:repo").WithURI("git://repo").WithName("repo")
+	branch := graph.NewNode("vcs:branch").WithURI("git://branch").WithName("main")
+	file := graph.NewNode("fs:file").WithURI("file:///file.txt").WithName("file.txt")
+
+	s.PutNode(ctx, root)
+	s.PutNode(ctx, branch)
+	s.PutNode(ctx, file)
+
+	s.PutEdge(ctx, graph.NewEdge("has", root.ID, branch.ID))
+	s.PutEdge(ctx, graph.NewEdge("contains", branch.ID, file.ID))
+	s.Flush(ctx)
+
+	// Query: traverse both has and contains edges
+	pattern := aql.Pat(aql.N("start")).
+		To(aql.EdgeTypes("has", "contains").WithHops(1, 2), aql.N("end")).
+		Build()
+
+	q := aql.Select(aql.Col("end")).
+		FromPattern(pattern).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Multi-type variable-length query failed: %v", err)
+	}
+
+	// Should find: branch (1 hop via has), file (2 hops via has then contains)
+	if len(result.Nodes) < 2 {
+		t.Errorf("expected at least 2 nodes, got %d", len(result.Nodes))
+	}
+}
+
 // Test EXISTS not supported (Phase 3)
 func TestQuery_ExistsNotSupported(t *testing.T) {
 	s, ctx := setupAQLTest(t)

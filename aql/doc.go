@@ -65,7 +65,7 @@
 //	SELECT type, COUNT(*) FROM nodes GROUP BY type
 //	SELECT name, type FROM nodes WHERE data.ext = 'go'
 //
-// Pattern queries - use graph pattern matching (Phase 2 - ✅ implemented, Phase 3 - planned):
+// Pattern queries - use graph pattern matching (Phase 2 - ✅ implemented, Phase 3 - ✅ implemented):
 //
 //	SELECT file FROM (dir:fs:dir)-[:contains]->(file:fs:file)
 //	SELECT branch FROM (repo:vcs:repo)-[:has]->(branch:vcs:branch)
@@ -73,7 +73,9 @@
 //	SELECT child FROM (parent)-[:contains|has]->(child)
 //	SELECT repo FROM (branch:vcs:branch)<-[:has]-(repo:vcs:repo)
 //	SELECT file FROM (dir)-[:contains]->(file) WHERE file.data.ext = 'go'
-//	SELECT a, b FROM (a:fs:dir)-[:contains*1..3]->(b:fs:file)  -- Phase 3
+//	SELECT b FROM (a:fs:dir)-[:contains*1..3]->(b:fs:file)    -- Phase 3: variable-length
+//	SELECT b FROM (a)-[:contains*2]->(b)                      -- Phase 3: exact hops
+//	SELECT b FROM (a)-[:contains*2..]->(b)                    -- Phase 3: unbounded
 //
 // # JSON Field Access
 //
@@ -95,7 +97,21 @@
 //	-[:type]-                    - undirected edge (✅ implemented)
 //	-[:type1|type2]->            - multi-type edge (✅ implemented)
 //	-[variable:type]->           - edge variable binding (✅ implemented)
-//	-[:type*min..max]->          - variable-length path (Phase 3)
+//
+// # Variable-Length Paths (Phase 3)
+//
+// Recursive graph traversal using SQLite CTEs:
+//
+//	-[:type*min..max]->          - bounded variable-length (✅ implemented)
+//	-[:type*n]->                 - exact hops (✅ implemented)
+//	-[:type*min..]->             - unbounded (✅ implemented)
+//
+// Examples:
+//
+//	SELECT file FROM (dir)-[:contains*1..3]->(file)      -- 1 to 3 hops
+//	SELECT node FROM (root)-[:contains*2]->(node)         -- exactly 2 hops
+//	SELECT desc FROM (root)-[:contains*2..]->(desc)       -- 2 or more hops
+//	SELECT n FROM (a)-[:has|contains*1..5]->(n)           -- multi-type with recursion
 //
 // WHERE clauses can reference pattern variables:
 //
@@ -240,4 +256,26 @@
 //	    FromPattern(pattern).
 //	    GroupByCol("dir.name").  // dot notation works
 //	    Build()
+//
+//	// Variable-length path: 1-3 hops
+//	pattern := aql.Pat(aql.NodeType("root", "fs:dir")).
+//	    To(aql.AnyEdgeOfType("contains").WithHops(1, 3), aql.N("descendant")).Build()
+//	q := aql.Select(aql.Col("descendant")).
+//	    FromPattern(pattern).
+//	    Build()
+//
+//	// Variable-length path: exactly 2 hops
+//	pattern := aql.Pat(aql.N("start")).
+//	    To(aql.AnyEdgeOfType("contains").WithHops(2, 2), aql.N("end")).Build()
+//	q := aql.Select(aql.Col("end")).FromPattern(pattern).Build()
+//
+//	// Variable-length path: 2 or more hops (unbounded)
+//	pattern := aql.Pat(aql.N("start")).
+//	    To(aql.AnyEdgeOfType("contains").WithMinHops(2), aql.N("end")).Build()
+//	q := aql.Select(aql.Col("end")).FromPattern(pattern).Build()
+//
+//	// Variable-length with multi-type edges
+//	pattern := aql.Pat(aql.N("root")).
+//	    To(aql.EdgeTypes("has", "contains").WithHops(1, 5), aql.N("node")).Build()
+//	q := aql.Select(aql.Col("node")).FromPattern(pattern).Build()
 package aql
