@@ -58,17 +58,22 @@
 //
 // AQL supports two types of sources in the FROM clause:
 //
-// Table queries - query the flat nodes or edges tables (Phase 1 - implemented):
+// Table queries - query the flat nodes or edges tables (Phase 1 - ✅ implemented):
 //
 //	SELECT * FROM nodes WHERE type = 'fs:file'
 //	SELECT * FROM edges WHERE type = 'contains'
 //	SELECT type, COUNT(*) FROM nodes GROUP BY type
 //	SELECT name, type FROM nodes WHERE data.ext = 'go'
 //
-// Pattern queries - use graph pattern matching (Phase 2/3 - planned):
+// Pattern queries - use graph pattern matching (Phase 2 - ✅ implemented, Phase 3 - planned):
 //
 //	SELECT file FROM (dir:fs:dir)-[:contains]->(file:fs:file)
-//	SELECT a, b FROM (a:fs:dir)-[:contains*1..3]->(b:fs:file)
+//	SELECT branch FROM (repo:vcs:repo)-[:has]->(branch:vcs:branch)
+//	SELECT e FROM (a)-[e:contains]->(b)
+//	SELECT child FROM (parent)-[:contains|has]->(child)
+//	SELECT repo FROM (branch:vcs:branch)<-[:has]-(repo:vcs:repo)
+//	SELECT file FROM (dir)-[:contains]->(file) WHERE file.data.ext = 'go'
+//	SELECT a, b FROM (a:fs:dir)-[:contains*1..3]->(b:fs:file)  -- Phase 3
 //
 // # JSON Field Access
 //
@@ -80,19 +85,26 @@
 //
 // This compiles to efficient json_extract() calls in SQLite
 //
-// # Pattern Matching
+// # Pattern Matching (Phase 2)
 //
 // Patterns follow Cypher-like syntax:
 //
-//	(variable:type)              - node pattern
-//	-[:type]->                   - outgoing edge
-//	<-[:type]-                   - incoming edge
-//	-[:type]-                    - undirected edge
-//	-[:type*min..max]->          - variable-length path
+//	(variable:type)              - node pattern (✅ implemented)
+//	-[:type]->                   - outgoing edge (✅ implemented)
+//	<-[:type]-                   - incoming edge (✅ implemented)
+//	-[:type]-                    - undirected edge (🚧 scaffolded, needs OR logic)
+//	-[:type1|type2]->            - multi-type edge (✅ implemented)
+//	-[variable:type]->           - edge variable binding (✅ implemented)
+//	-[:type*min..max]->          - variable-length path (Phase 3)
+//
+// WHERE clauses can reference pattern variables:
+//
+//	SELECT file FROM (dir:fs:dir)-[:contains]->(file:fs:file)
+//	WHERE file.data.ext = 'go' AND dir.name = 'src'
 //
 // Multiple patterns are comma-separated and share variables (implicit JOIN):
 //
-//	SELECT a, c FROM (a)-[:x]->(b), (b)-[:y]->(c)
+//	SELECT a, c FROM (a)-[:x]->(b), (b)-[:y]->(c)  -- TODO: Phase 2
 //
 // # Expressions
 //
@@ -157,13 +169,41 @@
 //	    )).
 //	    Build()
 //
-// Pattern queries with the builder:
+// Pattern queries with the builder (Phase 2):
 //
+//	// Basic pattern: (dir:fs:dir)-[:contains]->(file:fs:file)
 //	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
 //	    To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
 //	    Build()
-//
 //	q := aql.Select(aql.Col("file")).
 //	    FromPattern(pattern).
+//	    Build()
+//
+//	// Edge variable: (a)-[e:contains]->(b)
+//	pattern := aql.Pat(aql.N("a")).
+//	    To(aql.EdgeType("e", "contains"), aql.N("b")).
+//	    Build()
+//	q := aql.Select(aql.Col("e")).FromPattern(pattern).Build()
+//
+//	// Multi-type edge: (parent)-[:contains|has]->(child)
+//	pattern := aql.Pat(aql.N("parent")).
+//	    To(aql.EdgeTypes("contains", "has"), aql.N("child")).
+//	    Build()
+//	q := aql.Select(aql.Col("child")).FromPattern(pattern).Build()
+//
+//	// Incoming edge: (branch:vcs:branch)<-[:has]-(repo:vcs:repo)
+//	pattern := aql.Pat(aql.NodeType("branch", "vcs:branch")).
+//	    From(aql.AnyEdgeOfType("has"), aql.NodeType("repo", "vcs:repo")).
+//	    Build()
+//	q := aql.Select(aql.Col("repo")).FromPattern(pattern).Build()
+//
+//	// Pattern with WHERE: file.data.ext = 'go'
+//	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+//	    To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+//	    Build()
+//	q := aql.Select(aql.Col("file")).
+//	    FromPattern(pattern).
+//	    Where(aql.Eq("file.data.ext", aql.String("go"))).  // dot notation for JSON fields
+//	    Limit(10).
 //	    Build()
 package aql

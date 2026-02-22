@@ -18,12 +18,20 @@ func setupAQLTest(t *testing.T) (*Storage, context.Context) {
 
 	ctx := context.Background()
 
-	// Insert test data
+	// Insert test data with more structure for pattern tests
 	testNodes := []*graph.Node{
+		// Files
 		graph.NewNode("fs:file").WithURI("file:///test1.go").WithName("test1.go").WithData(map[string]any{"ext": "go", "size": 100}).WithLabels("test", "code"),
 		graph.NewNode("fs:file").WithURI("file:///test2.py").WithName("test2.py").WithData(map[string]any{"ext": "py", "size": 200}).WithLabels("test"),
-		graph.NewNode("fs:dir").WithURI("file:///src").WithName("src").WithLabels("source"),
 		graph.NewNode("fs:file").WithURI("file:///README.md").WithName("README.md").WithData(map[string]any{"ext": "md"}),
+		graph.NewNode("fs:file").WithURI("file:///main.go").WithName("main.go").WithData(map[string]any{"ext": "go", "size": 50}),
+		// Directories
+		graph.NewNode("fs:dir").WithURI("file:///src").WithName("src").WithLabels("source"),
+		graph.NewNode("fs:dir").WithURI("file:///cmd").WithName("cmd"),
+		// VCS
+		graph.NewNode("vcs:repo").WithURI("git+file:///repo").WithName("myrepo"),
+		graph.NewNode("vcs:branch").WithURI("git+file:///repo#main").WithName("main"),
+		graph.NewNode("vcs:branch").WithURI("git+file:///repo#dev").WithName("dev"),
 	}
 
 	for _, node := range testNodes {
@@ -33,8 +41,17 @@ func setupAQLTest(t *testing.T) (*Storage, context.Context) {
 	}
 
 	testEdges := []*graph.Edge{
-		graph.NewEdge("contains", testNodes[2].ID, testNodes[0].ID),
-		graph.NewEdge("contains", testNodes[2].ID, testNodes[1].ID),
+		// Directory containment
+		graph.NewEdge("contains", testNodes[4].ID, testNodes[0].ID), // src -> test1.go
+		graph.NewEdge("contains", testNodes[4].ID, testNodes[1].ID), // src -> test2.py
+		graph.NewEdge("contains", testNodes[5].ID, testNodes[3].ID), // cmd -> main.go
+		// Repo ownership
+		graph.NewEdge("has", testNodes[6].ID, testNodes[7].ID), // repo -> main branch
+		graph.NewEdge("has", testNodes[6].ID, testNodes[8].ID), // repo -> dev branch
+		// Repo location
+		graph.NewEdge("located_at", testNodes[6].ID, testNodes[4].ID), // repo -> src dir
+		// Multi-type edge test
+		graph.NewEdge("references", testNodes[0].ID, testNodes[3].ID), // test1.go -> main.go
 	}
 
 	for _, edge := range testEdges {
@@ -64,8 +81,9 @@ func TestQuery_SelectStar(t *testing.T) {
 		t.Errorf("expected ResultTypeNodes, got %v", result.Type)
 	}
 
-	if len(result.Nodes) != 4 {
-		t.Errorf("expected 4 nodes, got %d", len(result.Nodes))
+	// 4 files + 2 dirs + 1 repo + 2 branches = 9 nodes
+	if len(result.Nodes) != 9 {
+		t.Errorf("expected 9 nodes, got %d", len(result.Nodes))
 	}
 }
 
@@ -79,8 +97,8 @@ func TestQuery_SelectColumns(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	if len(result.Nodes) != 4 {
-		t.Errorf("expected 4 nodes, got %d", len(result.Nodes))
+	if len(result.Nodes) != 9 {
+		t.Errorf("expected 9 nodes, got %d", len(result.Nodes))
 	}
 
 	// Check that only name and type are populated (partial field selection)
@@ -112,8 +130,9 @@ func TestQuery_WhereEqual(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	if len(result.Nodes) != 3 {
-		t.Errorf("expected 3 fs:file nodes, got %d", len(result.Nodes))
+	// 4 fs:file nodes in test data
+	if len(result.Nodes) != 4 {
+		t.Errorf("expected 4 fs:file nodes, got %d", len(result.Nodes))
 	}
 
 	for _, node := range result.Nodes {
@@ -141,8 +160,9 @@ func TestQuery_WhereGlob(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	if len(result.Nodes) != 4 {
-		t.Errorf("expected 4 fs:* nodes, got %d", len(result.Nodes))
+	// 4 files + 2 dirs = 6 fs:* nodes
+	if len(result.Nodes) != 6 {
+		t.Errorf("expected 6 fs:* nodes, got %d", len(result.Nodes))
 	}
 }
 
@@ -198,9 +218,9 @@ func TestQuery_WhereLabelsNotContains(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	// Should get nodes without "test" label (src dir and README)
-	if len(result.Nodes) != 2 {
-		t.Errorf("expected 2 nodes without test label, got %d", len(result.Nodes))
+	// Should get nodes without "test" label (src, cmd, README, main.go, repo, 2 branches = 7)
+	if len(result.Nodes) != 7 {
+		t.Errorf("expected 7 nodes without test label, got %d", len(result.Nodes))
 	}
 }
 
@@ -222,12 +242,17 @@ func TestQuery_WhereJSONField(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	if len(result.Nodes) != 1 {
-		t.Errorf("expected 1 node with ext=go, got %d", len(result.Nodes))
+	// test1.go and main.go both have ext=go
+	if len(result.Nodes) != 2 {
+		t.Errorf("expected 2 nodes with ext=go, got %d", len(result.Nodes))
 	}
 
-	if len(result.Nodes) > 0 && result.Nodes[0].Name != "test1.go" {
-		t.Errorf("expected test1.go, got %s", result.Nodes[0].Name)
+	for _, node := range result.Nodes {
+		if data, ok := node.Data.(map[string]any); ok {
+			if ext, ok := data["ext"].(string); !ok || ext != "go" {
+				t.Errorf("expected ext=go for node %s", node.Name)
+			}
+		}
 	}
 }
 
@@ -245,8 +270,9 @@ func TestQuery_WhereIn(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	if len(result.Nodes) != 4 {
-		t.Errorf("expected 4 nodes, got %d", len(result.Nodes))
+	// 4 files + 2 dirs = 6 nodes matching fs:file or fs:dir
+	if len(result.Nodes) != 6 {
+		t.Errorf("expected 6 nodes, got %d", len(result.Nodes))
 	}
 }
 
@@ -264,8 +290,9 @@ func TestQuery_WhereBetween(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	if len(result.Nodes) != 1 {
-		t.Errorf("expected 1 node with size between 50 and 150, got %d", len(result.Nodes))
+	// test1.go (size=100) and main.go (size=50) are between 50 and 150
+	if len(result.Nodes) != 2 {
+		t.Errorf("expected 2 nodes with size between 50 and 150, got %d", len(result.Nodes))
 	}
 }
 
@@ -309,9 +336,9 @@ func TestQuery_WhereIsNotNull(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	// Should get nodes with data (test1.go, test2.py, README.md)
-	if len(result.Nodes) != 3 {
-		t.Errorf("expected 3 nodes with data, got %d", len(result.Nodes))
+	// Should get nodes with data (test1.go, test2.py, README.md, main.go)
+	if len(result.Nodes) != 4 {
+		t.Errorf("expected 4 nodes with data, got %d", len(result.Nodes))
 	}
 }
 
@@ -375,16 +402,17 @@ func TestQuery_GroupBy(t *testing.T) {
 		t.Errorf("expected ResultTypeCounts, got %v", result.Type)
 	}
 
-	if len(result.Counts) != 2 {
-		t.Errorf("expected 2 types, got %d", len(result.Counts))
+	// 4 types: fs:file, fs:dir, vcs:repo, vcs:branch
+	if len(result.Counts) != 4 {
+		t.Errorf("expected 4 types, got %d", len(result.Counts))
 	}
 
-	if result.Counts["fs:file"] != 3 {
-		t.Errorf("expected 3 fs:file, got %d", result.Counts["fs:file"])
+	if result.Counts["fs:file"] != 4 {
+		t.Errorf("expected 4 fs:file, got %d", result.Counts["fs:file"])
 	}
 
-	if result.Counts["fs:dir"] != 1 {
-		t.Errorf("expected 1 fs:dir, got %d", result.Counts["fs:dir"])
+	if result.Counts["fs:dir"] != 2 {
+		t.Errorf("expected 2 fs:dir, got %d", result.Counts["fs:dir"])
 	}
 }
 
@@ -407,13 +435,13 @@ func TestQuery_GroupByWithHaving(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	// Only fs:file has count > 1
-	if len(result.Counts) != 1 {
-		t.Errorf("expected 1 type with count > 1, got %d", len(result.Counts))
+	// fs:file (4), fs:dir (2), vcs:branch (2) all have count > 1
+	if len(result.Counts) != 3 {
+		t.Errorf("expected 3 types with count > 1, got %d", len(result.Counts))
 	}
 
-	if result.Counts["fs:file"] != 3 {
-		t.Errorf("expected fs:file count 3, got %d", result.Counts["fs:file"])
+	if result.Counts["fs:file"] != 4 {
+		t.Errorf("expected fs:file count 4, got %d", result.Counts["fs:file"])
 	}
 }
 
@@ -432,11 +460,11 @@ func TestQuery_OrderBy(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	if len(result.Nodes) != 3 {
-		t.Fatalf("expected 3 nodes, got %d", len(result.Nodes))
+	if len(result.Nodes) != 4 {
+		t.Fatalf("expected 4 nodes, got %d", len(result.Nodes))
 	}
 
-	// Check ascending order
+	// Check ascending order (README.md, main.go, test1.go, test2.py)
 	if result.Nodes[0].Name != "README.md" {
 		t.Errorf("expected README.md first, got %s", result.Nodes[0].Name)
 	}
@@ -457,11 +485,11 @@ func TestQuery_OrderByDesc(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	if len(result.Nodes) != 3 {
-		t.Fatalf("expected 3 nodes, got %d", len(result.Nodes))
+	if len(result.Nodes) != 4 {
+		t.Fatalf("expected 4 nodes, got %d", len(result.Nodes))
 	}
 
-	// Check descending order
+	// Check descending order (test2.py, test1.go, main.go, README.md)
 	if result.Nodes[0].Name != "test2.py" {
 		t.Errorf("expected test2.py first, got %s", result.Nodes[0].Name)
 	}
@@ -527,9 +555,9 @@ func TestQuery_Distinct(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	// Should get 2 distinct types
-	if len(result.Nodes) != 2 {
-		t.Errorf("expected 2 distinct types, got %d", len(result.Nodes))
+	// Should get 4 distinct types (fs:file, fs:dir, vcs:repo, vcs:branch)
+	if len(result.Nodes) != 4 {
+		t.Errorf("expected 4 distinct types, got %d", len(result.Nodes))
 	}
 }
 
@@ -547,8 +575,9 @@ func TestQuery_SelectEdges(t *testing.T) {
 		t.Errorf("expected ResultTypeEdges, got %v", result.Type)
 	}
 
-	if len(result.Edges) != 2 {
-		t.Errorf("expected 2 edges, got %d", len(result.Edges))
+	// 3 contains + 2 has + 1 located_at + 1 references = 7 edges
+	if len(result.Edges) != 7 {
+		t.Errorf("expected 7 edges, got %d", len(result.Edges))
 	}
 }
 
@@ -626,8 +655,12 @@ func TestQuery_UnsupportedTable(t *testing.T) {
 	}
 }
 
-// Test pattern query not supported (Phase 2)
-func TestQuery_PatternNotSupported(t *testing.T) {
+// ============================================================================
+// PHASE 2: PATTERN QUERY TESTS
+// ============================================================================
+
+// Test basic pattern: (dir:fs:dir)-[:contains]->(file:fs:file)
+func TestPattern_BasicNodeTypes(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
 	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
@@ -636,11 +669,321 @@ func TestQuery_PatternNotSupported(t *testing.T) {
 
 	q := aql.Select(aql.Col("file")).
 		FromPattern(pattern).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeNodes {
+		t.Errorf("expected ResultTypeNodes, got %v", result.Type)
+	}
+
+	// Should get all files with dir->file edges (test1.go, test2.py from src, main.go from cmd)
+	if len(result.Nodes) != 3 {
+		t.Errorf("expected 3 files, got %d", len(result.Nodes))
+	}
+
+	for _, node := range result.Nodes {
+		if node.Type != "fs:file" {
+			t.Errorf("expected fs:file, got %s", node.Type)
+		}
+	}
+}
+
+// Test pattern with edge variable: (a)-[e:contains]->(b)
+func TestPattern_EdgeVariable(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.N("a")).
+		To(aql.EdgeType("e", "contains"), aql.N("b")).
+		Build()
+
+	q := aql.Select(aql.Col("e")).
+		FromPattern(pattern).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeEdges {
+		t.Errorf("expected ResultTypeEdges, got %v", result.Type)
+	}
+
+	// Should get 3 contains edges (src->test1.go, src->test2.py, cmd->main.go)
+	if len(result.Edges) != 3 {
+		t.Errorf("expected 3 contains edges, got %d", len(result.Edges))
+	}
+
+	for _, edge := range result.Edges {
+		if edge.Type != "contains" {
+			t.Errorf("expected contains edge, got %s", edge.Type)
+		}
+	}
+}
+
+// Test pattern with multi-type edges: (a)-[:contains|has]->(b)
+func TestPattern_MultiTypeEdge(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.N("a")).
+		To(aql.EdgeTypes("contains", "has"), aql.N("b")).
+		Build()
+
+	q := aql.Select(aql.Col("b")).
+		FromPattern(pattern).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern query failed: %v", err)
+	}
+
+	// Should get files (via contains) + branches (via has)
+	// 3 files + 2 branches = 5 nodes
+	if len(result.Nodes) != 5 {
+		t.Errorf("expected 5 nodes, got %d", len(result.Nodes))
+	}
+}
+
+// Test incoming edge pattern: (branch:vcs:branch)<-[:has]-(repo:vcs:repo)
+func TestPattern_IncomingEdge(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.NodeType("branch", "vcs:branch")).
+		From(aql.AnyEdgeOfType("has"), aql.NodeType("repo", "vcs:repo")).
+		Build()
+
+	q := aql.Select(aql.Col("repo")).
+		FromPattern(pattern).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern query failed: %v", err)
+	}
+
+	// Should get 1 repo (queried twice via 2 branches, but may get duplicates)
+	if len(result.Nodes) < 1 {
+		t.Errorf("expected at least 1 repo, got %d", len(result.Nodes))
+	}
+
+	for _, node := range result.Nodes {
+		if node.Type != "vcs:repo" {
+			t.Errorf("expected vcs:repo, got %s", node.Type)
+		}
+	}
+}
+
+// Test pattern with WHERE on variable: WHERE file.data.ext = 'go'
+func TestPattern_WhereVariable(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("file")).
+		FromPattern(pattern).
+		Where(&aql.ComparisonExpr{
+			Left:  aql.Col("file", "data", "ext"),
+			Op:    aql.OpEq,
+			Right: aql.String("go"),
+		}).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern query failed: %v", err)
+	}
+
+	// Should get both .go files (test1.go from src, main.go from cmd)
+	if len(result.Nodes) != 2 {
+		t.Errorf("expected 2 .go files, got %d", len(result.Nodes))
+	}
+
+	for _, node := range result.Nodes {
+		if data, ok := node.Data.(map[string]any); ok {
+			if ext, ok := data["ext"].(string); ok && ext != "go" {
+				t.Errorf("expected ext=go, got %s", ext)
+			}
+		}
+	}
+}
+
+// Test pattern with WHERE comparing two variables
+func TestPattern_WhereCompareVariables(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("file")).
+		FromPattern(pattern).
+		Where(&aql.ComparisonExpr{
+			Left:  aql.Col("dir", "name"),
+			Op:    aql.OpEq,
+			Right: aql.String("cmd"),
+		}).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern query failed: %v", err)
+	}
+
+	// Should get main.go (cmd -> main.go)
+	if len(result.Nodes) != 1 {
+		t.Errorf("expected 1 file in cmd, got %d", len(result.Nodes))
+	}
+
+	if len(result.Nodes) > 0 && result.Nodes[0].Name != "main.go" {
+		t.Errorf("expected main.go, got %s", result.Nodes[0].Name)
+	}
+}
+
+// Test pattern with complex WHERE (AND/OR)
+func TestPattern_WhereComplex(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("file")).
+		FromPattern(pattern).
+		Where(aql.Or(
+			&aql.ComparisonExpr{
+				Left:  aql.Col("file", "data", "ext"),
+				Op:    aql.OpEq,
+				Right: aql.String("go"),
+			},
+			&aql.ComparisonExpr{
+				Left:  aql.Col("file", "data", "ext"),
+				Op:    aql.OpEq,
+				Right: aql.String("py"),
+			},
+		)).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern query failed: %v", err)
+	}
+
+	// Should get test1.go, main.go (both .go) and test2.py
+	if len(result.Nodes) != 3 {
+		t.Errorf("expected 3 files (.go or .py), got %d", len(result.Nodes))
+	}
+}
+
+// Test pattern selecting multiple node variables
+func TestPattern_SelectMultipleVariables(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+		To(aql.EdgeType("e", "contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("dir"), aql.Col("file")).
+		FromPattern(pattern).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern query failed: %v", err)
+	}
+
+	// Result type is nodes (default when no edge variables selected)
+	if result.Type != graph.ResultTypeNodes {
+		t.Errorf("expected ResultTypeNodes, got %v", result.Type)
+	}
+
+	// Should get results (actual behavior: returns nodes with columns from both)
+	if len(result.Nodes) == 0 {
+		t.Error("expected some results")
+	}
+}
+
+// Test pattern with anonymous nodes: ()-[:contains]->(file:fs:file)
+func TestPattern_AnonymousNode(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.AnyNode()).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("file")).
+		FromPattern(pattern).
+		Limit(10).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern query failed: %v", err)
+	}
+
+	// Should get all files with contains edge (test1.go, test2.py, main.go)
+	if len(result.Nodes) != 3 {
+		t.Errorf("expected 3 files, got %d", len(result.Nodes))
+	}
+}
+
+// Test pattern with LIMIT
+func TestPattern_Limit(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.N("a")).
+		To(aql.AnyEdgeOfType("contains"), aql.N("b")).
+		Build()
+
+	q := aql.Select(aql.Col("b")).
+		FromPattern(pattern).
+		Limit(1).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern query failed: %v", err)
+	}
+
+	if len(result.Nodes) != 1 {
+		t.Errorf("expected 1 node (LIMIT 1), got %d", len(result.Nodes))
+	}
+}
+
+// Test pattern with undefined variable in WHERE
+func TestPattern_UndefinedVariable(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("file")).
+		FromPattern(pattern).
+		Where(&aql.ComparisonExpr{
+			Left:  aql.Col("undefined", "name"), // 'undefined' not in pattern
+			Op:    aql.OpEq,
+			Right: aql.String("test"),
+		}).
 		Build()
 
 	_, err := s.Query(ctx, q)
 	if err == nil {
-		t.Error("expected error for pattern query (Phase 2)")
+		t.Error("expected error for undefined variable in WHERE")
 	}
 
 	qe, ok := err.(*QueryError)
@@ -648,9 +991,84 @@ func TestQuery_PatternNotSupported(t *testing.T) {
 		t.Errorf("expected QueryError, got %T", err)
 	}
 
-	if qe.Phase != "compile" {
-		t.Errorf("expected compile phase, got %s", qe.Phase)
+	// Variable validation happens in validate phase
+	if qe.Phase != "validate" {
+		t.Errorf("expected validate phase, got %s", qe.Phase)
 	}
+}
+
+// Test pattern with undefined variable in SELECT
+func TestPattern_UndefinedVariableSelect(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("undefined")). // 'undefined' not in pattern
+						FromPattern(pattern).
+						Build()
+
+	_, err := s.Query(ctx, q)
+	if err == nil {
+		t.Error("expected error for undefined variable in SELECT")
+	}
+
+	qe, ok := err.(*QueryError)
+	if !ok {
+		t.Errorf("expected QueryError, got %T", err)
+	}
+
+	// Variable validation happens in validate phase
+	if qe.Phase != "validate" {
+		t.Errorf("expected validate phase, got %s", qe.Phase)
+	}
+}
+
+// Test Explain for pattern query
+func TestPattern_Explain(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
+		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		Build()
+
+	q := aql.Select(aql.Col("file")).
+		FromPattern(pattern).
+		Limit(10).
+		Build()
+
+	plan, err := s.Explain(ctx, q)
+	if err != nil {
+		t.Fatalf("Explain failed: %v", err)
+	}
+
+	if plan.SQL == "" {
+		t.Error("expected SQL to be populated")
+	}
+
+	// Should contain JOIN for pattern
+	if !contains(plan.SQL, "JOIN") {
+		t.Error("expected JOIN in pattern query SQL")
+	}
+
+	if plan.SQLitePlan == "" {
+		t.Error("expected SQLite plan to be populated")
+	}
+}
+
+// Helper function for string contains check
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && (s[:len(substr)] == substr || s[len(s)-len(substr):] == substr || containsInner(s, substr)))
+}
+
+func containsInner(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 // Test EXISTS not supported (Phase 3)

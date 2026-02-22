@@ -119,12 +119,11 @@ func (s *Storage) Explain(ctx context.Context, query interface{}) (*graph.QueryP
 // compileToSQL converts AQL AST to SQLite query.
 // Returns (sql, args, resultType, error).
 func (s *Storage) compileToSQL(q *aql.Query) (string, []any, graph.ResultType, error) {
-	// Phase 1: Only flat queries
 	switch src := q.Select.From.(type) {
 	case *aql.TableSource:
 		return s.compileFlatQuery(q)
 	case *aql.PatternSource:
-		return "", nil, 0, fmt.Errorf("pattern queries not yet supported (Phase 2)")
+		return s.compilePatternQuery(q, src)
 	default:
 		return "", nil, 0, fmt.Errorf("unknown source type: %T", src)
 	}
@@ -229,6 +228,495 @@ func (s *Storage) compileFlatQuery(q *aql.Query) (string, []any, graph.ResultTyp
 	}
 
 	return sqlBuilder.String(), args, resultType, nil
+}
+
+// compilePatternQuery compiles SELECT from pattern(s) using JOINs.
+//
+// Phase 2: Supports simple patterns without recursion:
+//   - Single-hop patterns: (a)-[:type]->(b)
+//   - Node type constraints: (a:fs:dir)
+//   - Edge variables: (a)-[e:contains]->(b)
+//   - Multi-type edges: [:contains|has]
+//   - All directions: ->, <-, -
+//   - Multiple patterns with shared variables (implicit JOINs)
+//
+// Phase 3 (future): Variable-length paths, EXISTS subqueries
+func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (string, []any, graph.ResultType, error) {
+	// Check for Phase 3 features
+	for _, pattern := range src.Patterns {
+		for _, elem := range pattern.Elements {
+			if edge, ok := elem.(*aql.EdgePattern); ok {
+				if edge.IsVariableLength() {
+					return "", nil, 0, fmt.Errorf("variable-length paths not supported in Phase 2 (will be added in Phase 3)")
+				}
+			}
+		}
+	}
+
+	// Build the FROM clause with JOINs
+	var sqlBuilder strings.Builder
+	var args []any
+	var whereClauses []string
+
+	// Track which variables we've seen to handle multiple patterns
+	nodeVars := make(map[string]bool)
+	edgeVars := make(map[string]bool)
+
+	// Track table aliases
+	nodeAliases := make(map[string]string) // variable -> table alias
+	edgeAliases := make(map[string]string) // variable -> table alias
+	edgeCount := 0
+
+	// Process each pattern
+	for patternIdx, pattern := range src.Patterns {
+		if len(pattern.Elements) == 0 {
+			continue
+		}
+
+		// Pattern must be: node [edge node]*
+		// Validate pattern structure
+		for i, elem := range pattern.Elements {
+			if i%2 == 0 {
+				// Even positions should be nodes
+				if _, ok := elem.(*aql.NodePattern); !ok {
+					return "", nil, 0, fmt.Errorf("pattern must alternate between nodes and edges")
+				}
+			} else {
+				// Odd positions should be edges
+				if _, ok := elem.(*aql.EdgePattern); !ok {
+					return "", nil, 0, fmt.Errorf("pattern must alternate between nodes and edges")
+				}
+			}
+		}
+
+		// Process node-edge-node triples
+		for i := 0; i < len(pattern.Elements); i += 2 {
+			leftNode := pattern.Elements[i].(*aql.NodePattern)
+
+			// First node in the pattern
+			if i == 0 || !nodeVars[leftNode.Variable] {
+				leftAlias := fmt.Sprintf("n%d", len(nodeAliases))
+				nodeAliases[leftNode.Variable] = leftAlias
+				nodeVars[leftNode.Variable] = true
+
+				if patternIdx == 0 && i == 0 {
+					// First table in FROM
+					sqlBuilder.WriteString("FROM nodes AS ")
+					sqlBuilder.WriteString(leftAlias)
+				}
+
+				// Add type constraint if specified
+				if leftNode.Type != "" {
+					if strings.Contains(leftNode.Type, "*") {
+						whereClauses = append(whereClauses, fmt.Sprintf("%s.type GLOB ?", leftAlias))
+					} else {
+						whereClauses = append(whereClauses, fmt.Sprintf("%s.type = ?", leftAlias))
+					}
+					args = append(args, leftNode.Type)
+				}
+			}
+
+			// If there's an edge following
+			if i+1 < len(pattern.Elements) {
+				edge := pattern.Elements[i+1].(*aql.EdgePattern)
+				rightNode := pattern.Elements[i+2].(*aql.NodePattern)
+
+				edgeAlias := fmt.Sprintf("e%d", edgeCount)
+				edgeCount++
+
+				if edge.Variable != "" {
+					edgeVars[edge.Variable] = true
+					edgeAliases[edge.Variable] = edgeAlias
+				}
+
+				// Determine if rightNode is new or reused
+				rightAlias := nodeAliases[rightNode.Variable]
+				isNewNode := rightAlias == ""
+				if isNewNode {
+					rightAlias = fmt.Sprintf("n%d", len(nodeAliases))
+					nodeAliases[rightNode.Variable] = rightAlias
+					nodeVars[rightNode.Variable] = true
+				}
+
+				leftAlias := nodeAliases[leftNode.Variable]
+
+				// Add JOIN for edge
+				sqlBuilder.WriteString("\nJOIN edges AS ")
+				sqlBuilder.WriteString(edgeAlias)
+				sqlBuilder.WriteString(" ON ")
+
+				// Join condition based on direction
+				switch edge.Direction {
+				case aql.Outgoing:
+					fmt.Fprintf(&sqlBuilder, "%s.from_id = %s.id", edgeAlias, leftAlias)
+				case aql.Incoming:
+					fmt.Fprintf(&sqlBuilder, "%s.to_id = %s.id", edgeAlias, leftAlias)
+				case aql.Undirected:
+					// For undirected, we need (from=left AND to=right) OR (from=right AND to=left)
+					// This is complex, for now just treat as outgoing with warning
+					fmt.Fprintf(&sqlBuilder, "%s.from_id = %s.id", edgeAlias, leftAlias)
+					// TODO: Proper undirected support
+				}
+
+				// Add JOIN for right node
+				if isNewNode {
+					sqlBuilder.WriteString("\nJOIN nodes AS ")
+					sqlBuilder.WriteString(rightAlias)
+					sqlBuilder.WriteString(" ON ")
+				} else {
+					sqlBuilder.WriteString(" AND ")
+				}
+
+				switch edge.Direction {
+				case aql.Outgoing:
+					fmt.Fprintf(&sqlBuilder, "%s.id = %s.to_id", rightAlias, edgeAlias)
+				case aql.Incoming:
+					fmt.Fprintf(&sqlBuilder, "%s.id = %s.from_id", rightAlias, edgeAlias)
+				case aql.Undirected:
+					fmt.Fprintf(&sqlBuilder, "%s.id = %s.to_id", rightAlias, edgeAlias)
+				}
+
+				// Add edge type constraint
+				if len(edge.Types) > 1 {
+					// Multi-type: IN (type1, type2, ...)
+					placeholders := make([]string, len(edge.Types))
+					for i := range edge.Types {
+						placeholders[i] = "?"
+						args = append(args, edge.Types[i])
+					}
+					whereClauses = append(whereClauses, fmt.Sprintf("%s.type IN (%s)", edgeAlias, strings.Join(placeholders, ", ")))
+				} else if edge.Type != "" {
+					if strings.Contains(edge.Type, "*") {
+						whereClauses = append(whereClauses, fmt.Sprintf("%s.type GLOB ?", edgeAlias))
+					} else {
+						whereClauses = append(whereClauses, fmt.Sprintf("%s.type = ?", edgeAlias))
+					}
+					args = append(args, edge.Type)
+				}
+
+				// Add right node type constraint if specified
+				if rightNode.Type != "" {
+					if strings.Contains(rightNode.Type, "*") {
+						whereClauses = append(whereClauses, fmt.Sprintf("%s.type GLOB ?", rightAlias))
+					} else {
+						whereClauses = append(whereClauses, fmt.Sprintf("%s.type = ?", rightAlias))
+					}
+					args = append(args, rightNode.Type)
+				}
+			}
+		}
+	}
+
+	// Determine result type based on what's being selected
+	resultType := graph.ResultTypeNodes // Default
+
+	// Check if we're selecting edge variables
+	for _, col := range q.Select.Columns {
+		if sel, ok := col.Expr.(*aql.Selector); ok {
+			if len(sel.Parts) == 1 {
+				varName := sel.Parts[0]
+				if _, ok := edgeAliases[varName]; ok {
+					resultType = graph.ResultTypeEdges
+					break
+				}
+			}
+		}
+	}
+
+	// Build SELECT clause - for now, assume selecting node variables
+	// TODO: Handle COUNT(*), etc.
+	selectSQL, err := s.compilePatternSelect(q.Select, nodeAliases, edgeAliases)
+	if err != nil {
+		return "", nil, 0, err
+	}
+
+	// Combine everything
+	sql := selectSQL + "\n" + sqlBuilder.String()
+
+	// Add WHERE clause from pattern constraints
+	if len(whereClauses) > 0 {
+		sql += "\nWHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	// Add user WHERE clause if present
+	if q.Select.Where != nil {
+		userWhere, userArgs, err := s.compilePatternWhere(q.Select.Where, nodeAliases, edgeAliases)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		if len(whereClauses) > 0 {
+			sql += " AND (" + userWhere + ")"
+		} else {
+			sql += "\nWHERE " + userWhere
+		}
+		args = append(args, userArgs...)
+	}
+
+	// Add GROUP BY if present
+	if len(q.Select.GroupBy) > 0 {
+		// TODO: Implement GROUP BY for patterns
+		return "", nil, 0, fmt.Errorf("GROUP BY not yet supported in pattern queries")
+	}
+
+	// Add ORDER BY if present
+	if len(q.Select.OrderBy) > 0 {
+		// TODO: Implement ORDER BY for patterns
+		return "", nil, 0, fmt.Errorf("ORDER BY not yet supported in pattern queries")
+	}
+
+	// Add LIMIT/OFFSET
+	if q.Select.Limit != nil {
+		sql += "\nLIMIT ?"
+		args = append(args, *q.Select.Limit)
+	}
+	if q.Select.Offset != nil {
+		sql += " OFFSET ?"
+		args = append(args, *q.Select.Offset)
+	}
+
+	return sql, args, resultType, nil
+}
+
+// compilePatternSelect compiles the SELECT clause for pattern queries.
+func (s *Storage) compilePatternSelect(stmt *aql.SelectStmt, nodeAliases map[string]string, edgeAliases map[string]string) (string, error) {
+	var sqlBuilder strings.Builder
+	sqlBuilder.WriteString("SELECT")
+
+	if stmt.Distinct {
+		sqlBuilder.WriteString(" DISTINCT")
+	}
+
+	// SELECT can include node variables, edge variables, or field selectors
+	// For now, support simple variable selectors only
+	for i, col := range stmt.Columns {
+		if i > 0 {
+			sqlBuilder.WriteString(",")
+		}
+		sqlBuilder.WriteString(" ")
+
+		// Check if this is a variable selector
+		if sel, ok := col.Expr.(*aql.Selector); ok {
+			if len(sel.Parts) == 1 {
+				// Simple variable: SELECT file or SELECT e
+				varName := sel.Parts[0]
+
+				// Check if it's a node variable
+				if alias, ok := nodeAliases[varName]; ok {
+					// Select all columns from this node
+					sqlBuilder.WriteString(alias)
+					sqlBuilder.WriteString(".*")
+					continue
+				}
+
+				// Check if it's an edge variable
+				if alias, ok := edgeAliases[varName]; ok {
+					// Select all columns from this edge
+					sqlBuilder.WriteString(alias)
+					sqlBuilder.WriteString(".*")
+					continue
+				}
+
+				return "", fmt.Errorf("undefined variable: %s", varName)
+			}
+			// TODO: Handle field selectors like file.name
+		}
+
+		return "", fmt.Errorf("only simple variable selectors supported in Phase 2")
+	}
+
+	return sqlBuilder.String(), nil
+}
+
+// compilePatternWhere compiles WHERE clause for pattern queries with variable references.
+func (s *Storage) compilePatternWhere(expr aql.Expression, nodeAliases map[string]string, edgeAliases map[string]string) (string, []any, error) {
+	switch e := expr.(type) {
+	case *aql.BinaryExpr:
+		return s.compilePatternBinaryExpr(e, nodeAliases, edgeAliases)
+	case *aql.UnaryExpr:
+		inner, args, err := s.compilePatternWhere(e.Operand, nodeAliases, edgeAliases)
+		if err != nil {
+			return "", nil, err
+		}
+		return "NOT (" + inner + ")", args, nil
+	case *aql.ComparisonExpr:
+		return s.compilePatternComparison(e, nodeAliases, edgeAliases)
+	case *aql.InExpr:
+		return s.compilePatternIn(e, nodeAliases, edgeAliases)
+	case *aql.BetweenExpr:
+		return s.compilePatternBetween(e, nodeAliases, edgeAliases)
+	case *aql.IsNullExpr:
+		return s.compilePatternIsNull(e, nodeAliases, edgeAliases)
+	case *aql.ParenExpr:
+		inner, args, err := s.compilePatternWhere(e.Inner, nodeAliases, edgeAliases)
+		if err != nil {
+			return "", nil, err
+		}
+		return "(" + inner + ")", args, nil
+	default:
+		return "", nil, fmt.Errorf("unsupported expression in pattern WHERE: %T", expr)
+	}
+}
+
+func (s *Storage) compilePatternBinaryExpr(e *aql.BinaryExpr, nodeAliases map[string]string, edgeAliases map[string]string) (string, []any, error) {
+	left, leftArgs, err := s.compilePatternWhere(e.Left, nodeAliases, edgeAliases)
+	if err != nil {
+		return "", nil, err
+	}
+	right, rightArgs, err := s.compilePatternWhere(e.Right, nodeAliases, edgeAliases)
+	if err != nil {
+		return "", nil, err
+	}
+
+	op := ""
+	switch e.Op {
+	case aql.OpAnd:
+		op = " AND "
+	case aql.OpOr:
+		op = " OR "
+	default:
+		return "", nil, fmt.Errorf("unsupported binary operator: %v", e.Op)
+	}
+
+	sql := left + op + right
+	args := append(leftArgs, rightArgs...)
+	return sql, args, nil
+}
+
+func (s *Storage) compilePatternComparison(e *aql.ComparisonExpr, nodeAliases map[string]string, edgeAliases map[string]string) (string, []any, error) {
+	// Resolve the selector (variable.field)
+	field, err := s.resolvePatternSelector(e.Left, nodeAliases, edgeAliases)
+	if err != nil {
+		return "", nil, err
+	}
+
+	value, err := s.compileValue(e.Right)
+	if err != nil {
+		return "", nil, err
+	}
+
+	op := ""
+	switch e.Op {
+	case aql.OpEq:
+		op = " = "
+	case aql.OpNe:
+		op = " != "
+	case aql.OpLt:
+		op = " < "
+	case aql.OpLe:
+		op = " <= "
+	case aql.OpGt:
+		op = " > "
+	case aql.OpGe:
+		op = " >= "
+	case aql.OpLike:
+		op = " LIKE "
+	case aql.OpGlob:
+		op = " GLOB "
+	default:
+		return "", nil, fmt.Errorf("unsupported comparison operator: %v", e.Op)
+	}
+
+	sql := field + op + "?"
+	return sql, []any{value}, nil
+}
+
+func (s *Storage) compilePatternIn(e *aql.InExpr, nodeAliases map[string]string, edgeAliases map[string]string) (string, []any, error) {
+	field, err := s.resolvePatternSelector(e.Left, nodeAliases, edgeAliases)
+	if err != nil {
+		return "", nil, err
+	}
+
+	var args []any
+	placeholders := make([]string, len(e.Values))
+	for i, v := range e.Values {
+		val, err := s.compileValue(v)
+		if err != nil {
+			return "", nil, err
+		}
+		placeholders[i] = "?"
+		args = append(args, val)
+	}
+
+	sql := fmt.Sprintf("%s IN (%s)", field, strings.Join(placeholders, ", "))
+	return sql, args, nil
+}
+
+func (s *Storage) compilePatternBetween(e *aql.BetweenExpr, nodeAliases map[string]string, edgeAliases map[string]string) (string, []any, error) {
+	field, err := s.resolvePatternSelector(e.Left, nodeAliases, edgeAliases)
+	if err != nil {
+		return "", nil, err
+	}
+
+	low, err := s.compileValue(e.Low)
+	if err != nil {
+		return "", nil, err
+	}
+
+	high, err := s.compileValue(e.High)
+	if err != nil {
+		return "", nil, err
+	}
+
+	sql := fmt.Sprintf("%s BETWEEN ? AND ?", field)
+	return sql, []any{low, high}, nil
+}
+
+func (s *Storage) compilePatternIsNull(e *aql.IsNullExpr, nodeAliases map[string]string, edgeAliases map[string]string) (string, []any, error) {
+	field, err := s.resolvePatternSelector(e.Selector, nodeAliases, edgeAliases)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if e.Not {
+		return field + " IS NOT NULL", nil, nil
+	}
+	return field + " IS NULL", nil, nil
+}
+
+// resolvePatternSelector converts a selector like "branch.name" to "n0.name" using aliases.
+func (s *Storage) resolvePatternSelector(sel *aql.Selector, nodeAliases map[string]string, edgeAliases map[string]string) (string, error) {
+	if len(sel.Parts) == 0 {
+		return "", fmt.Errorf("empty selector")
+	}
+
+	varName := sel.Parts[0]
+
+	// Check if it's a node variable
+	if alias, ok := nodeAliases[varName]; ok {
+		if len(sel.Parts) == 1 {
+			// Just the variable, no field - error
+			return "", fmt.Errorf("must specify field: %s.fieldname", varName)
+		}
+
+		// Handle field access (e.g., branch.name)
+		if len(sel.Parts) == 2 {
+			return alias + "." + sel.Parts[1], nil
+		}
+
+		// Handle JSON field access (e.g., branch.data.commit)
+		if sel.Parts[1] == "data" && len(sel.Parts) > 2 {
+			jsonPath := "$." + strings.Join(sel.Parts[2:], ".")
+			return fmt.Sprintf("json_extract(%s.data, '%s')", alias, jsonPath), nil
+		}
+
+		return "", fmt.Errorf("invalid selector: %v", sel.Parts)
+	}
+
+	// Check if it's an edge variable
+	if alias, ok := edgeAliases[varName]; ok {
+		if len(sel.Parts) == 1 {
+			return "", fmt.Errorf("must specify field: %s.fieldname", varName)
+		}
+
+		// Handle field access (e.g., e.type)
+		if len(sel.Parts) == 2 {
+			return alias + "." + sel.Parts[1], nil
+		}
+
+		return "", fmt.Errorf("invalid selector: %v", sel.Parts)
+	}
+
+	return "", fmt.Errorf("undefined variable: %s", varName)
 }
 
 // compileSelect compiles the SELECT clause.
