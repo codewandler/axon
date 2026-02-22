@@ -232,6 +232,172 @@ AQL is a SQL-like query language with graph pattern matching capabilities:
 
 **Testing**: When modifying AQL, always run: `go test -v ./adapters/sqlite -run TestQuery`
 
+### New: Type-Safe Fluent AQL API
+
+The AQL builder now provides a type-safe fluent API that eliminates magic strings and provides better IDE support:
+
+**Core Improvements:**
+- No more string literals - everything is type-safe
+- Auto-wrap values in expressions (`Type.Eq("fs:file")` instead of `Eq("type", String("fs:file"))`)
+- Fluent chainable syntax
+- Better IDE support with autocomplete and error detection
+- Full compatibility with existing AST and validation system
+
+**New API Examples:**
+
+```go
+// Basic queries - much cleaner
+aql.Nodes.Select(aql.Type, aql.Count()).
+    Where(aql.Type.Eq(aql.NodeType.File)).
+    GroupBy(aql.Type).
+    OrderByCount(true).
+    Build()
+
+// JsonEach for JSON arrays
+aql.Nodes.JsonEach(aql.Labels).
+    Select(aql.Val, aql.Count()).
+    Where(aql.Val.Ne("")).
+    GroupBy(aql.Val).
+    Build()
+
+// Scoped queries (optimized)
+aql.Nodes.Select(aql.Type, aql.Count()).
+    Where(aql.Nodes.ScopedTo(rootNodeID)).
+    GroupBy(aql.Type).
+    Build()
+
+// Pattern queries
+aql.FromPattern(
+    aql.Pat(aql.N("dir").OfType(aql.NodeType.Dir).Build()).
+        To(aql.Edge.Contains, aql.N("file").OfType(aql.NodeType.File).Build()).
+        Build(),
+).Select(aql.Var("file")).Build()
+```
+
+**Key Constants:**
+
+```go
+// Node types
+aql.NodeType.File      // "fs:file"
+aql.NodeType.Dir       // "fs:dir"  
+aql.NodeType.Repo      // "vcs:repo"
+aql.NodeType.Branch    // "vcs:branch"
+
+// Edge types  
+aql.Edge.Contains      // "contains"
+aql.Edge.Has           // "has"
+aql.Edge.LocatedAt     // "located_at"
+aql.Edge.References    // "references"
+
+// Common fields
+aql.Type               // "type"
+aql.Name               // "name"
+aql.URI                // "uri"
+aql.Labels             // "labels"
+aql.DataExt            // "data.ext"
+aql.DataSize           // "data.size"
+
+// JsonEach fields
+aql.Key                // "key" (array index)
+aql.Val                // "value" (array element)
+```
+
+**Expression Methods (Auto-wrap values):**
+
+```go
+// Comparisons
+aql.Type.Eq("fs:file")              // type = 'fs:file'
+aql.Type.Ne("fs:dir")               // type != 'fs:dir'
+aql.DataSize.Gt(1000)               // data.size > 1000
+aql.DataSize.Between(100, 1000)   // data.size BETWEEN 100 AND 1000
+
+// Pattern matching
+aql.Name.Like("README%")            // name LIKE 'README%'
+aql.Type.Glob("fs:*")               // type GLOB 'fs:*'
+
+// Set operations
+aql.Type.In("fs:file", "fs:dir")    // type IN ('fs:file', 'fs:dir')
+aql.Labels.ContainsAny("test", "code") // labels CONTAINS ANY ('test', 'code')
+
+// Null checks
+aql.DataExt.IsNull()                // data.ext IS NULL
+aql.DataExt.IsNotNull()             // data.ext IS NOT NULL
+```
+
+**Variable References:**
+
+```go
+// Variable field access
+aql.Var("file").DataField("ext").Eq("go")     // file.data.ext = 'go'
+aql.Var("file").Field("name").Glob("*.go")    // file.name GLOB '*.go'
+
+// Variable as column
+aql.Select(aql.Var("file"))                     // SELECT file
+aql.Select(aql.Var("repo"), aql.Var("branch")) // SELECT repo, branch
+```
+
+**Performance Optimizations:**
+
+The new API automatically enables optimizations:
+
+- **Scoped queries** use CTE+JOIN rewrite for EXISTS patterns
+- **JsonEach queries** are optimized with proper cross joins
+- **Pattern queries** use efficient recursive CTEs for variable-length paths
+
+**Migration from Old API:**
+
+```go
+// OLD: String-based API
+SelectStar().From("nodes")
+Select(Col("type"), Count()).From("nodes")
+FromJoined("nodes", "json_each", "labels")
+Eq("type", String("fs:file"))
+Gt("data.size", Int(1000))
+ContainsAny("labels", String("test"))
+N("file")
+NodeType("file", "fs:file")
+AnyEdgeOfType("contains")
+
+// NEW: Type-safe fluent API
+Nodes.SelectStar()
+Nodes.Select(Type, Count())
+Nodes.JsonEach(Labels)
+Type.Eq("fs:file")
+DataSize.Gt(1000)
+Labels.ContainsAny("test")
+N("file").Build()
+N("file").OfType(NodeType.File).Build()
+Edge.Contains
+```
+
+**CLI Commands Using New API:**
+
+All CLI commands now use the new fluent API:
+
+```go
+// stats.go - Global statistics
+aql.Nodes.Select(aql.Type, aql.Count()).GroupBy(aql.Type)
+
+// stats.go - Scoped statistics  
+aql.Nodes.Select(aql.Type, aql.Count()).Where(aql.Nodes.ScopedTo(cwdNodeID))
+
+// labels.go - Global label counting
+aql.Nodes.JsonEach(aql.Labels).Select(aql.Val, aql.Count()).GroupBy(aql.Val)
+
+// edges.go - Global edge statistics
+aql.Edges.Select(aql.Type, aql.Count()).GroupBy(aql.Type)
+
+// find.go - Pattern-based search
+aql.FromPattern(pattern).Select(aql.Var("file")).Where(aql.Var("file").DataField("ext").Eq("go"))
+```
+
+The new API provides:
+- **Type safety**: No more string typos
+- **Auto-completion**: IDEs can suggest valid options
+- **Better error messages**: Compile-time validation
+- **Cleaner code**: More readable queries
+- **Performance**: Automatic optimizations
+
 ### Removed: GraphTraverser
 
 The `Traverse` method and `GraphTraverser` interface were removed in favor of AQL:

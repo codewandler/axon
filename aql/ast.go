@@ -218,6 +218,30 @@ func (e *EdgePattern) AllTypes() []string {
 	return nil
 }
 
+// WithHops sets variable-length edge hops (min..max).
+// Use -1 for unbounded max (e.g., WithHops(1, -1) for 1..* hops).
+func (e *EdgePattern) WithHops(min, max int) *EdgePattern {
+	e.MinHops = &min
+	if max >= 0 {
+		e.MaxHops = &max
+	}
+	return e
+}
+
+// WithMinHops sets minimum hops with unbounded maximum.
+func (e *EdgePattern) WithMinHops(min int) *EdgePattern {
+	e.MinHops = &min
+	e.MaxHops = nil
+	return e
+}
+
+// WithExactHops sets exact number of hops.
+func (e *EdgePattern) WithExactHops(n int) *EdgePattern {
+	e.MinHops = &n
+	e.MaxHops = &n
+	return e
+}
+
 // Direction represents edge direction in a pattern.
 type Direction int
 

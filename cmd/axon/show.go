@@ -88,9 +88,9 @@ func runShow(cmd *cobra.Command, args []string) error {
 func findNodesByPrefix(ctx context.Context, g *graph.Graph, prefix string) ([]*graph.Node, error) {
 	// Build AQL query: SELECT * FROM nodes WHERE id GLOB 'prefix*' LIMIT 100
 	// Note: GLOB uses the PRIMARY KEY index, while LIKE does not
-	query := aql.SelectStar().
-		From("nodes").
-		Where(aql.Glob("id", aql.String(prefix+"*"))).
+	query := aql.Nodes.
+		SelectStar().
+		Where(aql.ID.Glob(prefix + "*")).
 		Limit(100).
 		Build()
 

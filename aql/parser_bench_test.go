@@ -70,12 +70,12 @@ func BenchmarkBuilder_SimpleQuery(b *testing.B) {
 
 func BenchmarkBuilder_PatternQuery(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		pattern := Pat(NodeType("dir", "fs:dir")).
-			To(AnyEdgeOfType("contains"), NodeType("file", "fs:file")).
+		pattern := Pat(N("dir").OfTypeStr("fs:dir").Build()).
+			To(EdgeTypeOf("contains").toEdgePattern(), N("file").OfTypeStr("fs:file").Build()).
 			Build()
-		_ = Select(Col("file")).
+		_ = Select(Var("file")).
 			FromPattern(pattern).
-			Where(Eq("file.data.ext", String("go"))).
+			Where(Data.Field("ext").Eq("go")).
 			Build()
 	}
 }

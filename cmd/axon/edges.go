@@ -49,25 +49,24 @@ func runEdges(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	g := ax.Graph()
 	var counts map[string]int
 
 	if edgesGlobal {
-		// Global: Use AQL for efficient counting
-		// SELECT type, COUNT(*) FROM edges GROUP BY type ORDER BY COUNT(*) DESC
-		g := ax.Graph()
-		q := aql.Select(aql.Col("type"), aql.Count()).
-			From("edges").
-			GroupByCol("type").
-			OrderByExpr(aql.Count(), true).
+		// Global: SELECT type, COUNT(*) FROM edges GROUP BY type ORDER BY COUNT(*) DESC
+		query := aql.Edges.
+			Select(aql.Type, aql.Count()).
+			GroupBy(aql.Type).
+			OrderByCount(true).
 			Build()
 
-		result, err := g.Storage().Query(cmdCtx.Ctx, q)
+		result, err := g.Storage().Query(cmdCtx.Ctx, query)
 		if err != nil {
 			return fmt.Errorf("failed to execute query: %w", err)
 		}
 		counts = result.Counts
 	} else {
-		// Scoped: Use AQL with EXISTS pattern for edges from scoped nodes
+		// Scoped: Use DescendantsOf helper
 		absPath, err := filepath.Abs(cmdCtx.Cwd)
 		if err != nil {
 			return fmt.Errorf("failed to resolve path: %w", err)
@@ -97,22 +96,14 @@ func runEdges(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Build pattern: (cwd WHERE id = cwdID)-[:contains*0..]->(edges)
-		// This matches edges where from_id is in the descendant set
-		g := ax.Graph()
-		cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(cwdNode.ID)))
-		containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
-		pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("edges")).Build()
-
-		// Query: SELECT type, COUNT(*) FROM edges WHERE EXISTS pattern GROUP BY type
-		q := aql.Select(aql.Col("type"), aql.Count()).
-			From("edges").
-			Where(aql.Exists(pattern)).
-			GroupByCol("type").
-			OrderByExpr(aql.Count(), true).
+		query := aql.Edges.
+			Select(aql.Type, aql.Count()).
+			Where(aql.Edges.ScopedTo(cwdNode.ID)).
+			GroupBy(aql.Type).
+			OrderByCount(true).
 			Build()
 
-		result, err := g.Storage().Query(cmdCtx.Ctx, q)
+		result, err := g.Storage().Query(cmdCtx.Ctx, query)
 		if err != nil {
 			return fmt.Errorf("failed to count edge types: %w", err)
 		}

@@ -1,12 +1,73 @@
-// Package aql provides a parser and AST for the Axon Query Language (AQL).
+// Package aql provides a type-safe fluent API and parser for the Axon Query Language (AQL).
 //
-// AQL is a SQL-like query language designed for the Axon graph database.
-// It supports both flat table queries (on nodes/edges tables) and graph pattern
-// matching using Cypher-like syntax.
+// AQL is a SQL-like query language designed for the Axon graph database with both
+// flat table queries and graph pattern matching using Cypher-like syntax.
 //
-// # Basic Usage
+// The package provides two main APIs:
+// 1. **Fluent Builder API** - Type-safe, chainable query construction (recommended)
+// 2. **Parser API** - Parse query strings into AST (for dynamic queries)
 //
-// Parse a query string into an AST:
+// # Fluent Builder API (Type-Safe, Recommended)
+//
+// Build queries using type-safe constants and fluent method chaining:
+//
+//	// Basic table queries
+//	result, err := aql.Nodes.
+//	    Select(aql.Type, aql.Count()).
+//	    Where(aql.Type.Eq(aql.NodeType.File)).
+//	    GroupBy(aql.Type).
+//	    OrderByCount(true).
+//	    Build()
+//
+//	// JsonEach for JSON array unpacking
+//	result, err := aql.Nodes.JsonEach(aql.Labels).
+//	    Select(aql.Val, aql.Count()).
+//	    Where(aql.Val.Ne("")).
+//	    GroupBy(aql.Val).
+//	    Build()
+//
+//	// Scoped queries (optimized with CTE+JOIN)
+//	result, err := aql.Nodes.
+//	    Select(aql.Type, aql.Count()).
+//	    Where(aql.Nodes.ScopedTo(rootNodeID)).
+//	    GroupBy(aql.Type).
+//	    Build()
+//
+//	// Pattern queries
+//	result, err := aql.FromPattern(
+//	    aql.Pat(aql.N("dir").OfType(aql.NodeType.Dir).Build()).
+//		    To(aql.Edge.Contains, aql.N("file").OfType(aql.NodeType.File).Build()).
+//		    Build(),
+//	).Select(aql.Var("file")).Build()
+//
+//	// Variable-length paths
+//	result, err := aql.FromPattern(
+//	    aql.Pat(aql.N("root").OfType(aql.NodeType.Dir).Build()).
+//		    To(aql.Edge.Contains.WithHops(1, 3), aql.N("desc").Build()).
+//		    Build(),
+//	).Select(aql.Var("desc")).Build()
+//
+// Execute the query:
+//
+//	result, err := storage.Query(ctx, query)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
+//
+//	switch result.Type {
+//	case graph.ResultTypeNodes:
+//	    for _, node := range result.Nodes {
+//	        fmt.Println(node.Name, node.Type)
+//	    }
+//	case graph.ResultTypeCounts:
+//	    for key, count := range result.Counts {
+//	        fmt.Printf("%s: %d\n", key, count)
+//	    }
+//	}
+//
+// # Parser API (For Dynamic Queries)
+//
+// Parse query strings when you need dynamic query construction:
 //
 //	query, err := aql.Parse("SELECT * FROM nodes WHERE type = 'fs:file'")
 //	if err != nil {
@@ -22,29 +83,6 @@
 //	    }
 //	}
 //
-// Execute a query against the storage:
-//
-//	result, err := storage.Query(ctx, query)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-//
-//	// Access results based on type
-//	switch result.Type {
-//	case graph.ResultTypeNodes:
-//	    for _, node := range result.Nodes {
-//	        fmt.Println(node.Name, node.Type)
-//	    }
-//	case graph.ResultTypeEdges:
-//	    for _, edge := range result.Edges {
-//	        fmt.Println(edge.Type, edge.From, edge.To)
-//	    }
-//	case graph.ResultTypeCounts:
-//	    for key, count := range result.Counts {
-//	        fmt.Printf("%s: %d\n", key, count)
-//	    }
-//	}
-//
 // Get query execution plan:
 //
 //	plan, err := storage.Explain(ctx, query)
@@ -54,280 +92,193 @@
 //	fmt.Println("SQL:", plan.SQL)
 //	fmt.Println("Plan:", plan.SQLitePlan)
 //
-// # Query Syntax
+// # Table Queries
 //
-// AQL supports two types of sources in the FROM clause:
+// Query the flat nodes and edges tables:
 //
-// Table queries - query the flat nodes or edges tables:
+//	// All files
+//	aql.Nodes.SelectStar()
 //
-//	SELECT * FROM nodes WHERE type = 'fs:file'
-//	SELECT * FROM edges WHERE type = 'contains'
-//	SELECT type, COUNT(*) FROM nodes GROUP BY type
-//	SELECT name, type FROM nodes WHERE data.ext = 'go'
+//	// Files with conditions
+//	aql.Nodes.SelectStar().Where(aql.DataExt.Eq("go"))
 //
-// Pattern queries - use graph pattern matching:
+//	// Count by type
+//	aql.Nodes.Select(aql.Type, aql.Count()).GroupBy(aql.Type)
 //
-//	SELECT file FROM (dir:fs:dir)-[:contains]->(file:fs:file)
-//	SELECT branch FROM (repo:vcs:repo)-[:has]->(branch:vcs:branch)
-//	SELECT e FROM (a)-[e:contains]->(b)
-//	SELECT child FROM (parent)-[:contains|has]->(child)
-//	SELECT repo FROM (branch:vcs:branch)<-[:has]-(repo:vcs:repo)
-//	SELECT file FROM (dir)-[:contains]->(file) WHERE file.data.ext = 'go'
-//	SELECT b FROM (a:fs:dir)-[:contains*1..3]->(b:fs:file)    -- variable-length paths
-//	SELECT b FROM (a)-[:contains*2]->(b)                      -- exactly 2 hops
-//	SELECT b FROM (a)-[:contains*2..]->(b)                    -- 2 or more hops (unbounded)
+//	// Edge statistics
+//	aql.Edges.Select(aql.Type, aql.Count()).GroupBy(aql.Type)
 //
 // # JSON Field Access
 //
-// The data field can be queried using dot notation:
+// Access nested data fields using dot notation:
 //
-//	SELECT * FROM nodes WHERE data.ext = 'go'
-//	SELECT * FROM nodes WHERE data.size > 1000
-//	SELECT * FROM nodes WHERE data.mode BETWEEN 400 AND 500
+//	aql.DataExt.Eq("go")              // data.ext = 'go'
+//	aql.DataSize.Gt(1000)               // data.size > 1000
+//	aql.DataMode.Between(400, 500)      // data.mode BETWEEN 400 AND 500
 //
-// This compiles to efficient json_extract() calls in SQLite
+// The data field compiles to efficient json_extract() calls in SQLite.
 //
-// # Pattern Matching
+// # Pattern Queries
 //
-// Patterns follow Cypher-like syntax:
+// Build graph patterns using the fluent builder:
 //
-//	(variable:type)              - node pattern
-//	-[:type]->                   - outgoing edge
-//	<-[:type]-                   - incoming edge
-//	-[:type]-                    - undirected edge
-//	-[:type1|type2]->            - multi-type edge
-//	-[variable:type]->           - edge variable binding
+//	// Basic containment: (dir)-[:contains]->(file)
+//	aql.Pat(aql.N("dir").OfType(aql.NodeType.Dir).Build()).
+//	    To(aql.Edge.Contains, aql.N("file").OfType(aql.NodeType.File).Build()).
+//	    Build()
+//
+//	// With edge variables: (a)-[e:contains]->(b)
+//	aql.Pat(aql.N("a").Build()).
+//	    To(aql.EOfType("e", "contains"), aql.N("b").Build()).
+//	    Build()
+//
+//	// Multi-type edges: (parent)-[:contains|has]->(child)
+//	aql.Pat(aql.N("parent").Build()).
+//	    To(aql.EdgeTypes(aql.Edge.Contains, aql.Edge.Has), aql.N("child").Build()).
+//	    Build()
+//
+//	// Incoming edges: (branch)<-[:has]-(repo)
+//	aql.Pat(aql.N("branch").OfType(aql.NodeType.Branch).Build()).
+//	    From(aql.Edge.Has, aql.N("repo").OfType(aql.NodeType.Repo).Build()).
+//	    Build()
 //
 // # Variable-Length Paths
 //
-// Recursive graph traversal using SQLite CTEs:
+// Recursive graph traversal using CTEs:
 //
-//	-[:type*min..max]->          - bounded variable-length
-//	-[:type*n]->                 - exact hops
-//	-[:type*min..]->             - unbounded
+//	// 1 to 3 hops: -[:contains*1..3]->
+//	aql.Edge.Contains.WithHops(1, 3)
+//
+//	// Exactly 2 hops: -[:contains*2]->
+//	aql.Edge.Contains.WithExactHops(2)
+//
+//	// 2 or more hops (unbounded): -[:contains*2..]->
+//	aql.Edge.Contains.WithMinHops(2)
 //
 // Examples:
 //
-//	SELECT file FROM (dir)-[:contains*1..3]->(file)      -- 1 to 3 hops
-//	SELECT node FROM (root)-[:contains*2]->(node)         -- exactly 2 hops
-//	SELECT desc FROM (root)-[:contains*2..]->(desc)       -- 2 or more hops
-//	SELECT n FROM (a)-[:has|contains*1..5]->(n)           -- multi-type with recursion
+//	// Variable-length pattern
+//	aql.Pat(aql.N("root").OfType(aql.NodeType.Dir).Build()).
+//	    To(aql.Edge.Contains.WithHops(1, 3), aql.N("desc").Build()).
+//	    Build()
 //
-// WHERE clauses can reference pattern variables:
+//	// Multi-type recursive
+//	aql.Pat(aql.N("root").Build()).
+//	    To(aql.EdgeTypes(aql.Edge.Contains, aql.Edge.Has).WithHops(1, 5), aql.N("node").Build()).
+//	    Build()
 //
-//	SELECT file FROM (dir:fs:dir)-[:contains]->(file:fs:file)
-//	WHERE file.data.ext = 'go' AND dir.name = 'src'
+// # JSON Array Unpacking
 //
-// Multiple patterns are comma-separated and share variables (implicit JOIN):
+// Use json_each to unpack JSON arrays into rows:
 //
-//	SELECT file FROM (repo:vcs:repo)-[:located_at]->(dir:fs:dir), (dir)-[:contains]->(file:fs:file)
+//	// Count all labels across nodes
+//	aql.Nodes.JsonEach(aql.Labels).
+//	    Select(aql.Val, aql.Count()).
+//	    GroupBy(aql.Val).
+//	    Build()
 //
-// ORDER BY and GROUP BY work with pattern variables:
+//	// List unique labels
+//	aql.Nodes.JsonEach(aql.Labels).
+//	    Select(aql.Val).
+//	    Where(aql.Val.Ne("")).
+//	    Distinct().
+//	    Build()
 //
-//	SELECT file FROM (dir)-[:contains]->(file) ORDER BY file.name
-//	SELECT dir.name, COUNT(*) FROM (dir)-[:contains]->(file) GROUP BY dir.name
+// # Scoped Queries
+//
+// Use EXISTS patterns for efficient directory-scoped queries:
+//
+//	// Node types in directory scope
+//	aql.Nodes.Select(aql.Type, aql.Count()).
+//	    Where(aql.Nodes.ScopedTo(cwdNodeID)).
+//	    GroupBy(aql.Type).
+//	    Build()
+//
+//	// Edge types from scoped nodes
+//	aql.Edges.Select(aql.Type, aql.Count()).
+//	    Where(aql.Edges.ScopedTo(cwdNodeID)).
+//	    GroupBy(aql.Type).
+//	    Build()
+//
+//	// Labels in scope (combine json_each with scoped query)
+//	aql.Nodes.JsonEach(aql.Labels).
+//	    Select(aql.Val, aql.Count()).
+//	    Where(aql.And(
+//	        aql.Val.Ne(""),
+//	        aql.Nodes.ScopedTo(cwdNodeID),
+//	    )).
+//	    GroupBy(aql.Val).
+//	    Build()
 //
 // # Expressions
 //
-// WHERE and HAVING clauses support:
+// WHERE and HAVING clauses support comprehensive expressions:
 //
-//	field = value               - equality
-//	field != value              - inequality
-//	field < <= > >=             - comparisons
-//	field LIKE pattern          - pattern matching
-//	field GLOB pattern          - glob matching
-//	field IN (v1, v2, ...)      - set membership
-//	field BETWEEN a AND b       - range
-//	field IS NULL               - null check
-//	field IS NOT NULL           - not null check
-//	labels CONTAINS ANY (...)   - label set operations
-//	labels CONTAINS ALL (...)
-//	labels NOT CONTAINS (...)
-//	EXISTS pattern              - subquery existence
-//	NOT EXISTS pattern
-//	expr AND expr               - boolean AND
-//	expr OR expr                - boolean OR
-//	NOT expr                    - boolean NOT
-//	(expr)                      - grouping
+//	// Comparisons (auto-wrap values)
+//	aql.Type.Eq("fs:file")              // type = 'fs:file'
+//	aql.Type.Ne("fs:dir")               // type != 'fs:dir'
+//	aql.DataSize.Gt(1000)               // data.size > 1000
+//	aql.DataSize.Between(100, 1000)   // data.size BETWEEN 100 AND 1000
 //
-// # Partial Field Selection
+//	// Pattern matching
+//	aql.Name.Like("README%")            // name LIKE 'README%'
+//	aql.Type.Glob("fs:*")               // type GLOB 'fs:*'
 //
-// When selecting specific columns instead of *, the result nodes/edges will
-// only have those fields populated. Other fields will have zero values:
+//	// Set operations
+//	aql.Type.In("fs:file", "fs:dir")    // type IN ('fs:file', 'fs:dir')
+//	aql.DataSize.Between(100, 1000)     // data.size BETWEEN 100 AND 1000
 //
-//	SELECT name, type FROM nodes WHERE type = 'fs:file'
-//	// Returns nodes with only name and type populated
-//	// node.ID == "", node.URI == "", etc.
+//	// Null checks
+//	aql.DataExt.IsNull()                // data.ext IS NULL
+//	aql.DataExt.IsNotNull()             // data.ext IS NOT NULL
 //
-// # Parameters
+//	// Label operations
+//	aql.Labels.ContainsAny("test", "code")    // labels CONTAINS ANY ('test', 'code')
+//	aql.Labels.ContainsAll("important", "review") // labels CONTAINS ALL ('important', 'review')
+//	aql.Labels.NotContains("archived")      // labels NOT CONTAINS ('archived')
 //
-// Both named and positional parameters are supported:
+//	// Existence checks
+//	aql.Exists(pattern)                 // EXISTS pattern
+//	aql.NotExists(pattern)              // NOT EXISTS pattern
 //
-//	SELECT * FROM nodes WHERE type = $type      -- named
-//	SELECT * FROM nodes WHERE type = $1         -- positional
+// # Variable References
 //
-// # Builder API
+// Reference pattern variables in WHERE clauses:
 //
-// For programmatic AST construction, use the fluent builder:
+//	// Variable field access
+//	aql.Var("file").DataField("ext").Eq("go")     // file.data.ext = 'go'
+//	aql.Var("file").Field("name").Glob("*.go")    // file.name GLOB '*.go'
 //
-//	q := aql.Select(aql.Col("name"), aql.Col("type")).
-//	    From("nodes").
-//	    Where(aql.And(
-//	        aql.Eq("type", aql.String("fs:file")),
-//	        aql.Gt("data.size", aql.Int(1000)),  // dot notation works in builders
-//	    )).
-//	    OrderBy("name").
-//	    Limit(10).
-//	    Build()
+//	// Variable as column
+//	aql.Select(aql.Var("file"))                     // SELECT file
+//	aql.Select(aql.Var("repo"), aql.Var("branch")) // SELECT repo, branch
 //
-// For JSON field access, use dot notation directly:
+// # Constants
 //
-//	q := aql.SelectStar().
-//	    From("nodes").
-//	    Where(aql.And(
-//	        aql.Eq("data.ext", aql.String("go")),
-//	        aql.Between("data.size", aql.Int(100), aql.Int(1000)),
-//	    )).
-//	    Build()
+// Predefined constants for common types and fields:
 //
-// Pattern queries with the builder:
+// Node types: aql.NodeType.File, aql.NodeType.Dir, aql.NodeType.Repo, etc.
+// Edge types: aql.Edge.Contains, aql.Edge.Has, aql.Edge.LocatedAt, etc.
+// Common fields: aql.Type, aql.Name, aql.URI, aql.Labels, aql.DataExt, aql.DataSize
+// JsonEach fields: aql.Key, aql.Val
 //
-//	// Basic pattern: (dir:fs:dir)-[:contains]->(file:fs:file)
-//	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-//	    To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
-//	    Build()
-//	q := aql.Select(aql.Col("file")).
-//	    FromPattern(pattern).
-//	    Build()
+// # Migration from Old API
 //
-//	// Edge variable: (a)-[e:contains]->(b)
-//	pattern := aql.Pat(aql.N("a")).
-//	    To(aql.EdgeType("e", "contains"), aql.N("b")).
-//	    Build()
-//	q := aql.Select(aql.Col("e")).FromPattern(pattern).Build()
+// Old string-based API → New type-safe fluent API:
 //
-//	// Multi-type edge: (parent)-[:contains|has]->(child)
-//	pattern := aql.Pat(aql.N("parent")).
-//	    To(aql.EdgeTypes("contains", "has"), aql.N("child")).
-//	    Build()
-//	q := aql.Select(aql.Col("child")).FromPattern(pattern).Build()
+//	SelectStar().From("nodes")                    → Nodes.SelectStar()
+//	Select(...).From("edges")                     → Edges.Select(...)
+//	FromJoined("nodes", "json_each", "labels")    → Nodes.JsonEach(Labels)
+//	Col("type")                                   → Type
+//	Col("data", "ext")                            → DataExt or Data.Field("ext")
+//	Eq("type", String("fs:file"))                 → Type.Eq("fs:file")
+//	Gt("data.size", Int(1000))                    → DataSize.Gt(1000)
+//	ContainsAny("labels", String("test"))           → Labels.ContainsAny("test")
+//	N("file")                                     → N("file").Build()
+//	NodeType("file", "fs:file")                   → N("file").OfType(NodeType.File).Build()
+//	AnyEdgeOfType("contains")                     → Edge.Contains
+//	EdgeType("e", "contains")                     → EOfType("e", Edge.Contains)
 //
-//	// Incoming edge: (branch:vcs:branch)<-[:has]-(repo:vcs:repo)
-//	pattern := aql.Pat(aql.NodeType("branch", "vcs:branch")).
-//	    From(aql.AnyEdgeOfType("has"), aql.NodeType("repo", "vcs:repo")).
-//	    Build()
-//	q := aql.Select(aql.Col("repo")).FromPattern(pattern).Build()
-//
-//	// Pattern with WHERE: file.data.ext = 'go'
-//	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-//	    To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
-//	    Build()
-//	q := aql.Select(aql.Col("file")).
-//	    FromPattern(pattern).
-//	    Where(aql.Eq("file.data.ext", aql.String("go"))).  // dot notation for JSON fields
-//	    Limit(10).
-//	    Build()
-//
-//	// Undirected edge: (a)-[:references]-(b)
-//	pattern := aql.Pat(aql.N("a")).
-//	    Either(aql.AnyEdgeOfType("references"), aql.N("b")).
-//	    Build()
-//	q := aql.Select(aql.Col("a"), aql.Col("b")).FromPattern(pattern).Build()
-//
-//	// Multiple patterns: (repo)-[:located_at]->(dir), (dir)-[:contains]->(file)
-//	p1 := aql.Pat(aql.NodeType("repo", "vcs:repo")).
-//	    To(aql.AnyEdgeOfType("located_at"), aql.NodeType("dir", "fs:dir")).Build()
-//	p2 := aql.Pat(aql.N("dir")).
-//	    To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).Build()
-//	q := aql.Select(aql.Col("file")).FromPattern(p1, p2).Build()
-//
-//	// Pattern with ORDER BY
-//	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-//	    To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).Build()
-//	q := aql.Select(aql.Col("file")).
-//	    FromPattern(pattern).
-//	    OrderBy("file.name").  // dot notation works
-//	    Build()
-//
-//	// Pattern with GROUP BY
-//	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-//	    To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).Build()
-//	q := aql.Select(aql.Col("dir", "name"), aql.Count()).
-//	    FromPattern(pattern).
-//	    GroupByCol("dir.name").  // dot notation works
-//	    Build()
-//
-//	// Variable-length path: 1-3 hops
-//	pattern := aql.Pat(aql.NodeType("root", "fs:dir")).
-//	    To(aql.AnyEdgeOfType("contains").WithHops(1, 3), aql.N("descendant")).Build()
-//	q := aql.Select(aql.Col("descendant")).
-//	    FromPattern(pattern).
-//	    Build()
-//
-//	// Variable-length path: exactly 2 hops
-//	pattern := aql.Pat(aql.N("start")).
-//	    To(aql.AnyEdgeOfType("contains").WithHops(2, 2), aql.N("end")).Build()
-//	q := aql.Select(aql.Col("end")).FromPattern(pattern).Build()
-//
-//	// Variable-length path: 2 or more hops (unbounded)
-//	pattern := aql.Pat(aql.N("start")).
-//	    To(aql.AnyEdgeOfType("contains").WithMinHops(2), aql.N("end")).Build()
-//	q := aql.Select(aql.Col("end")).FromPattern(pattern).Build()
-//
-//	// Variable-length with multi-type edges
-//	pattern := aql.Pat(aql.N("root")).
-//	    To(aql.EdgeTypes("has", "contains").WithHops(1, 5), aql.N("node")).Build()
-//	q := aql.Select(aql.Col("node")).FromPattern(pattern).Build()
-//
-// # Table Functions
-//
-// json_each unpacks JSON arrays into rows with 'key' (index) and 'value' columns:
-//
-//	SELECT value, COUNT(*) FROM nodes, json_each(labels)
-//	GROUP BY value
-//
-// Using the builder with FromJoined:
-//
-//	q := aql.Select(aql.Col("value"), aql.Count()).
-//	    FromJoined("nodes", "json_each", "labels").
-//	    Where(aql.Ne("value", aql.String(""))).
-//	    GroupByCol("value").
-//	    Build()
-//
-// # Scoped Queries with EXISTS
-//
-// Combine EXISTS with variable-length paths for efficient scoped counting.
-// The pattern uses *0.. to include the root node itself (0 or more hops):
-//
-//	// Build scope pattern: (cwd WHERE id = rootID)-[:contains*0..]->(nodes)
-//	cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(rootID)))
-//	containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
-//	pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("nodes")).Build()
-//
-//	// Count node types in scope
-//	q := aql.Select(aql.Col("type"), aql.Count()).
-//	    From("nodes").
-//	    Where(aql.Exists(pattern)).
-//	    GroupByCol("type").
-//	    Build()
-//
-// For the edges table, EXISTS correlates on from_id (the edge's source node):
-//
-//	// Count edge types from scoped nodes
-//	q := aql.Select(aql.Col("type"), aql.Count()).
-//	    From("edges").
-//	    Where(aql.Exists(pattern)).
-//	    GroupByCol("type").
-//	    Build()
-//
-// Combine json_each with EXISTS for scoped label counting:
-//
-//	q := aql.Select(aql.Col("value"), aql.Count()).
-//	    FromJoined("nodes", "json_each", "labels").
-//	    Where(aql.And(
-//	        aql.Ne("value", aql.String("")),
-//	        aql.Exists(pattern),
-//	    )).
-//	    GroupByCol("value").
-//	    Build()
+// The new API is type-safe, eliminates magic strings, and provides better IDE support
+// while maintaining full compatibility with the underlying AST and validation system.
 package aql

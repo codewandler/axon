@@ -71,7 +71,7 @@ func setupAQLTest(t *testing.T) (*Storage, context.Context) {
 func TestQuery_SelectStar(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().From("nodes").Build()
+	q := aql.Nodes.SelectStar().Build()
 	result, err := s.Query(ctx, q)
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
@@ -91,7 +91,7 @@ func TestQuery_SelectStar(t *testing.T) {
 func TestQuery_SelectColumns(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.Select(aql.Col("name"), aql.Col("type")).From("nodes").Build()
+	q := aql.Nodes.Select(aql.Name, aql.Type).Build()
 	result, err := s.Query(ctx, q)
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
@@ -120,9 +120,8 @@ func TestQuery_SelectColumns(t *testing.T) {
 func TestQuery_WhereEqual(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.Eq("type", aql.String("fs:file"))).
+	q := aql.Nodes.SelectStar().
+		Where(aql.Type.Eq("fs:file")).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -146,13 +145,8 @@ func TestQuery_WhereEqual(t *testing.T) {
 func TestQuery_WhereGlob(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(&aql.ComparisonExpr{
-			Left:  aql.Col("type"),
-			Op:    aql.OpGlob,
-			Right: aql.String("fs:*"),
-		}).
+	q := aql.Nodes.SelectStar().
+		Where(aql.Type.Glob("fs:*")).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -170,9 +164,8 @@ func TestQuery_WhereGlob(t *testing.T) {
 func TestQuery_WhereLabelsContainsAny(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.ContainsAny("labels", aql.String("test"), aql.String("code"))).
+	q := aql.Nodes.SelectStar().
+		Where(aql.Labels.ContainsAny("test", "code")).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -189,9 +182,8 @@ func TestQuery_WhereLabelsContainsAny(t *testing.T) {
 func TestQuery_WhereLabelsContainsAll(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.ContainsAll("labels", aql.String("test"), aql.String("code"))).
+	q := aql.Nodes.SelectStar().
+		Where(aql.Labels.ContainsAll("test", "code")).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -208,9 +200,8 @@ func TestQuery_WhereLabelsContainsAll(t *testing.T) {
 func TestQuery_WhereLabelsNotContains(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.NotContains("labels", aql.String("test"))).
+	q := aql.Nodes.SelectStar().
+		Where(aql.Labels.NotContains("test")).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -228,13 +219,8 @@ func TestQuery_WhereLabelsNotContains(t *testing.T) {
 func TestQuery_WhereJSONField(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(&aql.ComparisonExpr{
-			Left:  aql.Col("data", "ext"),
-			Op:    aql.OpEq,
-			Right: aql.String("go"),
-		}).
+	q := aql.Nodes.SelectStar().
+		Where(aql.DataExt.Eq("go")).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -260,9 +246,8 @@ func TestQuery_WhereJSONField(t *testing.T) {
 func TestQuery_WhereIn(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.In("type", aql.String("fs:file"), aql.String("fs:dir"))).
+	q := aql.Nodes.SelectStar().
+		Where(aql.Type.In("fs:file", "fs:dir")).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -280,9 +265,8 @@ func TestQuery_WhereIn(t *testing.T) {
 func TestQuery_WhereBetween(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.Between("data.size", aql.Int(50), aql.Int(150))).
+	q := aql.Nodes.SelectStar().
+		Where(aql.DataSize.Between(50, 150)).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -307,9 +291,8 @@ func TestQuery_WhereIsNull(t *testing.T) {
 	}
 	s.Flush(ctx)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.IsNull("data")).
+	q := aql.Nodes.SelectStar().
+		Where(aql.DataCol.IsNull()).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -326,9 +309,8 @@ func TestQuery_WhereIsNull(t *testing.T) {
 func TestQuery_WhereIsNotNull(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.IsNotNull("data")).
+	q := aql.Nodes.SelectStar().
+		Where(aql.DataCol.IsNotNull()).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -347,14 +329,13 @@ func TestQuery_WhereBooleanLogic(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
 	// (type = 'fs:file' OR type = 'fs:dir') AND labels CONTAINS ANY ('test')
-	q := aql.SelectStar().
-		From("nodes").
+	q := aql.Nodes.SelectStar().
 		Where(aql.And(
 			aql.Paren(aql.Or(
-				aql.Eq("type", aql.String("fs:file")),
-				aql.Eq("type", aql.String("fs:dir")),
+				aql.Type.Eq("fs:file"),
+				aql.Type.Eq("fs:dir"),
 			)),
-			aql.ContainsAny("labels", aql.String("test")),
+			aql.Labels.ContainsAny("test"),
 		)).
 		Build()
 
@@ -372,7 +353,7 @@ func TestQuery_WhereBooleanLogic(t *testing.T) {
 func TestQuery_Count(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.Select(aql.Count()).From("nodes").Build()
+	q := aql.Nodes.Select(aql.Count()).Build()
 	result, err := s.Query(ctx, q)
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
@@ -388,9 +369,8 @@ func TestQuery_Count(t *testing.T) {
 func TestQuery_GroupBy(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.Select(aql.Col("type"), aql.Count()).
-		From("nodes").
-		GroupByCol("type").
+	q := aql.Nodes.Select(aql.Type, aql.Count()).
+		GroupBy(aql.Type).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -420,14 +400,9 @@ func TestQuery_GroupBy(t *testing.T) {
 func TestQuery_GroupByWithHaving(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.Select(aql.Col("type"), aql.Count()).
-		From("nodes").
-		GroupByCol("type").
-		Having(&aql.ComparisonExpr{
-			Left:  aql.Col("COUNT(*)"),
-			Op:    aql.OpGt,
-			Right: aql.Int(1),
-		}).
+	q := aql.Nodes.Select(aql.Type, aql.Count()).
+		GroupBy(aql.Type).
+		Having(aql.Gt("COUNT(*)", 1)).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -449,10 +424,9 @@ func TestQuery_GroupByWithHaving(t *testing.T) {
 func TestQuery_OrderBy(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.Eq("type", aql.String("fs:file"))).
-		OrderBy("name").
+	q := aql.Nodes.SelectStar().
+		Where(aql.Type.Eq("fs:file")).
+		OrderBy(aql.Name).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -474,10 +448,9 @@ func TestQuery_OrderBy(t *testing.T) {
 func TestQuery_OrderByDesc(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.Eq("type", aql.String("fs:file"))).
-		OrderByDesc("name").
+	q := aql.Nodes.SelectStar().
+		Where(aql.Type.Eq("fs:file")).
+		OrderByDesc(aql.Name).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -499,8 +472,7 @@ func TestQuery_OrderByDesc(t *testing.T) {
 func TestQuery_Limit(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
+	q := aql.Nodes.SelectStar().
 		Limit(2).
 		Build()
 
@@ -518,9 +490,8 @@ func TestQuery_Limit(t *testing.T) {
 func TestQuery_LimitOffset(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		OrderBy("name").
+	q := aql.Nodes.SelectStar().
+		OrderBy(aql.Name).
 		Limit(2).
 		Offset(1).
 		Build()
@@ -546,8 +517,7 @@ func TestQuery_LimitOffset(t *testing.T) {
 func TestQuery_Distinct(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectDistinct(aql.Col("type")).
-		From("nodes").
+	q := aql.Nodes.SelectDistinct(aql.Type).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -565,7 +535,7 @@ func TestQuery_Distinct(t *testing.T) {
 func TestQuery_SelectEdges(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().From("edges").Build()
+	q := aql.Edges.SelectStar().Build()
 	result, err := s.Query(ctx, q)
 	if err != nil {
 		t.Fatalf("Query failed: %v", err)
@@ -585,9 +555,8 @@ func TestQuery_SelectEdges(t *testing.T) {
 func TestQuery_Explain(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().
-		From("nodes").
-		Where(aql.Eq("type", aql.String("fs:file"))).
+	q := aql.Nodes.SelectStar().
+		Where(aql.Type.Eq("fs:file")).
 		Build()
 
 	plan, err := s.Explain(ctx, q)
@@ -613,9 +582,8 @@ func TestQuery_ValidationError(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
 	// HAVING without GROUP BY
-	q := aql.SelectStar().
-		From("nodes").
-		Having(aql.Eq("type", aql.String("fs:file"))).
+	q := aql.Nodes.SelectStar().
+		Having(aql.Type.Eq("fs:file")).
 		Build()
 
 	_, err := s.Query(ctx, q)
@@ -637,7 +605,13 @@ func TestQuery_ValidationError(t *testing.T) {
 func TestQuery_UnsupportedTable(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	q := aql.SelectStar().From("invalid").Build()
+	// Test with an invalid table name using manual AST construction
+	q := &aql.Query{
+		Select: &aql.SelectStmt{
+			Columns: []aql.Column{{Expr: &aql.Star{}}},
+			From:    &aql.TableSource{Table: "invalid_table"},
+		},
+	}
 
 	_, err := s.Query(ctx, q)
 	if err == nil {
@@ -663,11 +637,11 @@ func TestQuery_UnsupportedTable(t *testing.T) {
 func TestPattern_BasicNodeTypes(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("file")).
+	q := aql.Select(aql.Var("file")).
 		FromPattern(pattern).
 		Limit(10).
 		Build()
@@ -697,11 +671,9 @@ func TestPattern_BasicNodeTypes(t *testing.T) {
 func TestPattern_EdgeVariable(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.N("a")).
-		To(aql.EdgeType("e", "contains"), aql.N("b")).
-		Build()
+	pattern := aql.Pat(aql.N("a").Build()).To(aql.EOfType("e", "contains"), aql.N("b").Build()).Build()
 
-	q := aql.Select(aql.Col("e")).
+	q := aql.Select(aql.Var("e")).
 		FromPattern(pattern).
 		Limit(10).
 		Build()
@@ -731,11 +703,9 @@ func TestPattern_EdgeVariable(t *testing.T) {
 func TestPattern_MultiTypeEdge(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.N("a")).
-		To(aql.EdgeTypes("contains", "has"), aql.N("b")).
-		Build()
+	pattern := aql.Pat(aql.N("a").Build()).To(aql.EdgeTypes("contains", "has"), aql.N("b").Build()).Build()
 
-	q := aql.Select(aql.Col("b")).
+	q := aql.Select(aql.Var("b")).
 		FromPattern(pattern).
 		Limit(10).
 		Build()
@@ -756,11 +726,11 @@ func TestPattern_MultiTypeEdge(t *testing.T) {
 func TestPattern_IncomingEdge(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("branch", "vcs:branch")).
-		From(aql.AnyEdgeOfType("has"), aql.NodeType("repo", "vcs:repo")).
+	pattern := aql.Pat(aql.N("branch").OfTypeStr("vcs:branch").Build()).
+		From(aql.Edge.Has.ToEdgePattern(), aql.N("repo").OfTypeStr("vcs:repo").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("repo")).
+	q := aql.Select(aql.Var("repo")).
 		FromPattern(pattern).
 		Limit(10).
 		Build()
@@ -786,17 +756,13 @@ func TestPattern_IncomingEdge(t *testing.T) {
 func TestPattern_WhereVariable(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("file")).
+	q := aql.Select(aql.Var("file")).
 		FromPattern(pattern).
-		Where(&aql.ComparisonExpr{
-			Left:  aql.Col("file", "data", "ext"),
-			Op:    aql.OpEq,
-			Right: aql.String("go"),
-		}).
+		Where(aql.Var("file").DataField("ext").Eq("go")).
 		Limit(10).
 		Build()
 
@@ -823,17 +789,13 @@ func TestPattern_WhereVariable(t *testing.T) {
 func TestPattern_WhereCompareVariables(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("file")).
+	q := aql.Select(aql.Var("file")).
 		FromPattern(pattern).
-		Where(&aql.ComparisonExpr{
-			Left:  aql.Col("dir", "name"),
-			Op:    aql.OpEq,
-			Right: aql.String("cmd"),
-		}).
+		Where(aql.Var("dir").Field("name").Eq("cmd")).
 		Limit(10).
 		Build()
 
@@ -856,23 +818,15 @@ func TestPattern_WhereCompareVariables(t *testing.T) {
 func TestPattern_WhereComplex(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("file")).
+	q := aql.Select(aql.Var("file")).
 		FromPattern(pattern).
 		Where(aql.Or(
-			&aql.ComparisonExpr{
-				Left:  aql.Col("file", "data", "ext"),
-				Op:    aql.OpEq,
-				Right: aql.String("go"),
-			},
-			&aql.ComparisonExpr{
-				Left:  aql.Col("file", "data", "ext"),
-				Op:    aql.OpEq,
-				Right: aql.String("py"),
-			},
+			aql.Var("file").DataField("ext").Eq("go"),
+			aql.Var("file").DataField("ext").Eq("py"),
 		)).
 		Limit(10).
 		Build()
@@ -892,11 +846,11 @@ func TestPattern_WhereComplex(t *testing.T) {
 func TestPattern_SelectMultipleVariables(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.EdgeType("e", "contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.EOfType("e", "contains"), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("dir"), aql.Col("file")).
+	q := aql.Select(aql.Var("dir"), aql.Var("file")).
 		FromPattern(pattern).
 		Limit(10).
 		Build()
@@ -922,10 +876,10 @@ func TestPattern_AnonymousNode(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
 	pattern := aql.Pat(aql.AnyNode()).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("file")).
+	q := aql.Select(aql.Var("file")).
 		FromPattern(pattern).
 		Limit(10).
 		Build()
@@ -945,11 +899,9 @@ func TestPattern_AnonymousNode(t *testing.T) {
 func TestPattern_Limit(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.N("a")).
-		To(aql.AnyEdgeOfType("contains"), aql.N("b")).
-		Build()
+	pattern := aql.Pat(aql.N("a").Build()).To(aql.Edge.Contains.ToEdgePattern(), aql.N("b").Build()).Build()
 
-	q := aql.Select(aql.Col("b")).
+	q := aql.Select(aql.Var("b")).
 		FromPattern(pattern).
 		Limit(1).
 		Build()
@@ -968,17 +920,13 @@ func TestPattern_Limit(t *testing.T) {
 func TestPattern_UndefinedVariable(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("file")).
+	q := aql.Select(aql.Var("file")).
 		FromPattern(pattern).
-		Where(&aql.ComparisonExpr{
-			Left:  aql.Col("undefined", "name"), // 'undefined' not in pattern
-			Op:    aql.OpEq,
-			Right: aql.String("test"),
-		}).
+		Where(aql.Eq("undefined.name", "test")).
 		Build()
 
 	_, err := s.Query(ctx, q)
@@ -1001,11 +949,11 @@ func TestPattern_UndefinedVariable(t *testing.T) {
 func TestPattern_UndefinedVariableSelect(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("undefined")). // 'undefined' not in pattern
+	q := aql.Select(aql.Var("undefined")). // 'undefined' not in pattern
 						FromPattern(pattern).
 						Build()
 
@@ -1031,11 +979,10 @@ func TestPattern_UndirectedEdge(t *testing.T) {
 
 	// Pattern: (a)-[:references]-(b)
 	// Should match test1.go-references->main.go in BOTH directions
-	pattern := aql.Pat(aql.N("a")).
-		Either(aql.AnyEdgeOfType("references"), aql.N("b")).
-		Build()
+	pattern := aql.Pat(aql.N("a").Build()).
+		Either(aql.EdgeTypeOf("references").ToEdgePattern(), aql.N("b").Build()).Build()
 
-	q := aql.Select(aql.Col("a"), aql.Col("b")).
+	q := aql.Select(aql.Var("a"), aql.Var("b")).
 		FromPattern(pattern).
 		Limit(10).
 		Build()
@@ -1058,8 +1005,8 @@ func TestPattern_UndirectedEdgeWithTypes(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
 	// Pattern: (file1:fs:file)-[:references]-(file2:fs:file)
-	pattern := aql.Pat(aql.NodeType("file1", "fs:file")).
-		Either(aql.AnyEdgeOfType("references"), aql.NodeType("file2", "fs:file")).
+	pattern := aql.Pat(aql.N("file1").OfTypeStr("fs:file").Build()).
+		Either(aql.EdgeTypeOf("references").ToEdgePattern(), aql.N("file2").OfTypeStr("fs:file").Build()).
 		Build()
 
 	q := aql.Select(aql.Col("file1"), aql.Col("file2")).
@@ -1094,15 +1041,14 @@ func TestPattern_MultipleWithShared(t *testing.T) {
 	// Pattern 2: (dir)-[:contains]->(file:fs:file)
 	// This should find: repo -> src dir -> files (test1.go, test2.py)
 
-	pattern1 := aql.Pat(aql.NodeType("repo", "vcs:repo")).
-		To(aql.AnyEdgeOfType("located_at"), aql.NodeType("dir", "fs:dir")).
+	pattern1 := aql.Pat(aql.N("repo").OfTypeStr("vcs:repo").Build()).
+		To(aql.EdgeTypeOf("located_at").ToEdgePattern(), aql.N("dir").OfTypeStr("fs:dir").Build()).
 		Build()
 
-	pattern2 := aql.Pat(aql.N("dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern2 := aql.Pat(aql.N("dir").Build()).To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("file")).
+	q := aql.Select(aql.Var("file")).
 		FromPattern(pattern1, pattern2).
 		Limit(10).
 		Build()
@@ -1136,21 +1082,16 @@ func TestPattern_MultipleTransitive(t *testing.T) {
 	// (repo:vcs:repo)-[:located_at]->(dir:fs:dir), (dir)-[:contains]->(file:fs:file)
 	// Then filter by file type
 
-	pattern1 := aql.Pat(aql.NodeType("repo", "vcs:repo")).
-		To(aql.AnyEdgeOfType("located_at"), aql.NodeType("dir", "fs:dir")).
+	pattern1 := aql.Pat(aql.N("repo").OfTypeStr("vcs:repo").Build()).
+		To(aql.EdgeTypeOf("located_at").ToEdgePattern(), aql.N("dir").OfTypeStr("fs:dir").Build()).
 		Build()
 
-	pattern2 := aql.Pat(aql.N("dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern2 := aql.Pat(aql.N("dir").Build()).To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("repo"), aql.Col("file")).
+	q := aql.Select(aql.Var("repo"), aql.Var("file")).
 		FromPattern(pattern1, pattern2).
-		Where(&aql.ComparisonExpr{
-			Left:  aql.Col("file", "data", "ext"),
-			Op:    aql.OpEq,
-			Right: aql.String("go"),
-		}).
+		Where(aql.Var("file").DataField("ext").Eq("go")).
 		Limit(10).
 		Build()
 
@@ -1169,13 +1110,13 @@ func TestPattern_MultipleTransitive(t *testing.T) {
 func TestPattern_OrderBy(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("file")).
+	q := aql.Select(aql.Var("file")).
 		FromPattern(pattern).
-		OrderBy("file.name").
+		OrderByString("file.name").
 		Limit(10).
 		Build()
 
@@ -1198,13 +1139,13 @@ func TestPattern_OrderBy(t *testing.T) {
 func TestPattern_OrderByDesc(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("file")).
+	q := aql.Select(aql.Var("file")).
 		FromPattern(pattern).
-		OrderByDesc("file.name").
+		OrderByDescString("file.name").
 		Limit(10).
 		Build()
 
@@ -1228,8 +1169,8 @@ func TestPattern_GroupBy(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
 	// Count files by directory
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
 	q := aql.Select(aql.Col("dir", "name"), aql.Count()).
@@ -1264,11 +1205,11 @@ func TestPattern_GroupBy(t *testing.T) {
 func TestPattern_Explain(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
-		To(aql.AnyEdgeOfType("contains"), aql.NodeType("file", "fs:file")).
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
 		Build()
 
-	q := aql.Select(aql.Col("file")).
+	q := aql.Select(aql.Var("file")).
 		FromPattern(pattern).
 		Limit(10).
 		Build()
@@ -1336,11 +1277,10 @@ func TestPattern_VariableLength(t *testing.T) {
 	s.Flush(ctx)
 
 	// Query: find all descendants 1-2 hops away from directories
-	pattern := aql.Pat(aql.NodeType("start", "fs:dir")).
-		To(aql.EdgeType("e", "contains").WithHops(1, 2), aql.N("end")).
-		Build()
+	pattern := aql.Pat(aql.N("start").OfTypeStr("fs:dir").Build()).
+		To(aql.EOfType("e", "contains").WithHops(1, 2), aql.N("end").Build()).Build()
 
-	q := aql.Select(aql.Col("end")).
+	q := aql.Select(aql.Var("end")).
 		FromPattern(pattern).
 		Limit(10).
 		Build()
@@ -1384,11 +1324,9 @@ func TestPattern_VariableLengthExact(t *testing.T) {
 	s.Flush(ctx)
 
 	// Query: find nodes EXACTLY 2 hops away (only level2.txt)
-	pattern := aql.Pat(aql.N("start")).
-		To(aql.AnyEdgeOfType("contains").WithHops(2, 2), aql.N("end")).
-		Build()
+	pattern := aql.Pat(aql.N("start").Build()).To(aql.Edge.Contains.WithHops(2, 2), aql.N("end").Build()).Build()
 
-	q := aql.Select(aql.Col("end")).
+	q := aql.Select(aql.Var("end")).
 		FromPattern(pattern).
 		Build()
 
@@ -1434,11 +1372,9 @@ func TestPattern_VariableLengthUnbounded(t *testing.T) {
 	s.Flush(ctx)
 
 	// Query: find nodes 2+ hops away (l2, l3.txt)
-	pattern := aql.Pat(aql.N("start")).
-		To(aql.AnyEdgeOfType("contains").WithMinHops(2), aql.N("end")).
-		Build()
+	pattern := aql.Pat(aql.N("start").Build()).To(aql.Edge.Contains.WithMinHops(2), aql.N("end").Build()).Build()
 
-	q := aql.Select(aql.Col("end")).
+	q := aql.Select(aql.Var("end")).
 		FromPattern(pattern).
 		Build()
 
@@ -1480,11 +1416,9 @@ func TestPattern_VariableLengthMultiType(t *testing.T) {
 	s.Flush(ctx)
 
 	// Query: traverse both has and contains edges
-	pattern := aql.Pat(aql.N("start")).
-		To(aql.EdgeTypes("has", "contains").WithHops(1, 2), aql.N("end")).
-		Build()
+	pattern := aql.Pat(aql.N("start").Build()).To(aql.EdgeTypes("has", "contains").WithHops(1, 2), aql.N("end").Build()).Build()
 
-	q := aql.Select(aql.Col("end")).
+	q := aql.Select(aql.Var("end")).
 		FromPattern(pattern).
 		Build()
 
@@ -1524,14 +1458,12 @@ func TestQuery_Exists(t *testing.T) {
 	}
 
 	// Test EXISTS: find dir1 which contains files
-	pattern := aql.Pat(aql.N("nodes")).
-		To(aql.AnyEdgeOfType("contains"), aql.AnyNodeOfType("fs:file")).
+	pattern := aql.Pat(aql.N("nodes").Build()).To(aql.Edge.Contains.ToEdgePattern(), aql.AnyNodeOfType("fs:file")).
 		Build()
 
-	q := aql.SelectStar().
-		From("nodes").
+	q := aql.Nodes.SelectStar().
 		Where(aql.And(
-			aql.Eq("id", aql.String("dir1")),
+			aql.Eq("id", "dir1"),
 			aql.Exists(pattern),
 		)).
 		Build()
@@ -1549,10 +1481,9 @@ func TestQuery_Exists(t *testing.T) {
 	}
 
 	// Test NOT EXISTS: dir2 should match (no files)
-	qNot := aql.SelectStar().
-		From("nodes").
+	qNot := aql.Nodes.SelectStar().
 		Where(aql.And(
-			aql.Eq("id", aql.String("dir2")),
+			aql.Eq("id", "dir2"),
 			aql.Not(aql.Exists(pattern)),
 		)).
 		Build()
@@ -1570,10 +1501,9 @@ func TestQuery_Exists(t *testing.T) {
 	}
 
 	// Test that dir1 does NOT match NOT EXISTS
-	qNot2 := aql.SelectStar().
-		From("nodes").
+	qNot2 := aql.Nodes.SelectStar().
 		Where(aql.And(
-			aql.Eq("id", aql.String("dir1")),
+			aql.Eq("id", "dir1"),
 			aql.Not(aql.Exists(pattern)),
 		)).
 		Build()
@@ -1593,10 +1523,10 @@ func TestQuery_JsonEach_Labels(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
 	// Query: SELECT value, COUNT(*) FROM nodes, json_each(labels) GROUP BY value ORDER BY COUNT(*) DESC
-	q := aql.Select(aql.Col("value"), aql.Count()).
-		FromJoined("nodes", "json_each", "labels").
-		GroupByCol("value").
-		OrderByExpr(aql.Count(), true).
+	q := aql.Nodes.JsonEach(aql.Labels).
+		Select(aql.Val, aql.Count()).
+		GroupBy(aql.Val).
+		OrderByCount(true).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -1629,10 +1559,10 @@ func TestQuery_JsonEach_WithWhere(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
 	// Query: SELECT value, COUNT(*) FROM nodes, json_each(labels) WHERE value != '' GROUP BY value
-	q := aql.Select(aql.Col("value"), aql.Count()).
-		FromJoined("nodes", "json_each", "labels").
-		Where(aql.Ne("value", aql.String(""))).
-		GroupByCol("value").
+	q := aql.Nodes.JsonEach(aql.Labels).
+		Select(aql.Val, aql.Count()).
+		Where(aql.Val.Ne("")).
+		GroupBy(aql.Val).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -1661,9 +1591,9 @@ func TestQuery_JsonEach_DataField(t *testing.T) {
 	}
 
 	// Query: SELECT value, COUNT(*) FROM nodes, json_each(data.tags) GROUP BY value
-	q := aql.Select(aql.Col("value"), aql.Count()).
-		FromJoined("nodes", "json_each", "data.tags").
-		GroupByCol("value").
+	q := aql.Nodes.JsonEach(aql.Data.Field("tags")).
+		Select(aql.Val, aql.Count()).
+		GroupBy(aql.Val).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -1716,21 +1646,14 @@ func TestQuery_JsonEach_WithExists(t *testing.T) {
 		t.Fatalf("failed to get src node: %v", err)
 	}
 
-	// Build pattern: (root WHERE id = srcID)-[:contains*0..]->(nodes)
-	rootPattern := aql.N("root").WithWhere(aql.Eq("id", aql.String(srcNode.ID)))
-	containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
-	pattern := aql.Pat(rootPattern).To(containsEdge, aql.N("nodes")).Build()
-
-	// Query: SELECT value, COUNT(*) FROM nodes, json_each(labels)
-	//        WHERE value != '' AND EXISTS pattern
-	//        GROUP BY value
-	q := aql.Select(aql.Col("value"), aql.Count()).
-		FromJoined("nodes", "json_each", "labels").
+	// Use ScopedTo helper for optimized CTE+JOIN
+	q := aql.Nodes.JsonEach(aql.Labels).
+		Select(aql.Val, aql.Count()).
 		Where(aql.And(
-			aql.Ne("value", aql.String("")),
-			aql.Exists(pattern),
+			aql.Val.Ne(""),
+			aql.Nodes.ScopedTo(srcNode.ID),
 		)).
-		GroupByCol("value").
+		GroupBy(aql.Val).
 		Build()
 
 	result, err := s.Query(ctx, q)
@@ -1766,18 +1689,12 @@ func TestQuery_Edges_WithExists(t *testing.T) {
 		t.Fatalf("failed to get src node: %v", err)
 	}
 
-	// Build pattern: (root WHERE id = srcID)-[:contains*0..]->(edges)
-	// This should match edges where from_id is in the descendant set
-	rootPattern := aql.N("root").WithWhere(aql.Eq("id", aql.String(srcNode.ID)))
-	containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
-	pattern := aql.Pat(rootPattern).To(containsEdge, aql.N("edges")).Build()
-
-	// Query: SELECT type, COUNT(*) FROM edges WHERE EXISTS pattern GROUP BY type
-	q := aql.Select(aql.Col("type"), aql.Count()).
-		From("edges").
-		Where(aql.Exists(pattern)).
-		GroupByCol("type").
-		OrderByExpr(aql.Count(), true).
+	// Use ScopedTo helper for optimized CTE+JOIN
+	q := aql.Edges.
+		Select(aql.Type, aql.Count()).
+		Where(aql.Edges.ScopedTo(srcNode.ID)).
+		GroupBy(aql.Type).
+		OrderByCount(true).
 		Build()
 
 	result, err := s.Query(ctx, q)

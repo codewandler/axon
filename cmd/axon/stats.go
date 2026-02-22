@@ -102,9 +102,9 @@ func runStats(cmd *cobra.Command, args []string) error {
 	if statsGlobal {
 		// Global: Use AQL queries for efficiency
 		// Node count and types
-		nodeQ := aql.Select(aql.Col("type"), aql.Count()).
-			From("nodes").
-			GroupByCol("type").
+		nodeQ := aql.Nodes.
+			Select(aql.Type, aql.Count()).
+			GroupBy(aql.Type).
 			Build()
 		nodeResult, err := g.Storage().Query(ctx, nodeQ)
 		if err != nil {
@@ -116,9 +116,9 @@ func runStats(cmd *cobra.Command, args []string) error {
 		}
 
 		// Edge count and types
-		edgeQ := aql.Select(aql.Col("type"), aql.Count()).
-			From("edges").
-			GroupByCol("type").
+		edgeQ := aql.Edges.
+			Select(aql.Type, aql.Count()).
+			GroupBy(aql.Type).
 			Build()
 		edgeResult, err := g.Storage().Query(ctx, edgeQ)
 		if err != nil {
@@ -132,10 +132,10 @@ func runStats(cmd *cobra.Command, args []string) error {
 		// Extensions and labels for verbose mode using AQL
 		if statsVerbose || statsOutput == "json" {
 			// Labels using json_each
-			labelsQ := aql.Select(aql.Col("value"), aql.Count()).
-				FromJoined("nodes", "json_each", "labels").
-				Where(aql.Ne("value", aql.String(""))).
-				GroupByCol("value").
+			labelsQ := aql.Nodes.JsonEach(aql.Labels).
+				Select(aql.Val, aql.Count()).
+				Where(aql.Val.Ne("")).
+				GroupBy(aql.Val).
 				Build()
 			labelsResult, err := g.Storage().Query(ctx, labelsQ)
 			if err != nil {
@@ -143,11 +143,11 @@ func runStats(cmd *cobra.Command, args []string) error {
 			}
 			labels = labelsResult.Counts
 
-			// Extensions from data.ext field (use Col("data", "ext") for JSON path)
-			extQ := aql.Select(aql.Col("data", "ext"), aql.Count()).
-				From("nodes").
-				Where(aql.IsNotNull("data.ext")).
-				GroupByCol("data.ext").
+			// Extensions from data.ext field
+			extQ := aql.Nodes.
+				Select(aql.DataExt, aql.Count()).
+				Where(aql.DataExt.IsNotNull()).
+				GroupBy(aql.DataExt).
 				Build()
 			extResult, err := g.Storage().Query(ctx, extQ)
 			if err != nil {
@@ -186,15 +186,11 @@ func runStats(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Node types with EXISTS scoping
-		cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(cwdNode.ID)))
-		containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
-		pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("nodes")).Build()
-
-		nodeQ := aql.Select(aql.Col("type"), aql.Count()).
-			From("nodes").
-			Where(aql.Exists(pattern)).
-			GroupByCol("type").
+		// Node types with DescendantsOf scoping
+		nodeQ := aql.Nodes.
+			Select(aql.Type, aql.Count()).
+			Where(aql.Nodes.ScopedTo(cwdNode.ID)).
+			GroupBy(aql.Type).
 			Build()
 		nodeResult, err := g.Storage().Query(ctx, nodeQ)
 		if err != nil {
@@ -205,11 +201,11 @@ func runStats(cmd *cobra.Command, args []string) error {
 			data.Nodes += c
 		}
 
-		// Edge types using AQL with EXISTS pattern
-		edgeQ := aql.Select(aql.Col("type"), aql.Count()).
-			From("edges").
-			Where(aql.Exists(pattern)).
-			GroupByCol("type").
+		// Edge types using scoped pattern
+		edgeQ := aql.Edges.
+			Select(aql.Type, aql.Count()).
+			Where(aql.Edges.ScopedTo(cwdNode.ID)).
+			GroupBy(aql.Type).
 			Build()
 		edgeResult, err := g.Storage().Query(ctx, edgeQ)
 		if err != nil {
@@ -220,14 +216,14 @@ func runStats(cmd *cobra.Command, args []string) error {
 			data.Edges += c
 		}
 
-		// Extensions using AQL with EXISTS pattern
-		extQ := aql.Select(aql.Col("data", "ext"), aql.Count()).
-			From("nodes").
+		// Extensions using DescendantsOf
+		extQ := aql.Nodes.
+			Select(aql.DataExt, aql.Count()).
 			Where(aql.And(
-				aql.IsNotNull("data.ext"),
-				aql.Exists(pattern),
+				aql.DataExt.IsNotNull(),
+				aql.Nodes.ScopedTo(cwdNode.ID),
 			)).
-			GroupByCol("data.ext").
+			GroupBy(aql.DataExt).
 			Build()
 		extResult, err := g.Storage().Query(ctx, extQ)
 		if err != nil {
@@ -235,14 +231,14 @@ func runStats(cmd *cobra.Command, args []string) error {
 		}
 		extensions = extResult.Counts
 
-		// Labels using AQL with EXISTS pattern + json_each
-		labelsQ := aql.Select(aql.Col("value"), aql.Count()).
-			FromJoined("nodes", "json_each", "labels").
+		// Labels using json_each with DescendantsOf
+		labelsQ := aql.Nodes.JsonEach(aql.Labels).
+			Select(aql.Val, aql.Count()).
 			Where(aql.And(
-				aql.Ne("value", aql.String("")),
-				aql.Exists(pattern),
+				aql.Val.Ne(""),
+				aql.Nodes.ScopedTo(cwdNode.ID),
 			)).
-			GroupByCol("value").
+			GroupBy(aql.Val).
 			Build()
 		labelsResult, err := g.Storage().Query(ctx, labelsQ)
 		if err != nil {

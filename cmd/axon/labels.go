@@ -49,21 +49,20 @@ func runLabels(cmd *cobra.Command, args []string) error {
 
 	if labelsGlobal {
 		// Global mode: Use AQL with json_each for fast label unpacking
-		// Query: SELECT value, COUNT(*) FROM nodes, json_each(labels) WHERE value != '' GROUP BY value ORDER BY COUNT(*) DESC
-		q := aql.Select(aql.Col("value"), aql.Count()).
-			FromJoined("nodes", "json_each", "labels").
-			Where(aql.Ne("value", aql.String(""))).
-			GroupByCol("value").
-			OrderByExpr(aql.Count(), true).
+		query := aql.Nodes.JsonEach(aql.Labels).
+			Select(aql.Val, aql.Count()).
+			Where(aql.Val.Ne("")).
+			GroupBy(aql.Val).
+			OrderByCount(true).
 			Build()
 
-		result, err := cmdCtx.Storage.Query(cmdCtx.Ctx, q)
+		result, err := cmdCtx.Storage.Query(cmdCtx.Ctx, query)
 		if err != nil {
 			return fmt.Errorf("failed to execute query: %w", err)
 		}
 		counts = result.Counts
 	} else {
-		// Scoped mode: Use AQL with EXISTS pattern for efficient scoping
+		// Scoped mode: Use DescendantsOf helper
 		ax, err := cmdCtx.Axon()
 		if err != nil {
 			return err
@@ -99,23 +98,17 @@ func runLabels(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Build pattern: (cwd WHERE id = 'cwdID')-[:contains*0..]->(nodes)
-		cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(cwdNode.ID)))
-		containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
-		pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("nodes")).Build()
-
-		// Query with EXISTS pattern
-		q := aql.Select(aql.Col("value"), aql.Count()).
-			FromJoined("nodes", "json_each", "labels").
+		query := aql.Nodes.JsonEach(aql.Labels).
+			Select(aql.Val, aql.Count()).
 			Where(aql.And(
-				aql.Ne("value", aql.String("")),
-				aql.Exists(pattern),
+				aql.Val.Ne(""),
+				aql.Nodes.ScopedTo(cwdNode.ID),
 			)).
-			GroupByCol("value").
-			OrderByExpr(aql.Count(), true).
+			GroupBy(aql.Val).
+			OrderByCount(true).
 			Build()
 
-		result, err := cmdCtx.Storage.Query(cmdCtx.Ctx, q)
+		result, err := cmdCtx.Storage.Query(cmdCtx.Ctx, query)
 		if err != nil {
 			return fmt.Errorf("failed to execute query: %w", err)
 		}

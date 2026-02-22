@@ -52,12 +52,17 @@ func runTypes(cmd *cobra.Command, args []string) error {
 	ctx := cmdCtx.Ctx
 	cwd := cmdCtx.Cwd
 
-	// Build AQL query: SELECT type, COUNT(*) FROM nodes GROUP BY type ORDER BY COUNT(*) DESC
-	q := aql.Select(aql.Col("type"), aql.Count()).From("nodes")
+	var query *aql.Query
 
-	// Add scoping condition using EXISTS for non-global queries
-	if !typesGlobal {
-		// Get the CWD node
+	if typesGlobal {
+		// Global: SELECT type, COUNT(*) FROM nodes GROUP BY type ORDER BY COUNT(*) DESC
+		query = aql.Nodes.
+			Select(aql.Type, aql.Count()).
+			GroupBy(aql.Type).
+			OrderByCount(true).
+			Build()
+	} else {
+		// Scoped: Add WHERE with DescendantsOf
 		absPath, err := filepath.Abs(cwd)
 		if err != nil {
 			return fmt.Errorf("failed to resolve path: %w", err)
@@ -87,18 +92,14 @@ func runTypes(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Build pattern: (cwd WHERE id = 'cwdID')-[:contains*0..]->(nodes)
-		cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(cwdNode.ID)))
-		containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
-		pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("nodes")).Build()
-		q = q.Where(aql.Exists(pattern))
+		query = aql.Nodes.
+			Select(aql.Type, aql.Count()).
+			Where(aql.Nodes.ScopedTo(cwdNode.ID)).
+			GroupBy(aql.Type).
+			OrderByCount(true).
+			Build()
 	}
 
-	// GROUP BY type, ORDER BY COUNT(*) DESC
-	q = q.GroupByCol("type").OrderByExpr(aql.Count(), true)
-
-	// Execute query
-	query := q.Build()
 	result, err := g.Storage().Query(ctx, query)
 	if err != nil {
 		return fmt.Errorf("failed to execute query: %w", err)

@@ -107,24 +107,19 @@ func runFind(cmd *cobra.Command, args []string) error {
 	ctx := cmdCtx.Ctx
 	cwd := cmdCtx.Cwd
 
-	// Build AQL query
-	// Use COUNT(*) when --count is specified for optimal performance
+	// Build AQL query - start with table reference
 	var q *aql.Builder
 	if findCount {
-		q = aql.Select(aql.Count()).From("nodes")
+		q = aql.Nodes.Select(aql.Count())
 	} else {
-		q = aql.SelectStar().From("nodes")
+		q = aql.Nodes.SelectStar()
 	}
 
 	// Build WHERE conditions
 	var conditions []aql.Expression
 
-	// Add scoping condition using EXISTS
 	if !findGlobal {
 		// Scoped to CWD: query descendants of current directory
-		// EXISTS (:fs:dir WHERE id = '<cwd-id>')-[:contains*..]->(nodes)
-
-		// First, get the CWD node
 		absPath, err := filepath.Abs(cwd)
 		if err != nil {
 			return fmt.Errorf("failed to resolve path: %w", err)
@@ -155,12 +150,7 @@ func runFind(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Build pattern: (cwd WHERE id = 'cwdID')-[:contains*..]->(nodes)
-		// Variable-length edges require source node to have a variable
-		cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(cwdNode.ID)))
-		containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0) // 0.. means include CWD itself + descendants
-		pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("nodes")).Build()
-		conditions = append(conditions, aql.Exists(pattern))
+		conditions = append(conditions, aql.Nodes.ScopedTo(cwdNode.ID))
 	}
 
 	// Type matching - handle multiple types with OR logic
@@ -169,10 +159,10 @@ func runFind(cmd *cobra.Command, args []string) error {
 		for _, t := range findType {
 			if strings.Contains(t, "*") || strings.Contains(t, "?") {
 				// Use GLOB for pattern matching (indexed)
-				typeConditions = append(typeConditions, aql.Glob("type", aql.String(t)))
+				typeConditions = append(typeConditions, aql.Type.Glob(t))
 			} else {
 				// Exact match
-				typeConditions = append(typeConditions, aql.Eq("type", aql.String(t)))
+				typeConditions = append(typeConditions, aql.Type.Eq(t))
 			}
 		}
 		if len(typeConditions) == 1 {
@@ -185,17 +175,17 @@ func runFind(cmd *cobra.Command, args []string) error {
 	// Name matching
 	if findName != "" {
 		// Exact match
-		conditions = append(conditions, aql.Eq("name", aql.String(findName)))
+		conditions = append(conditions, aql.Name.Eq(findName))
 	} else if findQuery != "" {
 		// Pattern match with GLOB (indexed)
-		conditions = append(conditions, aql.Glob("name", aql.String(findQuery)))
+		conditions = append(conditions, aql.Name.Glob(findQuery))
 	}
 
 	// Label filtering (OR logic - node has at least one of the labels)
 	if len(findLabels) > 0 {
 		var labelConditions []aql.Expression
 		for _, label := range findLabels {
-			labelConditions = append(labelConditions, aql.ContainsAny("labels", aql.String(label)))
+			labelConditions = append(labelConditions, aql.Labels.ContainsAny(label))
 		}
 		if len(labelConditions) == 1 {
 			conditions = append(conditions, labelConditions[0])
@@ -212,7 +202,7 @@ func runFind(cmd *cobra.Command, args []string) error {
 			if !strings.HasPrefix(ext, ".") {
 				ext = "." + ext
 			}
-			extConditions = append(extConditions, aql.Eq("data.ext", aql.String(ext)))
+			extConditions = append(extConditions, aql.DataExt.Eq(ext))
 		}
 		if len(extConditions) == 1 {
 			conditions = append(conditions, extConditions[0])
@@ -226,7 +216,7 @@ func runFind(cmd *cobra.Command, args []string) error {
 		parts := strings.SplitN(df, "=", 2)
 		if len(parts) == 2 {
 			key, value := parts[0], parts[1]
-			conditions = append(conditions, aql.Eq("data."+key, aql.String(value)))
+			conditions = append(conditions, aql.Data.Field(key).Eq(value))
 		}
 	}
 
