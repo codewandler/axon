@@ -26,6 +26,9 @@ var NodeType = struct {
 	Document NodeTypeRef
 	Section  NodeTypeRef
 	Heading  NodeTypeRef
+
+	// Project
+	Project NodeTypeRef
 }{
 	// Filesystem
 	File: NodeTypeRef{"fs:file"},
@@ -42,6 +45,9 @@ var NodeType = struct {
 	Document: NodeTypeRef{"md:document"},
 	Section:  NodeTypeRef{"md:section"},
 	Heading:  NodeTypeRef{"md:heading"},
+
+	// Project
+	Project: NodeTypeRef{"project:root"},
 }
 
 // NodeTypeOf creates a custom node type reference.

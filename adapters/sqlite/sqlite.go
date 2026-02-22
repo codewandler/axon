@@ -1421,3 +1421,13 @@ func (s *Storage) GetLastIndexRun(ctx context.Context) (*graph.IndexRunRecord, e
 func (s *Storage) GetDatabasePath() string {
 	return s.path
 }
+
+// GetSchemaVersion returns the current database schema version.
+func (s *Storage) GetSchemaVersion(ctx context.Context) (int, error) {
+	var version int
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_version`).Scan(&version)
+	if err != nil {
+		return 0, err
+	}
+	return version, nil
+}
