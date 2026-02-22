@@ -47,6 +47,13 @@ axon/
 ├── graph/               # Core graph types (Node, Edge, Storage interface)
 ├── adapters/sqlite/     # SQLite storage implementation (also supports :memory: mode)
 ├── storage/             # Storage error types
+├── aql/                 # AQL (Axon Query Language) - parser, AST, compiler
+│   ├── parser.go        # AQL parser using participle
+│   ├── ast.go           # AST node types
+│   ├── builder.go       # Fluent builder API for programmatic queries
+│   ├── validate.go      # Query validation
+│   ├── doc.go           # Package documentation with examples
+│   └── grammar.md       # Full AQL grammar specification
 ├── indexer/             # Indexer interface, registry, events, emitter
 │   ├── fs/              # Filesystem indexer
 │   ├── git/             # Git repository indexer
@@ -54,7 +61,7 @@ axon/
 ├── types/               # Node/edge type definitions (fs, vcs, markdown)
 ├── progress/            # Progress reporting (coordinator, bubbletea UI)
 ├── render/              # Tree rendering utilities
-└── cmd/axon/            # CLI commands (init, tree, show)
+└── cmd/axon/            # CLI commands (init, query, tree, find, show, etc.)
 ```
 
 ## Code Style Guidelines
@@ -175,12 +182,57 @@ Indexers must implement:
 - `Subscriptions() []Subscription` - events to subscribe to
 - `Index(ctx, ictx) error` - perform indexing
 
+### AQL (Axon Query Language)
+
+AQL is a SQL-like query language with graph pattern matching capabilities:
+
+**Phase 1 - Table Queries** (✅ implemented):
+- SELECT with WHERE, GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET
+- JSON field access: `data.ext = 'go'`
+- Label operations: `CONTAINS ANY/ALL`, `NOT CONTAINS`
+- All standard operators: `=`, `!=`, `<`, `>`, `LIKE`, `GLOB`, `IN`, `BETWEEN`, `IS NULL`
+
+**Phase 2 - Pattern Queries** (✅ implemented):
+- Node patterns: `(var:type)`
+- Edge directions: `->`, `<-`, `-` (undirected)
+- Multi-type edges: `[:contains|has]`
+- Edge variables: `[e:contains]`
+- Multiple patterns with shared variables
+- WHERE with variable resolution: `file.data.ext = 'go'`
+- ORDER BY, GROUP BY with patterns
+
+**Phase 3 - Variable-Length Paths** (✅ implemented):
+- Bounded: `[:type*1..3]`
+- Exact: `[:type*2]`
+- Unbounded: `[:type*2..]`
+- Uses SQLite recursive CTEs for efficient traversal
+
+**Key Files**:
+- `aql/parser.go` - PEG parser using participle
+- `aql/ast.go` - AST types for all query components
+- `aql/builder.go` - Fluent builder API
+- `aql/validate.go` - Semantic validation
+- `aql/grammar.md` - Complete EBNF grammar specification
+- `aql/doc.go` - Examples and usage documentation
+- `adapters/sqlite/aql.go` - AQL→SQL compiler
+- `adapters/sqlite/aql_test.go` - 52 tests covering all phases
+
+**Testing**: When modifying AQL, always run: `go test -v ./adapters/sqlite -run TestQuery`
+
 ### CLI Commands
 
 - Use cobra for command structure
 - Global flags: `--db-dir`, `--local`
 - DB auto-lookup: walk up directories, fallback to `~/.axon/graph.db`
 - Print "Using database: <path>" for transparency
+
+**Available commands**:
+- `init` - Index directories and create graph
+- `query` - Execute AQL queries (with `--explain`, `--output table|json|count`)
+- `tree` - Display graph as tree (with `--depth`, `--ids`, `--types`)
+- `find` - Search nodes with filters (with `--type`, `--name`, `--ext`, `--global`)
+- `show` - Display node details
+- `stats`, `labels`, `types`, `edges`, `gc` - Introspection and maintenance
 
 ### Key Patterns
 
@@ -237,3 +289,14 @@ All edge types are defined in `types/edges.go`. Use generic edges rather than do
    - Call `types.RegisterCommonEdges(registry)` before domain-specific registrations
    - Common edges have no FromTypes/ToTypes constraints (any-to-any)
    - Domain-specific constraints are added in domain registration functions
+
+## Documentation
+
+- **README.md** - User-facing documentation with quickstart, AQL tutorial, and CLI reference
+- **AGENTS.md** (this file) - Developer guidelines for AI agents and contributors
+- **aql/grammar.md** - Complete EBNF grammar specification for AQL
+- **aql/doc.go** - Package documentation with usage examples
+- **TODO.md** - Project roadmap and planned features
+- **LICENSE** - MIT License
+
+When making changes that affect user-facing behavior (new features, CLI changes, AQL syntax), update README.md accordingly.

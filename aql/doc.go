@@ -58,14 +58,14 @@
 //
 // AQL supports two types of sources in the FROM clause:
 //
-// Table queries - query the flat nodes or edges tables (Phase 1 - ✅ implemented):
+// Table queries - query the flat nodes or edges tables:
 //
 //	SELECT * FROM nodes WHERE type = 'fs:file'
 //	SELECT * FROM edges WHERE type = 'contains'
 //	SELECT type, COUNT(*) FROM nodes GROUP BY type
 //	SELECT name, type FROM nodes WHERE data.ext = 'go'
 //
-// Pattern queries - use graph pattern matching (Phase 2 - ✅ implemented, Phase 3 - ✅ implemented):
+// Pattern queries - use graph pattern matching:
 //
 //	SELECT file FROM (dir:fs:dir)-[:contains]->(file:fs:file)
 //	SELECT branch FROM (repo:vcs:repo)-[:has]->(branch:vcs:branch)
@@ -73,13 +73,13 @@
 //	SELECT child FROM (parent)-[:contains|has]->(child)
 //	SELECT repo FROM (branch:vcs:branch)<-[:has]-(repo:vcs:repo)
 //	SELECT file FROM (dir)-[:contains]->(file) WHERE file.data.ext = 'go'
-//	SELECT b FROM (a:fs:dir)-[:contains*1..3]->(b:fs:file)    -- Phase 3: variable-length
-//	SELECT b FROM (a)-[:contains*2]->(b)                      -- Phase 3: exact hops
-//	SELECT b FROM (a)-[:contains*2..]->(b)                    -- Phase 3: unbounded
+//	SELECT b FROM (a:fs:dir)-[:contains*1..3]->(b:fs:file)    -- variable-length paths
+//	SELECT b FROM (a)-[:contains*2]->(b)                      -- exactly 2 hops
+//	SELECT b FROM (a)-[:contains*2..]->(b)                    -- 2 or more hops (unbounded)
 //
 // # JSON Field Access
 //
-// The data field can be queried using dot notation (Phase 1):
+// The data field can be queried using dot notation:
 //
 //	SELECT * FROM nodes WHERE data.ext = 'go'
 //	SELECT * FROM nodes WHERE data.size > 1000
@@ -87,24 +87,24 @@
 //
 // This compiles to efficient json_extract() calls in SQLite
 //
-// # Pattern Matching (Phase 2)
+// # Pattern Matching
 //
 // Patterns follow Cypher-like syntax:
 //
-//	(variable:type)              - node pattern (✅ implemented)
-//	-[:type]->                   - outgoing edge (✅ implemented)
-//	<-[:type]-                   - incoming edge (✅ implemented)
-//	-[:type]-                    - undirected edge (✅ implemented)
-//	-[:type1|type2]->            - multi-type edge (✅ implemented)
-//	-[variable:type]->           - edge variable binding (✅ implemented)
+//	(variable:type)              - node pattern
+//	-[:type]->                   - outgoing edge
+//	<-[:type]-                   - incoming edge
+//	-[:type]-                    - undirected edge
+//	-[:type1|type2]->            - multi-type edge
+//	-[variable:type]->           - edge variable binding
 //
-// # Variable-Length Paths (Phase 3)
+// # Variable-Length Paths
 //
 // Recursive graph traversal using SQLite CTEs:
 //
-//	-[:type*min..max]->          - bounded variable-length (✅ implemented)
-//	-[:type*n]->                 - exact hops (✅ implemented)
-//	-[:type*min..]->             - unbounded (✅ implemented)
+//	-[:type*min..max]->          - bounded variable-length
+//	-[:type*n]->                 - exact hops
+//	-[:type*min..]->             - unbounded
 //
 // Examples:
 //
@@ -161,7 +161,7 @@
 //
 // # Parameters
 //
-// Both named and positional parameters are supported (Phase 2 - planned):
+// Both named and positional parameters are supported:
 //
 //	SELECT * FROM nodes WHERE type = $type      -- named
 //	SELECT * FROM nodes WHERE type = $1         -- positional
@@ -190,7 +190,7 @@
 //	    )).
 //	    Build()
 //
-// Pattern queries with the builder (Phase 2):
+// Pattern queries with the builder:
 //
 //	// Basic pattern: (dir:fs:dir)-[:contains]->(file:fs:file)
 //	pattern := aql.Pat(aql.NodeType("dir", "fs:dir")).
