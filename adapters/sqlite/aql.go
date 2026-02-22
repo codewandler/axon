@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +23,9 @@ type existsRewrite struct {
 	whereSQL   string // Modified WHERE clause (EXISTS removed, other conditions kept)
 	whereArgs  []any  // Arguments for WHERE
 }
+
+// jsonExtractRegex matches json_extract(data, '$.field') to extract the field name.
+var jsonExtractRegex = regexp.MustCompile(`json_extract\([^,]+,\s*'\$\.(\w+)'`)
 
 // Query executes an AQL query and returns results.
 //
@@ -2614,6 +2618,23 @@ func (s *Storage) scanNodePartial(rows *sql.Rows, cols []string) (*graph.Node, e
 		case "updated_at":
 			if str, ok := val.(string); ok {
 				node.UpdatedAt, _ = time.Parse(time.RFC3339, str)
+			}
+		default:
+			// Handle json_extract columns: json_extract(data, '$.field')
+			// Extract the field name and store in Data
+			if strings.HasPrefix(col, "json_extract") {
+				if str, ok := val.(string); ok && str != "" {
+					// Parse the JSON path from column name: json_extract(data, '$.name') -> name
+					if match := jsonExtractRegex.FindStringSubmatch(col); match != nil {
+						fieldName := match[1]
+						if node.Data == nil {
+							node.Data = make(map[string]any)
+						}
+						if dataMap, ok := node.Data.(map[string]any); ok {
+							dataMap[fieldName] = str
+						}
+					}
+				}
 			}
 			// Note: 'root' column exists in DB but not mapped to Node struct
 		}
