@@ -188,14 +188,38 @@ func printNodesTable(nodes []*graph.Node) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	defer w.Flush()
 
-	// Detect which columns have data (for partial field selection)
-	hasID := nodes[0].ID != ""
-	hasType := nodes[0].Type != ""
-	hasURI := nodes[0].URI != ""
-	hasName := nodes[0].Name != ""
-	hasKey := nodes[0].Key != ""
-	hasLabels := len(nodes[0].Labels) > 0
-	hasData := nodes[0].Data != nil
+	// Detect which columns have data across ALL nodes (not just first, since first might be empty)
+	hasID := false
+	hasType := false
+	hasURI := false
+	hasName := false
+	hasKey := false
+	hasLabels := false
+	hasData := false
+
+	for _, n := range nodes {
+		if n.ID != "" {
+			hasID = true
+		}
+		if n.Type != "" {
+			hasType = true
+		}
+		if n.URI != "" {
+			hasURI = true
+		}
+		if n.Name != "" {
+			hasName = true
+		}
+		if n.Key != "" {
+			hasKey = true
+		}
+		if len(n.Labels) > 0 {
+			hasLabels = true
+		}
+		if n.Data != nil {
+			hasData = true
+		}
+	}
 
 	// Print header
 	var headers []string
