@@ -207,6 +207,19 @@ AQL is a SQL-like query language with graph pattern matching capabilities:
 - Unbounded: `[:type*2..]`
 - Uses SQLite recursive CTEs for efficient traversal
 
+**Phase 4 - Table Functions** (✅ implemented):
+- `json_each(column)` - unpack JSON arrays into rows
+- Syntax: `FROM nodes, json_each(labels)`
+- Produces `key` (index) and `value` columns
+- Works with EXISTS patterns for scoped queries
+- Builder: `FromJoined("nodes", "json_each", "labels")`
+
+**Performance Optimizations**:
+- EXISTS with variable-length paths → CTE+JOIN rewrite (avoids correlated subqueries)
+- For nodes table: correlates on `id`
+- For edges table: correlates on `from_id`
+- Scoped queries complete in milliseconds even on large graphs
+
 **Key Files**:
 - `aql/parser.go` - PEG parser using participle
 - `aql/ast.go` - AST types for all query components
@@ -215,9 +228,33 @@ AQL is a SQL-like query language with graph pattern matching capabilities:
 - `aql/grammar.md` - Complete EBNF grammar specification
 - `aql/doc.go` - Examples and usage documentation
 - `adapters/sqlite/aql.go` - AQL→SQL compiler
-- `adapters/sqlite/aql_test.go` - 52 tests covering all phases
+- `adapters/sqlite/aql_test.go` - 54 tests covering all phases
 
 **Testing**: When modifying AQL, always run: `go test -v ./adapters/sqlite -run TestQuery`
+
+### Removed: GraphTraverser
+
+The `Traverse` method and `GraphTraverser` interface were removed in favor of AQL:
+- All traversal is now done via AQL pattern queries with recursive CTEs
+- Scoped queries use `EXISTS` with variable-length paths
+- This provides better performance and a consistent query interface
+
+**Migration from Traverse to AQL**:
+```go
+// Old: Traverse with options
+// results, _ := storage.Traverse(ctx, graph.TraverseOptions{
+//     Seed: graph.NodeFilter{NodeIDs: []string{rootID}},
+//     EdgeFilters: []graph.EdgeFilter{{Types: []string{"contains"}}},
+// })
+
+// New: AQL with EXISTS pattern
+cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(rootID)))
+containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
+pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("nodes")).Build()
+
+q := aql.SelectStar().From("nodes").Where(aql.Exists(pattern)).Build()
+result, _ := storage.Query(ctx, q)
+```
 
 ### CLI Commands
 

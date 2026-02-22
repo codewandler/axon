@@ -132,6 +132,27 @@ type PatternSource struct {
 func (p *PatternSource) Pos() Position { return p.Position }
 func (*PatternSource) source()         {}
 
+// JoinedTableSource represents FROM table, table_func(column) (implicit cross join).
+// This is used for table-valued functions like json_each.
+type JoinedTableSource struct {
+	Position  Position
+	Table     string     // Base table: "nodes" or "edges"
+	TableFunc *TableFunc // Table-valued function to join with
+}
+
+func (j *JoinedTableSource) Pos() Position { return j.Position }
+func (*JoinedTableSource) source()         {}
+
+// TableFunc represents a table-valued function call like json_each(labels).
+type TableFunc struct {
+	Position Position
+	Name     string    // Function name: "json_each"
+	Arg      *Selector // Argument: column or data.field
+	Alias    string    // Optional alias for the result
+}
+
+func (t *TableFunc) Pos() Position { return t.Position }
+
 // ----------------------------------------------------------------------------
 // Pattern
 // ----------------------------------------------------------------------------

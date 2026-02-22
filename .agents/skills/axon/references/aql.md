@@ -143,6 +143,56 @@ FROM (repo:vcs:repo)
 WHERE NOT EXISTS (repo)-[:has]->(:vcs:branch)
 ```
 
+## Table Functions
+
+Unpack JSON arrays into rows:
+
+```sql
+-- Count all labels
+SELECT value, COUNT(*) 
+FROM nodes, json_each(labels) 
+GROUP BY value 
+ORDER BY COUNT(*) DESC
+
+-- List unique labels (exclude empty)
+SELECT DISTINCT value 
+FROM nodes, json_each(labels) 
+WHERE value != ''
+```
+
+**Columns produced by json_each**:
+- `key` - array index (0, 1, 2, ...)
+- `value` - array element value
+
+## Scoped Queries
+
+Use EXISTS with variable-length paths for efficient directory-scoped counting:
+
+```sql
+-- Node types under a directory (0 or more hops includes root)
+SELECT type, COUNT(*) FROM nodes
+WHERE EXISTS (root WHERE id = 'node-id')-[:contains*0..]->(nodes)
+GROUP BY type
+
+-- Edge types from scoped nodes
+SELECT type, COUNT(*) FROM edges
+WHERE EXISTS (root WHERE id = 'node-id')-[:contains*0..]->(edges)
+GROUP BY type
+
+-- Extensions in scope
+SELECT data.ext, COUNT(*) FROM nodes
+WHERE data.ext IS NOT NULL
+  AND EXISTS (root WHERE id = 'node-id')-[:contains*0..]->(nodes)
+GROUP BY data.ext
+
+-- Labels in scope (combine json_each with EXISTS)
+SELECT value, COUNT(*) 
+FROM nodes, json_each(labels)
+WHERE value != ''
+  AND EXISTS (root WHERE id = 'node-id')-[:contains*0..]->(nodes)
+GROUP BY value
+```
+
 ## Edge Variables
 
 Examine edge properties:

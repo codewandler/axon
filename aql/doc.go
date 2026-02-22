@@ -278,4 +278,56 @@
 //	pattern := aql.Pat(aql.N("root")).
 //	    To(aql.EdgeTypes("has", "contains").WithHops(1, 5), aql.N("node")).Build()
 //	q := aql.Select(aql.Col("node")).FromPattern(pattern).Build()
+//
+// # Table Functions
+//
+// json_each unpacks JSON arrays into rows with 'key' (index) and 'value' columns:
+//
+//	SELECT value, COUNT(*) FROM nodes, json_each(labels)
+//	GROUP BY value
+//
+// Using the builder with FromJoined:
+//
+//	q := aql.Select(aql.Col("value"), aql.Count()).
+//	    FromJoined("nodes", "json_each", "labels").
+//	    Where(aql.Ne("value", aql.String(""))).
+//	    GroupByCol("value").
+//	    Build()
+//
+// # Scoped Queries with EXISTS
+//
+// Combine EXISTS with variable-length paths for efficient scoped counting.
+// The pattern uses *0.. to include the root node itself (0 or more hops):
+//
+//	// Build scope pattern: (cwd WHERE id = rootID)-[:contains*0..]->(nodes)
+//	cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(rootID)))
+//	containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
+//	pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("nodes")).Build()
+//
+//	// Count node types in scope
+//	q := aql.Select(aql.Col("type"), aql.Count()).
+//	    From("nodes").
+//	    Where(aql.Exists(pattern)).
+//	    GroupByCol("type").
+//	    Build()
+//
+// For the edges table, EXISTS correlates on from_id (the edge's source node):
+//
+//	// Count edge types from scoped nodes
+//	q := aql.Select(aql.Col("type"), aql.Count()).
+//	    From("edges").
+//	    Where(aql.Exists(pattern)).
+//	    GroupByCol("type").
+//	    Build()
+//
+// Combine json_each with EXISTS for scoped label counting:
+//
+//	q := aql.Select(aql.Col("value"), aql.Count()).
+//	    FromJoined("nodes", "json_each", "labels").
+//	    Where(aql.And(
+//	        aql.Ne("value", aql.String("")),
+//	        aql.Exists(pattern),
+//	    )).
+//	    GroupByCol("value").
+//	    Build()
 package aql

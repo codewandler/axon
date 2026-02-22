@@ -35,22 +35,6 @@ type QueryOptions struct {
 	Limit   int    // 0 for no limit
 }
 
-// TraverseOptions controls graph traversal.
-type TraverseOptions struct {
-	Seed        NodeFilter   // finds starting nodes
-	MaxDepth    int          // 0 = unlimited
-	NodeFilter  NodeFilter   // filter which nodes to include in results
-	EdgeFilters []EdgeFilter // edges to follow (multiple allows different directions per edge type)
-}
-
-// TraverseResult represents a visited node during traversal.
-type TraverseResult struct {
-	Node  *Node // the visited node
-	Depth int   // distance from seed node (0 for seed nodes)
-	Via   *Edge // edge that led here (nil for seed nodes)
-	Err   error // if set, signals error and end of traversal
-}
-
 // IndexRunRecord represents a single indexing run for tracking history.
 type IndexRunRecord struct {
 	ID           int64
@@ -105,11 +89,6 @@ type EdgeWriter interface {
 type EdgeStore interface {
 	EdgeReader
 	EdgeWriter
-}
-
-// GraphTraverser provides graph traversal capabilities.
-type GraphTraverser interface {
-	Traverse(ctx context.Context, opts TraverseOptions) (<-chan TraverseResult, error)
 }
 
 // NodeQuerier provides node query capabilities.
@@ -180,6 +159,28 @@ type QueryResult struct {
 	Counts map[string]int // For GROUP BY queries (key → count)
 }
 
+// Count returns the scalar count value for SELECT COUNT(*) queries.
+// For scalar COUNT queries (no GROUP BY), looks for the "_count" key.
+// For GROUP BY queries, returns the sum of all counts.
+// Returns 0 if not a count query or if result is empty.
+func (qr *QueryResult) Count() int {
+	if qr.Type != ResultTypeCounts {
+		return 0
+	}
+
+	// Check for scalar count (special "_count" key)
+	if count, ok := qr.Counts["_count"]; ok {
+		return count
+	}
+
+	// Fallback: sum all counts (for GROUP BY queries)
+	total := 0
+	for _, c := range qr.Counts {
+		total += c
+	}
+	return total
+}
+
 // QueryPlan holds the execution plan for an AQL query.
 // Used for debugging and performance analysis.
 type QueryPlan struct {
@@ -198,7 +199,6 @@ type QueryPlan struct {
 type Storage interface {
 	NodeStore
 	EdgeStore
-	GraphTraverser
 	NodeQuerier
 	EdgeQuerier
 	StalenessManager

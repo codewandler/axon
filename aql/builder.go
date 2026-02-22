@@ -60,6 +60,19 @@ func (b *Builder) FromPattern(patterns ...*Pattern) *Builder {
 	return b
 }
 
+// FromJoined sets the FROM clause to a table with a table-valued function join.
+// Example: FromJoined("nodes", "json_each", "labels") produces FROM nodes, json_each(labels)
+func (b *Builder) FromJoined(table, funcName, column string) *Builder {
+	b.stmt.From = &JoinedTableSource{
+		Table: table,
+		TableFunc: &TableFunc{
+			Name: funcName,
+			Arg:  parseFieldSelector(column),
+		},
+	}
+	return b
+}
+
 // Where sets the WHERE clause.
 func (b *Builder) Where(expr Expression) *Builder {
 	b.stmt.Where = expr

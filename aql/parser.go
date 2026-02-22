@@ -174,13 +174,21 @@ func (g *columnGrammar) toAST() *Column {
 // ----------------------------------------------------------------------------
 
 type sourceGrammar struct {
-	Pos      lexer.Position
-	Table    string            `parser:"( @('nodes' | 'edges')"`
-	Patterns []*patternGrammar `parser:"| @@ (',' @@)* )"`
+	Pos       lexer.Position
+	Table     string            `parser:"( @('nodes' | 'edges')"`
+	TableFunc *tableFuncGrammar `parser:"  (',' @@)?"`
+	Patterns  []*patternGrammar `parser:"| @@ (',' @@)* )"`
 }
 
 func (g *sourceGrammar) toAST() Source {
 	if g.Table != "" {
+		if g.TableFunc != nil {
+			return &JoinedTableSource{
+				Position:  toPosition(g.Pos),
+				Table:     strings.ToLower(g.Table),
+				TableFunc: g.TableFunc.toAST(),
+			}
+		}
 		return &TableSource{
 			Position: toPosition(g.Pos),
 			Table:    strings.ToLower(g.Table),
@@ -191,6 +199,23 @@ func (g *sourceGrammar) toAST() Source {
 		ps.Patterns = append(ps.Patterns, p.toAST())
 	}
 	return ps
+}
+
+// tableFuncGrammar represents a table-valued function call like json_each(labels).
+type tableFuncGrammar struct {
+	Pos   lexer.Position
+	Name  string           `parser:"@Ident '('"`
+	Arg   *selectorGrammar `parser:"@@ ')'"`
+	Alias string           `parser:"('AS' @Ident)?"`
+}
+
+func (g *tableFuncGrammar) toAST() *TableFunc {
+	return &TableFunc{
+		Position: toPosition(g.Pos),
+		Name:     strings.ToLower(g.Name),
+		Arg:      g.Arg.toAST(),
+		Alias:    g.Alias,
+	}
 }
 
 // ----------------------------------------------------------------------------

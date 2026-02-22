@@ -33,7 +33,7 @@ axon tree --type fs:file       # Filter by type
 
 ## Query with AQL
 
-Execute AQL queries (see [./references/aql.md](./references/aql.md) for complete syntax):
+Execute AQL queries (see [./references/aql.md](./references/aql.md) for complete syntax, and [./references/aql_go_querybuilder.md](./references/aql_go_querybuilder.md) for Go builder API):
 
 ```bash
 axon query "SELECT * FROM nodes WHERE type = 'fs:file'"

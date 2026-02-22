@@ -3,7 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/codewandler/axon/aql"
+	"github.com/codewandler/axon/types"
 	"github.com/spf13/cobra"
 )
 
@@ -41,27 +45,81 @@ func runLabels(cmd *cobra.Command, args []string) error {
 	}
 	defer cmdCtx.Close()
 
-	// Get Axon instance for potential auto-indexing
-	ax, err := cmdCtx.Axon()
-	if err != nil {
-		return err
-	}
+	var counts map[string]int
 
-	// Resolve scope using graph traversal
-	traverseOpts, err := resolveScopeTraversal(cmdCtx.Ctx, cmdCtx.Storage, ax, labelsGlobal, cmdCtx.Cwd, 0)
-	if err != nil {
-		return err
-	}
+	if labelsGlobal {
+		// Global mode: Use AQL with json_each for fast label unpacking
+		// Query: SELECT value, COUNT(*) FROM nodes, json_each(labels) WHERE value != '' GROUP BY value ORDER BY COUNT(*) DESC
+		q := aql.Select(aql.Col("value"), aql.Count()).
+			FromJoined("nodes", "json_each", "labels").
+			Where(aql.Ne("value", aql.String(""))).
+			GroupByCol("value").
+			OrderByExpr(aql.Count(), true).
+			Build()
 
-	// Traverse and count labels
-	results, err := cmdCtx.Storage.Traverse(cmdCtx.Ctx, traverseOpts)
-	if err != nil {
-		return fmt.Errorf("failed to traverse graph: %w", err)
-	}
+		result, err := cmdCtx.Storage.Query(cmdCtx.Ctx, q)
+		if err != nil {
+			return fmt.Errorf("failed to execute query: %w", err)
+		}
+		counts = result.Counts
+	} else {
+		// Scoped mode: Use AQL with EXISTS pattern for efficient scoping
+		ax, err := cmdCtx.Axon()
+		if err != nil {
+			return err
+		}
 
-	counts, err := countTraversalLabels(results)
-	if err != nil {
-		return fmt.Errorf("failed to count labels: %w", err)
+		// Get the CWD node
+		absPath, err := filepath.Abs(cmdCtx.Cwd)
+		if err != nil {
+			return fmt.Errorf("failed to resolve path: %w", err)
+		}
+
+		uri := types.PathToURI(absPath)
+		cwdNode, err := cmdCtx.Storage.GetNodeByURI(cmdCtx.Ctx, uri)
+		if err != nil {
+			// Directory not indexed - prompt to index
+			fmt.Printf("Directory not indexed: %s\nIndex now? [Y/n] ", absPath)
+			var response string
+			fmt.Scanln(&response)
+			response = strings.TrimSpace(strings.ToLower(response))
+			if response != "" && response != "y" && response != "yes" {
+				return fmt.Errorf("directory not indexed: %s", absPath)
+			}
+
+			fmt.Printf("Indexing %s...\n", absPath)
+			if _, err := ax.Index(cmdCtx.Ctx, absPath); err != nil {
+				return fmt.Errorf("indexing failed: %w", err)
+			}
+			fmt.Println("Done.")
+
+			cwdNode, err = cmdCtx.Storage.GetNodeByURI(cmdCtx.Ctx, uri)
+			if err != nil {
+				return fmt.Errorf("failed to find directory after indexing: %w", err)
+			}
+		}
+
+		// Build pattern: (cwd WHERE id = 'cwdID')-[:contains*0..]->(nodes)
+		cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(cwdNode.ID)))
+		containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
+		pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("nodes")).Build()
+
+		// Query with EXISTS pattern
+		q := aql.Select(aql.Col("value"), aql.Count()).
+			FromJoined("nodes", "json_each", "labels").
+			Where(aql.And(
+				aql.Ne("value", aql.String("")),
+				aql.Exists(pattern),
+			)).
+			GroupByCol("value").
+			OrderByExpr(aql.Count(), true).
+			Build()
+
+		result, err := cmdCtx.Storage.Query(cmdCtx.Ctx, q)
+		if err != nil {
+			return fmt.Errorf("failed to execute query: %w", err)
+		}
+		counts = result.Counts
 	}
 
 	// Build result

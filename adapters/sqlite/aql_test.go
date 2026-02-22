@@ -1500,29 +1500,303 @@ func TestPattern_VariableLengthMultiType(t *testing.T) {
 }
 
 // Test EXISTS not supported (Phase 3)
-func TestQuery_ExistsNotSupported(t *testing.T) {
+func TestQuery_Exists(t *testing.T) {
 	s, ctx := setupAQLTest(t)
 
-	pattern := aql.Pat(aql.N("dir")).
+	// Create test data: dir1 with files, dir2 without files
+	dir1 := &graph.Node{ID: "dir1", Type: "fs:dir", Name: "with_files"}
+	dir2 := &graph.Node{ID: "dir2", Type: "fs:dir", Name: "empty"}
+	file1 := &graph.Node{ID: "file1", Type: "fs:file", Name: "test.go"}
+
+	if err := s.PutNode(ctx, dir1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutNode(ctx, dir2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutNode(ctx, file1); err != nil {
+		t.Fatal(err)
+	}
+
+	edge := &graph.Edge{ID: "e1", Type: "contains", From: dir1.ID, To: file1.ID}
+	if err := s.PutEdge(ctx, edge); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test EXISTS: find dir1 which contains files
+	pattern := aql.Pat(aql.N("nodes")).
 		To(aql.AnyEdgeOfType("contains"), aql.AnyNodeOfType("fs:file")).
 		Build()
 
 	q := aql.SelectStar().
 		From("nodes").
-		Where(aql.Exists(pattern)).
+		Where(aql.And(
+			aql.Eq("id", aql.String("dir1")),
+			aql.Exists(pattern),
+		)).
 		Build()
 
-	_, err := s.Query(ctx, q)
-	if err == nil {
-		t.Error("expected error for EXISTS (Phase 3)")
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
 	}
 
-	qe, ok := err.(*QueryError)
-	if !ok {
-		t.Errorf("expected QueryError, got %T", err)
+	if len(result.Nodes) != 1 {
+		t.Errorf("expected 1 node (dir1 with files), got %d", len(result.Nodes))
+	}
+	if len(result.Nodes) > 0 && result.Nodes[0].ID != "dir1" {
+		t.Errorf("expected dir1, got %s", result.Nodes[0].ID)
 	}
 
-	if qe.Phase != "compile" {
-		t.Errorf("expected compile phase, got %s", qe.Phase)
+	// Test NOT EXISTS: dir2 should match (no files)
+	qNot := aql.SelectStar().
+		From("nodes").
+		Where(aql.And(
+			aql.Eq("id", aql.String("dir2")),
+			aql.Not(aql.Exists(pattern)),
+		)).
+		Build()
+
+	resultNot, err := s.Query(ctx, qNot)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if len(resultNot.Nodes) != 1 {
+		t.Errorf("expected 1 node (dir2 without files), got %d", len(resultNot.Nodes))
+	}
+	if len(resultNot.Nodes) > 0 && resultNot.Nodes[0].ID != "dir2" {
+		t.Errorf("expected dir2, got %s", resultNot.Nodes[0].ID)
+	}
+
+	// Test that dir1 does NOT match NOT EXISTS
+	qNot2 := aql.SelectStar().
+		From("nodes").
+		Where(aql.And(
+			aql.Eq("id", aql.String("dir1")),
+			aql.Not(aql.Exists(pattern)),
+		)).
+		Build()
+
+	resultNot2, err := s.Query(ctx, qNot2)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if len(resultNot2.Nodes) != 0 {
+		t.Errorf("expected 0 nodes (dir1 has files), got %d", len(resultNot2.Nodes))
+	}
+}
+
+// Test json_each for label unpacking
+func TestQuery_JsonEach_Labels(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Query: SELECT value, COUNT(*) FROM nodes, json_each(labels) GROUP BY value ORDER BY COUNT(*) DESC
+	q := aql.Select(aql.Col("value"), aql.Count()).
+		FromJoined("nodes", "json_each", "labels").
+		GroupByCol("value").
+		OrderByExpr(aql.Count(), true).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeCounts {
+		t.Errorf("expected ResultTypeCounts, got %v", result.Type)
+	}
+
+	// From test data:
+	// - test1.go has labels: test, code
+	// - test2.py has labels: test
+	// - src dir has labels: source
+	// So: test=2, code=1, source=1
+	if result.Counts["test"] != 2 {
+		t.Errorf("expected 'test' label count 2, got %d", result.Counts["test"])
+	}
+	if result.Counts["code"] != 1 {
+		t.Errorf("expected 'code' label count 1, got %d", result.Counts["code"])
+	}
+	if result.Counts["source"] != 1 {
+		t.Errorf("expected 'source' label count 1, got %d", result.Counts["source"])
+	}
+}
+
+// Test json_each with WHERE filter
+func TestQuery_JsonEach_WithWhere(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Query: SELECT value, COUNT(*) FROM nodes, json_each(labels) WHERE value != '' GROUP BY value
+	q := aql.Select(aql.Col("value"), aql.Count()).
+		FromJoined("nodes", "json_each", "labels").
+		Where(aql.Ne("value", aql.String(""))).
+		GroupByCol("value").
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	// Should have 3 distinct labels: test, code, source
+	if len(result.Counts) != 3 {
+		t.Errorf("expected 3 distinct labels, got %d", len(result.Counts))
+	}
+}
+
+// Test json_each with data field (nested JSON)
+func TestQuery_JsonEach_DataField(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// First add a node with array data
+	node := graph.NewNode("fs:file").WithURI("file:///tags.go").WithName("tags.go").
+		WithData(map[string]any{"tags": []string{"important", "review", "important"}})
+	if err := s.PutNode(ctx, node); err != nil {
+		t.Fatalf("failed to insert test node: %v", err)
+	}
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("failed to flush: %v", err)
+	}
+
+	// Query: SELECT value, COUNT(*) FROM nodes, json_each(data.tags) GROUP BY value
+	q := aql.Select(aql.Col("value"), aql.Count()).
+		FromJoined("nodes", "json_each", "data.tags").
+		GroupByCol("value").
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	// tags.go has: important (2), review (1)
+	if result.Counts["important"] != 2 {
+		t.Errorf("expected 'important' tag count 2, got %d", result.Counts["important"])
+	}
+	if result.Counts["review"] != 1 {
+		t.Errorf("expected 'review' tag count 1, got %d", result.Counts["review"])
+	}
+}
+
+// Test parsing json_each from string
+func TestQuery_JsonEach_Parse(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Parse and execute: SELECT value, COUNT(*) FROM nodes, json_each(labels) GROUP BY value ORDER BY COUNT(*) DESC
+	query := "SELECT value, COUNT(*) FROM nodes, json_each(labels) GROUP BY value ORDER BY COUNT(*) DESC"
+	q, err := aql.Parse(query)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeCounts {
+		t.Errorf("expected ResultTypeCounts, got %v", result.Type)
+	}
+
+	// Should have labels
+	if len(result.Counts) == 0 {
+		t.Errorf("expected some labels, got empty result")
+	}
+}
+
+// Test json_each with EXISTS pattern for scoping (CTE+JOIN optimization)
+func TestQuery_JsonEach_WithExists(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Get the src directory node ID
+	srcNode, err := s.GetNodeByURI(ctx, "file:///src")
+	if err != nil {
+		t.Fatalf("failed to get src node: %v", err)
+	}
+
+	// Build pattern: (root WHERE id = srcID)-[:contains*0..]->(nodes)
+	rootPattern := aql.N("root").WithWhere(aql.Eq("id", aql.String(srcNode.ID)))
+	containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
+	pattern := aql.Pat(rootPattern).To(containsEdge, aql.N("nodes")).Build()
+
+	// Query: SELECT value, COUNT(*) FROM nodes, json_each(labels)
+	//        WHERE value != '' AND EXISTS pattern
+	//        GROUP BY value
+	q := aql.Select(aql.Col("value"), aql.Count()).
+		FromJoined("nodes", "json_each", "labels").
+		Where(aql.And(
+			aql.Ne("value", aql.String("")),
+			aql.Exists(pattern),
+		)).
+		GroupByCol("value").
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeCounts {
+		t.Errorf("expected ResultTypeCounts, got %v", result.Type)
+	}
+
+	// src contains test1.go (labels: test, code) and test2.py (labels: test)
+	// src itself has label: source
+	// So scoped labels should be: test=2, code=1, source=1
+	if result.Counts["test"] != 2 {
+		t.Errorf("expected 'test' label count 2, got %d", result.Counts["test"])
+	}
+	if result.Counts["code"] != 1 {
+		t.Errorf("expected 'code' label count 1, got %d", result.Counts["code"])
+	}
+	if result.Counts["source"] != 1 {
+		t.Errorf("expected 'source' label count 1, got %d", result.Counts["source"])
+	}
+}
+
+// Test EXISTS on edges table - scoped edge type counting
+func TestQuery_Edges_WithExists(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Get the src directory node ID
+	srcNode, err := s.GetNodeByURI(ctx, "file:///src")
+	if err != nil {
+		t.Fatalf("failed to get src node: %v", err)
+	}
+
+	// Build pattern: (root WHERE id = srcID)-[:contains*0..]->(edges)
+	// This should match edges where from_id is in the descendant set
+	rootPattern := aql.N("root").WithWhere(aql.Eq("id", aql.String(srcNode.ID)))
+	containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
+	pattern := aql.Pat(rootPattern).To(containsEdge, aql.N("edges")).Build()
+
+	// Query: SELECT type, COUNT(*) FROM edges WHERE EXISTS pattern GROUP BY type
+	q := aql.Select(aql.Col("type"), aql.Count()).
+		From("edges").
+		Where(aql.Exists(pattern)).
+		GroupByCol("type").
+		OrderByExpr(aql.Count(), true).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeCounts {
+		t.Errorf("expected ResultTypeCounts, got %v", result.Type)
+	}
+
+	// From src descendants:
+	// - src has 2 contains edges (to test1.go and test2.py)
+	// - test1.go has 1 references edge (to main.go)
+	// Total: contains=2, references=1
+	if result.Counts["contains"] != 2 {
+		t.Errorf("expected 'contains' edge count 2, got %d", result.Counts["contains"])
+	}
+	if result.Counts["references"] != 1 {
+		t.Errorf("expected 'references' edge count 1, got %d", result.Counts["references"])
 	}
 }

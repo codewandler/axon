@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/codewandler/axon/aql"
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/render"
 	"github.com/codewandler/axon/types"
@@ -29,6 +30,7 @@ var (
 	findShowParent bool
 	findCompact    bool
 	findGlobal     bool
+	findShowQuery  bool
 )
 
 var findCmd = &cobra.Command{
@@ -65,7 +67,10 @@ Examples:
   axon find --label test:file --ext go
 
   # Find all Go and Python files
-  axon find --ext go --ext py`,
+  axon find --ext go --ext py
+
+  # Show the generated AQL query
+  axon find --type fs:file --ext go --show-query`,
 	RunE: runFind,
 }
 
@@ -82,6 +87,7 @@ func init() {
 	findCmd.Flags().BoolVar(&findShowParent, "show-parent", false, "Show parent chain to CWD or root")
 	findCmd.Flags().BoolVar(&findCompact, "compact", false, "Hide parent chain details (with --show-parent)")
 	findCmd.Flags().BoolVarP(&findGlobal, "global", "g", false, "Search entire graph, not just CWD subtree")
+	findCmd.Flags().BoolVar(&findShowQuery, "show-query", false, "Print the generated AQL query")
 }
 
 func runFind(cmd *cobra.Command, args []string) error {
@@ -101,88 +107,173 @@ func runFind(cmd *cobra.Command, args []string) error {
 	ctx := cmdCtx.Ctx
 	cwd := cmdCtx.Cwd
 
-	// Build filter
-	filter := graph.NodeFilter{}
+	// Build AQL query
+	// Use COUNT(*) when --count is specified for optimal performance
+	var q *aql.Builder
+	if findCount {
+		q = aql.Select(aql.Count()).From("nodes")
+	} else {
+		q = aql.SelectStar().From("nodes")
+	}
 
-	// Note: We don't use URIPrefix for scoping because different node types
-	// have different URI schemes (file://, file+md://, git+file://). Instead,
-	// we post-filter by path below.
+	// Build WHERE conditions
+	var conditions []aql.Expression
 
-	// Type pattern - if multiple, we'll need to do multiple queries
-	// For now, support single type pattern in filter
-	typePatterns := findType
-	if len(typePatterns) == 1 {
-		if strings.Contains(typePatterns[0], "*") || strings.Contains(typePatterns[0], "?") {
-			filter.TypePattern = typePatterns[0]
-		} else {
-			filter.Type = typePatterns[0]
+	// Add scoping condition using EXISTS
+	if !findGlobal {
+		// Scoped to CWD: query descendants of current directory
+		// EXISTS (:fs:dir WHERE id = '<cwd-id>')-[:contains*..]->(nodes)
+
+		// First, get the CWD node
+		absPath, err := filepath.Abs(cwd)
+		if err != nil {
+			return fmt.Errorf("failed to resolve path: %w", err)
 		}
-		typePatterns = nil // Handled by filter
+
+		uri := types.PathToURI(absPath)
+		cwdNode, err := g.Storage().GetNodeByURI(ctx, uri)
+		if err != nil {
+			// Directory not indexed - prompt to index
+			fmt.Printf("Directory not indexed: %s\nIndex now? [Y/n] ", absPath)
+			var response string
+			fmt.Scanln(&response)
+			response = strings.TrimSpace(strings.ToLower(response))
+			if response != "" && response != "y" && response != "yes" {
+				return fmt.Errorf("directory not indexed: %s", absPath)
+			}
+
+			fmt.Printf("Indexing %s...\n", absPath)
+			if _, err := ax.Index(ctx, absPath); err != nil {
+				return fmt.Errorf("indexing failed: %w", err)
+			}
+			fmt.Println("Done.")
+
+			// Try again after indexing
+			cwdNode, err = g.Storage().GetNodeByURI(ctx, uri)
+			if err != nil {
+				return fmt.Errorf("failed to find directory after indexing: %w", err)
+			}
+		}
+
+		// Build pattern: (cwd WHERE id = 'cwdID')-[:contains*..]->(nodes)
+		// Variable-length edges require source node to have a variable
+		cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(cwdNode.ID)))
+		containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0) // 0.. means include CWD itself + descendants
+		pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("nodes")).Build()
+		conditions = append(conditions, aql.Exists(pattern))
+	}
+
+	// Type matching - handle multiple types with OR logic
+	if len(findType) > 0 {
+		var typeConditions []aql.Expression
+		for _, t := range findType {
+			if strings.Contains(t, "*") || strings.Contains(t, "?") {
+				// Use GLOB for pattern matching (indexed)
+				typeConditions = append(typeConditions, aql.Glob("type", aql.String(t)))
+			} else {
+				// Exact match
+				typeConditions = append(typeConditions, aql.Eq("type", aql.String(t)))
+			}
+		}
+		if len(typeConditions) == 1 {
+			conditions = append(conditions, typeConditions[0])
+		} else {
+			conditions = append(conditions, aql.Or(typeConditions...))
+		}
 	}
 
 	// Name matching
 	if findName != "" {
-		filter.Name = findName
+		// Exact match
+		conditions = append(conditions, aql.Eq("name", aql.String(findName)))
 	} else if findQuery != "" {
-		filter.NamePattern = findQuery
+		// Pattern match with GLOB (indexed)
+		conditions = append(conditions, aql.Glob("name", aql.String(findQuery)))
 	}
 
 	// Label filtering (OR logic - node has at least one of the labels)
 	if len(findLabels) > 0 {
-		filter.Labels = findLabels
+		var labelConditions []aql.Expression
+		for _, label := range findLabels {
+			labelConditions = append(labelConditions, aql.ContainsAny("labels", aql.String(label)))
+		}
+		if len(labelConditions) == 1 {
+			conditions = append(conditions, labelConditions[0])
+		} else {
+			conditions = append(conditions, aql.Or(labelConditions...))
+		}
 	}
 
 	// Extension filtering (OR logic - node has one of the extensions)
 	if len(findExt) > 0 {
-		filter.Extensions = findExt
-	}
-
-	// Find nodes
-	var allNodes []*graph.Node
-
-	if len(typePatterns) > 1 {
-		// Multiple type patterns - run separate queries
-		for _, tp := range typePatterns {
-			f := filter
-			if strings.Contains(tp, "*") || strings.Contains(tp, "?") {
-				f.TypePattern = tp
-			} else {
-				f.Type = tp
+		var extConditions []aql.Expression
+		for _, ext := range findExt {
+			// Extensions are stored in data.ext field with leading dot
+			if !strings.HasPrefix(ext, ".") {
+				ext = "." + ext
 			}
-			nodes, err := g.FindNodes(ctx, f, graph.QueryOptions{})
-			if err != nil {
-				return fmt.Errorf("failed to find nodes: %w", err)
-			}
-			allNodes = append(allNodes, nodes...)
+			extConditions = append(extConditions, aql.Eq("data.ext", aql.String(ext)))
 		}
-	} else {
-		nodes, err := g.FindNodes(ctx, filter, graph.QueryOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to find nodes: %w", err)
+		if len(extConditions) == 1 {
+			conditions = append(conditions, extConditions[0])
+		} else {
+			conditions = append(conditions, aql.Or(extConditions...))
 		}
-		allNodes = nodes
 	}
 
-	// Filter by path scope (post-filter since URI schemes differ)
-	if !findGlobal {
-		allNodes = filterByPathPrefix(allNodes, cwd)
+	// Data field filters (AND logic - all must match)
+	for _, df := range findData {
+		parts := strings.SplitN(df, "=", 2)
+		if len(parts) == 2 {
+			key, value := parts[0], parts[1]
+			conditions = append(conditions, aql.Eq("data."+key, aql.String(value)))
+		}
 	}
 
-	// Filter by data fields (post-filter since storage doesn't support this)
-	if len(findData) > 0 {
-		allNodes = filterByData(allNodes, findData)
+	// Combine all conditions with AND
+	if len(conditions) > 0 {
+		q = q.Where(aql.And(conditions...))
 	}
 
-	// Apply limit
-	if findLimit > 0 && len(allNodes) > findLimit {
-		allNodes = allNodes[:findLimit]
+	// Add limit if specified (but not with --count, as COUNT ignores LIMIT)
+	if findLimit > 0 {
+		if findCount {
+			fmt.Fprintf(os.Stderr, "Warning: --limit is ignored when using --count\n")
+		} else {
+			q = q.Limit(findLimit)
+		}
 	}
 
-	// Output
+	// Build query
+	query := q.Build()
+
+	// Show query if requested
+	if findShowQuery {
+		fmt.Println("Generated AQL Query:")
+		fmt.Println(query.String())
+		fmt.Println()
+	}
+
+	// Execute query
+	result, err := g.Storage().Query(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to execute query: %w", err)
+	}
+
+	// Handle COUNT queries
 	if findCount {
-		fmt.Printf("%d\n", len(allNodes))
+		count := result.Count()
+		fmt.Printf("%d\n", count)
 		return nil
 	}
+
+	allNodes := result.Nodes
+
+	// Note: Scoping is now handled via EXISTS in the AQL query
+	// Note: Data field filters are now handled in the AQL query above
+	// Note: Limit is now handled in the AQL query above
+
+	// Output
 
 	if len(allNodes) == 0 {
 		return nil
@@ -202,112 +293,6 @@ func runFind(cmd *cobra.Command, args []string) error {
 		return outputTable(allNodes)
 	default:
 		return fmt.Errorf("unknown output format: %s", findOutput)
-	}
-}
-
-func filterByPathPrefix(nodes []*graph.Node, pathPrefix string) []*graph.Node {
-	var result []*graph.Node
-	for _, node := range nodes {
-		nodePath := extractPathFromURI(node.URI)
-		if nodePath != "" && strings.HasPrefix(nodePath, pathPrefix) {
-			result = append(result, node)
-		}
-	}
-	return result
-}
-
-// extractPathFromURI extracts the filesystem path from various URI schemes.
-// Handles file://, file+md://, git+file://, etc.
-func extractPathFromURI(uri string) string {
-	// Handle file:// scheme
-	if strings.HasPrefix(uri, "file://") {
-		return strings.TrimPrefix(uri, "file://")
-	}
-
-	// Handle file+md:// scheme (markdown nodes)
-	if strings.HasPrefix(uri, "file+md://") {
-		path := strings.TrimPrefix(uri, "file+md://")
-		// Remove fragment (section anchor)
-		if idx := strings.Index(path, "#"); idx != -1 {
-			path = path[:idx]
-		}
-		return path
-	}
-
-	// Handle git+file:// scheme
-	if strings.HasPrefix(uri, "git+file://") {
-		path := strings.TrimPrefix(uri, "git+file://")
-		// Remove fragment or query
-		if idx := strings.Index(path, "#"); idx != -1 {
-			path = path[:idx]
-		}
-		if idx := strings.Index(path, "?"); idx != -1 {
-			path = path[:idx]
-		}
-		return path
-	}
-
-	return ""
-}
-
-func filterByData(nodes []*graph.Node, dataFilters []string) []*graph.Node {
-	var result []*graph.Node
-	for _, node := range nodes {
-		if matchesDataFilters(node, dataFilters) {
-			result = append(result, node)
-		}
-	}
-	return result
-}
-
-func matchesDataFilters(node *graph.Node, dataFilters []string) bool {
-	if node.Data == nil {
-		return false
-	}
-
-	dataMap, ok := toStringMap(node.Data)
-	if !ok {
-		return false
-	}
-
-	for _, df := range dataFilters {
-		parts := strings.SplitN(df, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key, value := parts[0], parts[1]
-		if dataMap[key] != value {
-			return false
-		}
-	}
-	return true
-}
-
-func toStringMap(data any) (map[string]string, bool) {
-	result := make(map[string]string)
-
-	switch d := data.(type) {
-	case map[string]any:
-		for k, v := range d {
-			result[k] = fmt.Sprintf("%v", v)
-		}
-		return result, true
-	case map[string]string:
-		return d, true
-	default:
-		// Try JSON marshal/unmarshal for struct types
-		b, err := json.Marshal(data)
-		if err != nil {
-			return nil, false
-		}
-		var m map[string]any
-		if err := json.Unmarshal(b, &m); err != nil {
-			return nil, false
-		}
-		for k, v := range m {
-			result[k] = fmt.Sprintf("%v", v)
-		}
-		return result, true
 	}
 }
 

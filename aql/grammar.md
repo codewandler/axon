@@ -103,8 +103,23 @@ CountCall  = "COUNT" "(" "*" ")" ;
 ### Source
 
 ```ebnf
-Source      = "nodes" | "edges" | PatternList ;
+Source      = TableSource | JoinedSource | PatternList ;
+TableSource = "nodes" | "edges" ;
+JoinedSource = TableSource "," TableFunc ;
+TableFunc   = Identifier "(" Selector ")" [ "AS" Identifier ] ;
 PatternList = Pattern { "," Pattern } ;
+```
+
+**Table functions** allow unpacking JSON arrays:
+- `json_each(column)` - unpacks JSON array into rows with `key` and `value` columns
+
+Example:
+```sql
+-- Count all labels across nodes
+SELECT value, COUNT(*) FROM nodes, json_each(labels) GROUP BY value
+
+-- Unpack nested JSON array
+SELECT value FROM nodes, json_each(data.tags) WHERE value LIKE 'important%'
 ```
 
 ### Pattern
@@ -261,6 +276,12 @@ WHERE (type = 'fs:file' OR type = 'fs:dir')
 
 -- Edge statistics
 SELECT type, COUNT(*) FROM edges GROUP BY type
+
+-- Label statistics using json_each
+SELECT value, COUNT(*) FROM nodes, json_each(labels) 
+WHERE value != '' 
+GROUP BY value 
+ORDER BY COUNT(*) DESC
 
 -- With parameters
 SELECT * FROM nodes WHERE type = $type AND name LIKE $1

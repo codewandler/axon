@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/codewandler/axon/aql"
+	"github.com/codewandler/axon/types"
 	"github.com/spf13/cobra"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -87,48 +90,165 @@ func runStats(cmd *cobra.Command, args []string) error {
 		data.FileSizeHuman = formatFileSize(data.FileSizeBytes)
 	}
 
-	// Resolve scope using graph traversal
-	traverseOpts, err := resolveScopeTraversal(cmdCtx.Ctx, cmdCtx.Storage, ax, statsGlobal, cmdCtx.Cwd, 0)
-	if err != nil {
-		return err
-	}
+	g := ax.Graph()
+	ctx := cmdCtx.Ctx
+	cwd := cmdCtx.Cwd
 
-	// Traverse and collect stats
-	results, err := cmdCtx.Storage.Traverse(cmdCtx.Ctx, traverseOpts)
-	if err != nil {
-		return fmt.Errorf("failed to traverse graph: %w", err)
-	}
+	var nodeTypes map[string]int
+	var edgeTypes map[string]int
+	var extensions map[string]int
+	var labels map[string]int
 
-	// Collect stats from traversal
-	nodeTypes := make(map[string]int)
-	extensions := make(map[string]int)
-	labels := make(map[string]int)
-	edgesSeen := make(map[string]bool)
-	edgeTypes := make(map[string]int)
-
-	for r := range results {
-		if r.Err != nil {
-			return fmt.Errorf("traversal error: %w", r.Err)
+	if statsGlobal {
+		// Global: Use AQL queries for efficiency
+		// Node count and types
+		nodeQ := aql.Select(aql.Col("type"), aql.Count()).
+			From("nodes").
+			GroupByCol("type").
+			Build()
+		nodeResult, err := g.Storage().Query(ctx, nodeQ)
+		if err != nil {
+			return fmt.Errorf("failed to query node types: %w", err)
 		}
-		data.Nodes++
-		nodeTypes[r.Node.Type]++
-
-		// Count extension from name
-		if ext := filepath.Ext(r.Node.Name); ext != "" {
-			extensions[ext]++
+		nodeTypes = nodeResult.Counts
+		for _, c := range nodeTypes {
+			data.Nodes += c
 		}
 
-		// Count labels
-		for _, label := range r.Node.Labels {
-			labels[label]++
+		// Edge count and types
+		edgeQ := aql.Select(aql.Col("type"), aql.Count()).
+			From("edges").
+			GroupByCol("type").
+			Build()
+		edgeResult, err := g.Storage().Query(ctx, edgeQ)
+		if err != nil {
+			return fmt.Errorf("failed to query edge types: %w", err)
+		}
+		edgeTypes = edgeResult.Counts
+		for _, c := range edgeTypes {
+			data.Edges += c
 		}
 
-		// Count edge (if we haven't seen it)
-		if r.Via != nil && !edgesSeen[r.Via.ID] {
-			edgesSeen[r.Via.ID] = true
-			data.Edges++
-			edgeTypes[r.Via.Type]++
+		// Extensions and labels for verbose mode using AQL
+		if statsVerbose || statsOutput == "json" {
+			// Labels using json_each
+			labelsQ := aql.Select(aql.Col("value"), aql.Count()).
+				FromJoined("nodes", "json_each", "labels").
+				Where(aql.Ne("value", aql.String(""))).
+				GroupByCol("value").
+				Build()
+			labelsResult, err := g.Storage().Query(ctx, labelsQ)
+			if err != nil {
+				return fmt.Errorf("failed to query labels: %w", err)
+			}
+			labels = labelsResult.Counts
+
+			// Extensions from data.ext field (use Col("data", "ext") for JSON path)
+			extQ := aql.Select(aql.Col("data", "ext"), aql.Count()).
+				From("nodes").
+				Where(aql.IsNotNull("data.ext")).
+				GroupByCol("data.ext").
+				Build()
+			extResult, err := g.Storage().Query(ctx, extQ)
+			if err != nil {
+				return fmt.Errorf("failed to query extensions: %w", err)
+			}
+			extensions = extResult.Counts
 		}
+	} else {
+		// Scoped: Use AQL with EXISTS pattern for node types
+		absPath, err := filepath.Abs(cwd)
+		if err != nil {
+			return fmt.Errorf("failed to resolve path: %w", err)
+		}
+
+		uri := types.PathToURI(absPath)
+		cwdNode, err := g.Storage().GetNodeByURI(ctx, uri)
+		if err != nil {
+			// Directory not indexed - prompt to index
+			fmt.Printf("Directory not indexed: %s\nIndex now? [Y/n] ", absPath)
+			var response string
+			fmt.Scanln(&response)
+			response = strings.TrimSpace(strings.ToLower(response))
+			if response != "" && response != "y" && response != "yes" {
+				return fmt.Errorf("directory not indexed: %s", absPath)
+			}
+
+			fmt.Printf("Indexing %s...\n", absPath)
+			if _, err := ax.Index(ctx, absPath); err != nil {
+				return fmt.Errorf("indexing failed: %w", err)
+			}
+			fmt.Println("Done.")
+
+			cwdNode, err = g.Storage().GetNodeByURI(ctx, uri)
+			if err != nil {
+				return fmt.Errorf("failed to find directory after indexing: %w", err)
+			}
+		}
+
+		// Node types with EXISTS scoping
+		cwdPattern := aql.N("cwd").WithWhere(aql.Eq("id", aql.String(cwdNode.ID)))
+		containsEdge := aql.AnyEdgeOfType("contains").WithMinHops(0)
+		pattern := aql.Pat(cwdPattern).To(containsEdge, aql.N("nodes")).Build()
+
+		nodeQ := aql.Select(aql.Col("type"), aql.Count()).
+			From("nodes").
+			Where(aql.Exists(pattern)).
+			GroupByCol("type").
+			Build()
+		nodeResult, err := g.Storage().Query(ctx, nodeQ)
+		if err != nil {
+			return fmt.Errorf("failed to query node types: %w", err)
+		}
+		nodeTypes = nodeResult.Counts
+		for _, c := range nodeTypes {
+			data.Nodes += c
+		}
+
+		// Edge types using AQL with EXISTS pattern
+		edgeQ := aql.Select(aql.Col("type"), aql.Count()).
+			From("edges").
+			Where(aql.Exists(pattern)).
+			GroupByCol("type").
+			Build()
+		edgeResult, err := g.Storage().Query(ctx, edgeQ)
+		if err != nil {
+			return fmt.Errorf("failed to query edge types: %w", err)
+		}
+		edgeTypes = edgeResult.Counts
+		for _, c := range edgeTypes {
+			data.Edges += c
+		}
+
+		// Extensions using AQL with EXISTS pattern
+		extQ := aql.Select(aql.Col("data", "ext"), aql.Count()).
+			From("nodes").
+			Where(aql.And(
+				aql.IsNotNull("data.ext"),
+				aql.Exists(pattern),
+			)).
+			GroupByCol("data.ext").
+			Build()
+		extResult, err := g.Storage().Query(ctx, extQ)
+		if err != nil {
+			return fmt.Errorf("failed to query extensions: %w", err)
+		}
+		extensions = extResult.Counts
+
+		// Labels using AQL with EXISTS pattern + json_each
+		labelsQ := aql.Select(aql.Col("value"), aql.Count()).
+			FromJoined("nodes", "json_each", "labels").
+			Where(aql.And(
+				aql.Ne("value", aql.String("")),
+				aql.Exists(pattern),
+			)).
+			GroupByCol("value").
+			Build()
+		labelsResult, err := g.Storage().Query(ctx, labelsQ)
+		if err != nil {
+			return fmt.Errorf("failed to query labels: %w", err)
+		}
+		labels = labelsResult.Counts
 	}
 
 	// Store detailed breakdowns

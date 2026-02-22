@@ -12,6 +12,17 @@ import (
 	"github.com/codewandler/axon/graph"
 )
 
+// existsRewrite holds information for rewriting EXISTS patterns as CTE+JOIN.
+// This optimization transforms slow correlated subqueries into fast CTE-based joins.
+type existsRewrite struct {
+	cteSQL     string // WITH clause (e.g., "WITH __descendants_0(...) ")
+	cteArgs    []any  // Arguments for CTE
+	joinCTE    string // CTE name to JOIN from (empty if NOT EXISTS or no rewrite)
+	joinColumn string // Column to join on: "id" for nodes, "from_id" for edges
+	whereSQL   string // Modified WHERE clause (EXISTS removed, other conditions kept)
+	whereArgs  []any  // Arguments for WHERE
+}
+
 // Query executes an AQL query and returns results.
 //
 // Phase 1 (current): Supports flat queries on nodes/edges tables with:
@@ -122,11 +133,369 @@ func (s *Storage) compileToSQL(q *aql.Query) (string, []any, graph.ResultType, e
 	switch src := q.Select.From.(type) {
 	case *aql.TableSource:
 		return s.compileFlatQuery(q)
+	case *aql.JoinedTableSource:
+		return s.compileJoinedTableQuery(q, src)
 	case *aql.PatternSource:
 		return s.compilePatternQuery(q, src)
 	default:
 		return "", nil, 0, fmt.Errorf("unknown source type: %T", src)
 	}
+}
+
+// extractExistsCTEs detects optimizable EXISTS patterns and returns rewrite info.
+// Returns nil if no optimization is possible.
+func (s *Storage) extractExistsCTEs(where aql.Expression, table string) *existsRewrite {
+	if where == nil {
+		return nil
+	}
+
+	// Find optimizable EXISTS expressions
+	existsExprs := s.findOptimizableExists(where, table)
+	if len(existsExprs) == 0 {
+		return nil
+	}
+
+	// For now, handle single EXISTS (most common case)
+	// Multiple AND'd EXISTS would need CTE intersection - defer for later
+	if len(existsExprs) > 1 {
+		return nil
+	}
+
+	e := existsExprs[0]
+
+	// NOT EXISTS uses different approach (NOT IN instead of JOIN)
+	if e.Not {
+		return s.buildNotExistsRewrite(e, where, table)
+	}
+
+	return s.buildExistsRewrite(e, where, table)
+}
+
+// findOptimizableExists finds all EXISTS expressions with variable-length paths that correlate with outer table.
+func (s *Storage) findOptimizableExists(expr aql.Expression, table string) []*aql.ExistsExpr {
+	var result []*aql.ExistsExpr
+
+	var walk func(e aql.Expression)
+	walk = func(e aql.Expression) {
+		switch ex := e.(type) {
+		case *aql.ExistsExpr:
+			if s.isOptimizableExists(ex, table) {
+				result = append(result, ex)
+			}
+		case *aql.BinaryExpr:
+			walk(ex.Left)
+			walk(ex.Right)
+		case *aql.UnaryExpr:
+			walk(ex.Operand)
+		case *aql.ParenExpr:
+			walk(ex.Inner)
+		}
+	}
+
+	walk(expr)
+	return result
+}
+
+// isOptimizableExists checks if an EXISTS expression can be optimized to a CTE.
+func (s *Storage) isOptimizableExists(e *aql.ExistsExpr, table string) bool {
+	if len(e.Pattern.Elements) < 3 {
+		return false
+	}
+
+	// Must have variable-length edge
+	hasVarLen := false
+	for _, elem := range e.Pattern.Elements {
+		if ep, ok := elem.(*aql.EdgePattern); ok && ep.IsVariableLength() {
+			hasVarLen = true
+			break
+		}
+	}
+
+	if !hasVarLen {
+		return false
+	}
+
+	// Target node must be present
+	targetNode, ok := e.Pattern.Elements[len(e.Pattern.Elements)-1].(*aql.NodePattern)
+	if !ok {
+		return false
+	}
+
+	// For nodes table: target variable must match table name (correlate on id)
+	// For edges table: any target variable works (correlate on from_id)
+	if table == "nodes" {
+		return targetNode.Variable == table
+	}
+	if table == "edges" {
+		// Any target variable is OK for edges - we correlate on from_id
+		return true
+	}
+
+	return false
+}
+
+// buildExistsRewrite creates rewrite info for EXISTS pattern (uses CTE+JOIN).
+func (s *Storage) buildExistsRewrite(e *aql.ExistsExpr, fullWhere aql.Expression, table string) *existsRewrite {
+	cteName := "__descendants_0"
+
+	// Build CTE
+	cteBody, cteArgs := s.buildDescendantsCTE(e, table, cteName)
+	if cteBody == "" {
+		return nil
+	}
+	cteSQL := "WITH " + cteBody + " "
+
+	// Build WHERE with EXISTS removed, keeping other conditions
+	whereSQL, whereArgs := s.compileWhereExcluding(fullWhere, e, table)
+
+	// Determine correlation column based on table
+	// - nodes: correlate on id (the node itself is a descendant)
+	// - edges: correlate on from_id (the edge's source node is a descendant)
+	joinColumn := "id"
+	if table == "edges" {
+		joinColumn = "from_id"
+	}
+
+	return &existsRewrite{
+		cteSQL:     cteSQL,
+		cteArgs:    cteArgs,
+		joinCTE:    cteName,
+		joinColumn: joinColumn,
+		whereSQL:   whereSQL,
+		whereArgs:  whereArgs,
+	}
+}
+
+// buildNotExistsRewrite creates rewrite info for NOT EXISTS (uses CTE + NOT IN).
+func (s *Storage) buildNotExistsRewrite(e *aql.ExistsExpr, fullWhere aql.Expression, table string) *existsRewrite {
+	cteName := "__descendants_0"
+
+	// Build CTE
+	cteBody, cteArgs := s.buildDescendantsCTE(e, table, cteName)
+	if cteBody == "" {
+		return nil
+	}
+	cteSQL := "WITH " + cteBody + " "
+
+	// Build WHERE: replace NOT EXISTS with NOT IN, keep other conditions
+	whereSQL, whereArgs := s.compileWhereReplacingNotExists(fullWhere, e, table, cteName)
+
+	// Determine correlation column based on table
+	joinColumn := "id"
+	if table == "edges" {
+		joinColumn = "from_id"
+	}
+
+	return &existsRewrite{
+		cteSQL:     cteSQL,
+		cteArgs:    cteArgs,
+		joinCTE:    "", // Empty = don't rewrite FROM, use NOT IN in WHERE
+		joinColumn: joinColumn,
+		whereSQL:   whereSQL,
+		whereArgs:  whereArgs,
+	}
+}
+
+// compileWhereExcluding compiles WHERE clause with the specified EXISTS expression removed.
+func (s *Storage) compileWhereExcluding(expr aql.Expression, skip *aql.ExistsExpr, table string) (string, []any) {
+	switch e := expr.(type) {
+	case *aql.ExistsExpr:
+		if e == skip {
+			return "", nil // Skip this EXISTS
+		}
+		// Compile normally
+		sql, args, _ := s.compileExists(e, table)
+		return sql, args
+
+	case *aql.BinaryExpr:
+		leftSQL, leftArgs := s.compileWhereExcluding(e.Left, skip, table)
+		rightSQL, rightArgs := s.compileWhereExcluding(e.Right, skip, table)
+
+		// Handle case where one side was removed
+		if leftSQL == "" {
+			return rightSQL, rightArgs
+		}
+		if rightSQL == "" {
+			return leftSQL, leftArgs
+		}
+
+		var args []any
+		args = append(args, leftArgs...)
+		args = append(args, rightArgs...)
+		return fmt.Sprintf("%s %s %s", leftSQL, e.Op, rightSQL), args
+
+	case *aql.ParenExpr:
+		innerSQL, innerArgs := s.compileWhereExcluding(e.Inner, skip, table)
+		if innerSQL == "" {
+			return "", nil
+		}
+		return fmt.Sprintf("(%s)", innerSQL), innerArgs
+
+	case *aql.UnaryExpr:
+		// For NOT expr, compile the operand
+		operandSQL, operandArgs := s.compileWhereExcluding(e.Operand, skip, table)
+		if operandSQL == "" {
+			return "", nil
+		}
+		return fmt.Sprintf("%s %s", e.Op, operandSQL), operandArgs
+
+	default:
+		// Compile normally
+		sql, args, _ := s.compileWhere(e, table)
+		return sql, args
+	}
+}
+
+// compileWhereReplacingNotExists compiles WHERE, replacing NOT EXISTS with NOT IN.
+func (s *Storage) compileWhereReplacingNotExists(expr aql.Expression, target *aql.ExistsExpr, table, cteName string) (string, []any) {
+	switch e := expr.(type) {
+	case *aql.ExistsExpr:
+		if e == target {
+			// Replace NOT EXISTS with NOT IN
+			return fmt.Sprintf("%s.id NOT IN (SELECT node_id FROM %s)", table, cteName), nil
+		}
+		sql, args, _ := s.compileExists(e, table)
+		return sql, args
+
+	case *aql.BinaryExpr:
+		leftSQL, leftArgs := s.compileWhereReplacingNotExists(e.Left, target, table, cteName)
+		rightSQL, rightArgs := s.compileWhereReplacingNotExists(e.Right, target, table, cteName)
+		var args []any
+		args = append(args, leftArgs...)
+		args = append(args, rightArgs...)
+		return fmt.Sprintf("%s %s %s", leftSQL, e.Op, rightSQL), args
+
+	case *aql.ParenExpr:
+		innerSQL, innerArgs := s.compileWhereReplacingNotExists(e.Inner, target, table, cteName)
+		return fmt.Sprintf("(%s)", innerSQL), innerArgs
+
+	case *aql.UnaryExpr:
+		operandSQL, operandArgs := s.compileWhereReplacingNotExists(e.Operand, target, table, cteName)
+		return fmt.Sprintf("%s %s", e.Op, operandSQL), operandArgs
+
+	default:
+		sql, args, _ := s.compileWhere(e, table)
+		return sql, args
+	}
+}
+
+// buildDescendantsCTE builds a CTE that computes all descendants of a source node.
+func (s *Storage) buildDescendantsCTE(e *aql.ExistsExpr, table, cteName string) (string, []any) {
+	// Find the variable-length edge
+	var varLenEdge *aql.EdgePattern
+	var varLenIdx int
+	for i, elem := range e.Pattern.Elements {
+		if ep, ok := elem.(*aql.EdgePattern); ok && ep.IsVariableLength() {
+			varLenEdge = ep
+			varLenIdx = i
+			break
+		}
+	}
+
+	if varLenEdge == nil || varLenIdx == 0 || varLenIdx >= len(e.Pattern.Elements)-1 {
+		return "", nil
+	}
+
+	sourceNode := e.Pattern.Elements[varLenIdx-1].(*aql.NodePattern)
+
+	var sql strings.Builder
+	var args []any
+
+	sql.WriteString(cteName)
+	sql.WriteString("(node_id) AS (WITH RECURSIVE path(node_id, depth) AS (")
+
+	// Base case: start from source node
+	sql.WriteString("SELECT id, 0 FROM nodes")
+
+	// Add source node constraints
+	if sourceNode.Type != "" || sourceNode.Where != nil {
+		sql.WriteString(" WHERE ")
+		if sourceNode.Type != "" {
+			sql.WriteString("type = ?")
+			args = append(args, sourceNode.Type)
+			if sourceNode.Where != nil {
+				sql.WriteString(" AND ")
+			}
+		}
+		if sourceNode.Where != nil {
+			whereSQL, whereArgs, err := s.compileWhere(sourceNode.Where, "nodes")
+			if err != nil {
+				return "", nil
+			}
+			sql.WriteString(whereSQL)
+			args = append(args, whereArgs...)
+		}
+	}
+
+	// Recursive case
+	sql.WriteString(" UNION ALL SELECT ")
+	switch varLenEdge.Direction {
+	case aql.Outgoing:
+		sql.WriteString("e.to_id")
+	case aql.Incoming:
+		sql.WriteString("e.from_id")
+	default:
+		return "", nil
+	}
+
+	// Use INDEXED BY hint for efficient traversal when edge type is specified
+	// idx_edges_from_type is on (from_id, type) which is optimal for outgoing edges
+	// For incoming edges, we rely on idx_edges_to_id_type (to_id, type)
+	hasEdgeType := varLenEdge.Type != "" || len(varLenEdge.Types) > 0
+	if hasEdgeType && varLenEdge.Direction == aql.Outgoing {
+		sql.WriteString(", path.depth + 1 FROM path JOIN edges e INDEXED BY idx_edges_from_type ON ")
+	} else if hasEdgeType && varLenEdge.Direction == aql.Incoming {
+		sql.WriteString(", path.depth + 1 FROM path JOIN edges e INDEXED BY idx_edges_to_id_type ON ")
+	} else {
+		sql.WriteString(", path.depth + 1 FROM path JOIN edges e ON ")
+	}
+
+	switch varLenEdge.Direction {
+	case aql.Outgoing:
+		sql.WriteString("e.from_id = path.node_id")
+	case aql.Incoming:
+		sql.WriteString("e.to_id = path.node_id")
+	}
+
+	// Add edge type constraint
+	if varLenEdge.Type != "" {
+		sql.WriteString(" AND e.type = ?")
+		args = append(args, varLenEdge.Type)
+	} else if len(varLenEdge.Types) > 0 {
+		sql.WriteString(" AND e.type IN (")
+		for i, t := range varLenEdge.Types {
+			if i > 0 {
+				sql.WriteString(", ")
+			}
+			sql.WriteString("?")
+			args = append(args, t)
+		}
+		sql.WriteString(")")
+	}
+
+	// Add depth constraints for recursive step
+	if varLenEdge.MinHops != nil {
+		sql.WriteString(fmt.Sprintf(" WHERE path.depth + 1 >= %d", *varLenEdge.MinHops))
+		if varLenEdge.MaxHops != nil {
+			sql.WriteString(fmt.Sprintf(" AND path.depth + 1 <= %d", *varLenEdge.MaxHops))
+		}
+	} else if varLenEdge.MaxHops != nil {
+		sql.WriteString(fmt.Sprintf(" WHERE path.depth + 1 <= %d", *varLenEdge.MaxHops))
+	}
+
+	// Close recursive CTE and select valid depths
+	sql.WriteString(") SELECT node_id FROM path WHERE ")
+	if varLenEdge.MinHops != nil {
+		sql.WriteString(fmt.Sprintf("depth >= %d", *varLenEdge.MinHops))
+	} else {
+		sql.WriteString("depth >= 0")
+	}
+	if varLenEdge.MaxHops != nil {
+		sql.WriteString(fmt.Sprintf(" AND depth <= %d", *varLenEdge.MaxHops))
+	}
+	sql.WriteString(")")
+
+	return sql.String(), args
 }
 
 // compileFlatQuery compiles SELECT from nodes/edges table.
@@ -139,7 +508,6 @@ func (s *Storage) compileFlatQuery(q *aql.Query) (string, []any, graph.ResultTyp
 	}
 
 	// Determine result type
-	hasGroupBy := len(q.Select.GroupBy) > 0
 	hasCount := false
 	for _, col := range q.Select.Columns {
 		if _, ok := col.Expr.(*aql.CountCall); ok {
@@ -149,7 +517,8 @@ func (s *Storage) compileFlatQuery(q *aql.Query) (string, []any, graph.ResultTyp
 	}
 
 	var resultType graph.ResultType
-	if hasCount && hasGroupBy {
+	if hasCount {
+		// Both scalar COUNT and GROUP BY COUNT return ResultTypeCounts
 		resultType = graph.ResultTypeCounts
 	} else if src.Table == "nodes" {
 		resultType = graph.ResultTypeNodes
@@ -160,19 +529,65 @@ func (s *Storage) compileFlatQuery(q *aql.Query) (string, []any, graph.ResultTyp
 	var sqlBuilder strings.Builder
 	var args []any
 
-	// SELECT clause
-	selectSQL, err := s.compileSelect(q.Select, src.Table)
-	if err != nil {
-		return "", nil, 0, err
-	}
-	sqlBuilder.WriteString(selectSQL)
+	// Optimize: Extract EXISTS patterns with variable-length paths into CTEs
+	// to avoid correlated subqueries
+	rewrite := s.extractExistsCTEs(q.Select.Where, src.Table)
 
-	// FROM clause
-	sqlBuilder.WriteString(" FROM ")
-	sqlBuilder.WriteString(src.Table)
+	// CTE clause (if rewriting)
+	if rewrite != nil && rewrite.cteSQL != "" {
+		sqlBuilder.WriteString(rewrite.cteSQL)
+		args = append(args, rewrite.cteArgs...)
+	}
+
+	// SELECT clause - always use table prefix when rewriting with JOIN
+	if rewrite != nil && rewrite.joinCTE != "" {
+		selectSQL, err := s.compileSelectWithPrefix(q.Select, src.Table)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		sqlBuilder.WriteString(selectSQL)
+	} else {
+		selectSQL, err := s.compileSelect(q.Select, src.Table)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		sqlBuilder.WriteString(selectSQL)
+	}
+
+	// FROM clause - JOIN with CTE when rewriting EXISTS
+	if rewrite != nil && rewrite.joinCTE != "" {
+		// FROM __descendants_0 JOIN table ON __descendants_0.node_id = table.joinColumn
+		// For nodes: JOIN on id (the node itself is a descendant)
+		// For edges: JOIN on from_id (the edge's source node is a descendant)
+		sqlBuilder.WriteString(" FROM ")
+		sqlBuilder.WriteString(rewrite.joinCTE)
+		sqlBuilder.WriteString(" JOIN ")
+		sqlBuilder.WriteString(src.Table)
+		sqlBuilder.WriteString(" ON ")
+		sqlBuilder.WriteString(rewrite.joinCTE)
+		sqlBuilder.WriteString(".node_id = ")
+		sqlBuilder.WriteString(src.Table)
+		sqlBuilder.WriteString(".")
+		sqlBuilder.WriteString(rewrite.joinColumn)
+	} else {
+		sqlBuilder.WriteString(" FROM ")
+		sqlBuilder.WriteString(src.Table)
+	}
 
 	// WHERE clause
-	if q.Select.Where != nil {
+	// WHERE clause
+	if rewrite != nil {
+		// Use optimized WHERE (EXISTS removed or replaced with NOT IN)
+		// When rewrite is active, we MUST use rewrite.whereSQL even if empty
+		// because the EXISTS has been handled by the CTE+JOIN
+		if rewrite.whereSQL != "" {
+			sqlBuilder.WriteString(" WHERE ")
+			sqlBuilder.WriteString(rewrite.whereSQL)
+			args = append(args, rewrite.whereArgs...)
+		}
+		// If rewrite.whereSQL is empty, no WHERE clause needed
+	} else if q.Select.Where != nil {
+		// No rewrite - use original WHERE compilation
 		whereSQL, whereArgs, err := s.compileWhere(q.Select.Where, src.Table)
 		if err != nil {
 			return "", nil, 0, err
@@ -228,6 +643,372 @@ func (s *Storage) compileFlatQuery(q *aql.Query) (string, []any, graph.ResultTyp
 	}
 
 	return sqlBuilder.String(), args, resultType, nil
+}
+
+// compileJoinedTableQuery compiles SELECT from table with table-valued function.
+// Example: SELECT value, COUNT(*) FROM nodes, json_each(labels) GROUP BY value
+//
+// Supported table functions:
+//   - json_each(column) - unpacks JSON array into rows with 'key' and 'value' columns
+//
+// Also supports EXISTS patterns for scoping, e.g.:
+//
+//	SELECT value, COUNT(*) FROM nodes, json_each(labels)
+//	WHERE EXISTS (root WHERE id='x')-[:contains*0..]->(nodes)
+//	GROUP BY value
+//
+// These are optimized using CTE+JOIN rewrite for performance.
+func (s *Storage) compileJoinedTableQuery(q *aql.Query, src *aql.JoinedTableSource) (string, []any, graph.ResultType, error) {
+	// Validate table
+	if src.Table != "nodes" && src.Table != "edges" {
+		return "", nil, 0, fmt.Errorf("invalid table: %s (must be 'nodes' or 'edges')", src.Table)
+	}
+
+	// Validate table function
+	if src.TableFunc == nil {
+		return "", nil, 0, fmt.Errorf("joined table source requires a table function")
+	}
+
+	// Currently only json_each is supported
+	if src.TableFunc.Name != "json_each" {
+		return "", nil, 0, fmt.Errorf("unsupported table function: %s (only json_each is supported)", src.TableFunc.Name)
+	}
+
+	// Determine result type - joined queries always return counts (for aggregations)
+	hasCount := false
+	for _, col := range q.Select.Columns {
+		if _, ok := col.Expr.(*aql.CountCall); ok {
+			hasCount = true
+			break
+		}
+	}
+
+	var resultType graph.ResultType
+	if hasCount || len(q.Select.GroupBy) > 0 {
+		resultType = graph.ResultTypeCounts
+	} else {
+		resultType = graph.ResultTypeCounts
+	}
+
+	var sqlBuilder strings.Builder
+	var args []any
+
+	// Optimize: Extract EXISTS patterns with variable-length paths into CTEs
+	rewrite := s.extractExistsCTEs(q.Select.Where, src.Table)
+
+	// CTE clause (if rewriting)
+	if rewrite != nil && rewrite.cteSQL != "" {
+		sqlBuilder.WriteString(rewrite.cteSQL)
+		args = append(args, rewrite.cteArgs...)
+	}
+
+	// SELECT clause
+	selectSQL, err := s.compileSelectForJoined(q.Select, src)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	sqlBuilder.WriteString(selectSQL)
+
+	// FROM clause
+	if rewrite != nil && rewrite.joinCTE != "" {
+		// FROM __descendants_0 JOIN table ON __descendants_0.node_id = table.joinColumn, json_each(table.column)
+		// For nodes: JOIN on id (the node itself is a descendant)
+		// For edges: JOIN on from_id (the edge's source node is a descendant)
+		sqlBuilder.WriteString(" FROM ")
+		sqlBuilder.WriteString(rewrite.joinCTE)
+		sqlBuilder.WriteString(" JOIN ")
+		sqlBuilder.WriteString(src.Table)
+		sqlBuilder.WriteString(" ON ")
+		sqlBuilder.WriteString(rewrite.joinCTE)
+		sqlBuilder.WriteString(".node_id = ")
+		sqlBuilder.WriteString(src.Table)
+		sqlBuilder.WriteString(".")
+		sqlBuilder.WriteString(rewrite.joinColumn)
+		sqlBuilder.WriteString(", ")
+	} else {
+		// FROM table, json_each(table.column)
+		sqlBuilder.WriteString(" FROM ")
+		sqlBuilder.WriteString(src.Table)
+		sqlBuilder.WriteString(", ")
+	}
+
+	// Build json_each call
+	argSQL := s.compileTableFuncArg(src.TableFunc.Arg, src.Table)
+	sqlBuilder.WriteString(src.TableFunc.Name)
+	sqlBuilder.WriteString("(")
+	sqlBuilder.WriteString(argSQL)
+	sqlBuilder.WriteString(")")
+
+	// WHERE clause
+	if rewrite != nil {
+		// Use optimized WHERE (EXISTS removed)
+		if rewrite.whereSQL != "" {
+			whereSQL, whereArgs := s.adaptWhereForJoined(rewrite.whereSQL, rewrite.whereArgs, src)
+			sqlBuilder.WriteString(" WHERE ")
+			sqlBuilder.WriteString(whereSQL)
+			args = append(args, whereArgs...)
+		}
+	} else if q.Select.Where != nil {
+		whereSQL, whereArgs, err := s.compileWhereForJoined(q.Select.Where, src)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		sqlBuilder.WriteString(" WHERE ")
+		sqlBuilder.WriteString(whereSQL)
+		args = append(args, whereArgs...)
+	}
+
+	// GROUP BY clause
+	if len(q.Select.GroupBy) > 0 {
+		groupBySQL, err := s.compileGroupByForJoined(q.Select.GroupBy, src)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		sqlBuilder.WriteString(" GROUP BY ")
+		sqlBuilder.WriteString(groupBySQL)
+	}
+
+	// HAVING clause
+	if q.Select.Having != nil {
+		if len(q.Select.GroupBy) == 0 {
+			return "", nil, 0, fmt.Errorf("HAVING requires GROUP BY")
+		}
+		havingSQL, havingArgs, err := s.compileWhereForJoined(q.Select.Having, src)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		sqlBuilder.WriteString(" HAVING ")
+		sqlBuilder.WriteString(havingSQL)
+		args = append(args, havingArgs...)
+	}
+
+	// ORDER BY clause
+	if len(q.Select.OrderBy) > 0 {
+		orderBySQL, err := s.compileOrderByForJoined(q.Select.OrderBy, src)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		sqlBuilder.WriteString(" ORDER BY ")
+		sqlBuilder.WriteString(orderBySQL)
+	}
+
+	// LIMIT/OFFSET
+	if q.Select.Limit != nil {
+		sqlBuilder.WriteString(" LIMIT ?")
+		args = append(args, *q.Select.Limit)
+
+		if q.Select.Offset != nil {
+			sqlBuilder.WriteString(" OFFSET ?")
+			args = append(args, *q.Select.Offset)
+		}
+	}
+
+	return sqlBuilder.String(), args, resultType, nil
+}
+
+// adaptWhereForJoined adapts a WHERE clause compiled for flat queries to work with joined queries.
+// This handles the case where EXISTS was removed and we need to ensure remaining conditions
+// reference columns correctly for the json_each context.
+func (s *Storage) adaptWhereForJoined(whereSQL string, whereArgs []any, src *aql.JoinedTableSource) (string, []any) {
+	// The WHERE clause from compileWhereExcluding uses table-qualified names (e.g., "nodes.type")
+	// which work fine in the joined context. We just need to handle json_each columns (value, key)
+	// which are already unqualified in the original WHERE compilation.
+	// For now, pass through as-is since the flat query compilation should produce compatible SQL.
+	return whereSQL, whereArgs
+}
+
+// compileTableFuncArg compiles the argument to a table function.
+func (s *Storage) compileTableFuncArg(sel *aql.Selector, table string) string {
+	if len(sel.Parts) == 1 {
+		// Simple column: labels -> nodes.labels
+		return table + "." + sel.Parts[0]
+	}
+	// JSON path: data.tags -> json_extract(nodes.data, '$.tags')
+	if sel.Parts[0] == "data" {
+		jsonPath := "$." + strings.Join(sel.Parts[1:], ".")
+		return fmt.Sprintf("json_extract(%s.data, '%s')", table, jsonPath)
+	}
+	// Fallback: join with dots
+	return table + "." + strings.Join(sel.Parts, ".")
+}
+
+// compileSelectForJoined compiles SELECT clause for joined table queries.
+func (s *Storage) compileSelectForJoined(stmt *aql.SelectStmt, src *aql.JoinedTableSource) (string, error) {
+	var parts []string
+
+	for _, col := range stmt.Columns {
+		switch expr := col.Expr.(type) {
+		case *aql.Star:
+			return "", fmt.Errorf("SELECT * not supported with table functions; select specific columns")
+		case *aql.CountCall:
+			if col.Alias != "" {
+				parts = append(parts, fmt.Sprintf("COUNT(*) AS %s", col.Alias))
+			} else {
+				parts = append(parts, "COUNT(*)")
+			}
+		case *aql.Selector:
+			sql := s.compileSelectorForJoined(expr, src)
+			if col.Alias != "" {
+				parts = append(parts, fmt.Sprintf("%s AS %s", sql, col.Alias))
+			} else {
+				parts = append(parts, sql)
+			}
+		default:
+			return "", fmt.Errorf("unsupported column expression: %T", expr)
+		}
+	}
+
+	result := "SELECT"
+	if stmt.Distinct {
+		result += " DISTINCT"
+	}
+	return result + " " + strings.Join(parts, ", "), nil
+}
+
+// compileSelectorForJoined compiles a selector in the context of a joined table query.
+// It handles references to json_each output columns (key, value).
+func (s *Storage) compileSelectorForJoined(sel *aql.Selector, src *aql.JoinedTableSource) string {
+	if len(sel.Parts) == 1 {
+		name := sel.Parts[0]
+		// Check if it's a json_each output column
+		if name == "value" || name == "key" {
+			return name
+		}
+		// Check if it's an alias for the table function
+		if src.TableFunc.Alias != "" && name == src.TableFunc.Alias {
+			return "value" // Default to value for alias
+		}
+		// Regular table column
+		return src.Table + "." + name
+	}
+
+	// Multi-part selector
+	first := sel.Parts[0]
+
+	// Check if first part matches table function alias
+	if src.TableFunc.Alias != "" && first == src.TableFunc.Alias {
+		// alias.value, alias.key
+		if len(sel.Parts) == 2 {
+			return sel.Parts[1]
+		}
+	}
+
+	// Check if it's table.column
+	if first == src.Table {
+		rest := sel.Parts[1:]
+		if len(rest) == 1 {
+			return src.Table + "." + rest[0]
+		}
+		// JSON path in table: nodes.data.ext
+		if rest[0] == "data" {
+			jsonPath := "$." + strings.Join(rest[1:], ".")
+			return fmt.Sprintf("json_extract(%s.data, '%s')", src.Table, jsonPath)
+		}
+	}
+
+	// data.field -> json_extract
+	if first == "data" {
+		jsonPath := "$." + strings.Join(sel.Parts[1:], ".")
+		return fmt.Sprintf("json_extract(%s.data, '%s')", src.Table, jsonPath)
+	}
+
+	return strings.Join(sel.Parts, ".")
+}
+
+// compileWhereForJoined compiles WHERE for joined table queries.
+func (s *Storage) compileWhereForJoined(expr aql.Expression, src *aql.JoinedTableSource) (string, []any, error) {
+	switch e := expr.(type) {
+	case *aql.ComparisonExpr:
+		left := s.compileSelectorForJoined(e.Left, src)
+		val, err := s.compileValue(e.Right)
+		if err != nil {
+			return "", nil, err
+		}
+		op := s.compileComparisonOp(e.Op)
+		return fmt.Sprintf("%s %s ?", left, op), []any{val}, nil
+
+	case *aql.BinaryExpr:
+		leftSQL, leftArgs, err := s.compileWhereForJoined(e.Left, src)
+		if err != nil {
+			return "", nil, err
+		}
+		rightSQL, rightArgs, err := s.compileWhereForJoined(e.Right, src)
+		if err != nil {
+			return "", nil, err
+		}
+		var args []any
+		args = append(args, leftArgs...)
+		args = append(args, rightArgs...)
+		return fmt.Sprintf("%s %s %s", leftSQL, e.Op, rightSQL), args, nil
+
+	case *aql.UnaryExpr:
+		operandSQL, operandArgs, err := s.compileWhereForJoined(e.Operand, src)
+		if err != nil {
+			return "", nil, err
+		}
+		return fmt.Sprintf("%s %s", e.Op, operandSQL), operandArgs, nil
+
+	case *aql.ParenExpr:
+		innerSQL, innerArgs, err := s.compileWhereForJoined(e.Inner, src)
+		if err != nil {
+			return "", nil, err
+		}
+		return fmt.Sprintf("(%s)", innerSQL), innerArgs, nil
+
+	case *aql.IsNullExpr:
+		sql := s.compileSelectorForJoined(e.Selector, src)
+		if e.Not {
+			return sql + " IS NOT NULL", nil, nil
+		}
+		return sql + " IS NULL", nil, nil
+
+	case *aql.InExpr:
+		left := s.compileSelectorForJoined(e.Left, src)
+		var args []any
+		placeholders := make([]string, len(e.Values))
+		for i, v := range e.Values {
+			val, err := s.compileValue(v)
+			if err != nil {
+				return "", nil, err
+			}
+			placeholders[i] = "?"
+			args = append(args, val)
+		}
+		return fmt.Sprintf("%s IN (%s)", left, strings.Join(placeholders, ", ")), args, nil
+
+	default:
+		return "", nil, fmt.Errorf("unsupported expression type in joined query: %T", expr)
+	}
+}
+
+// compileGroupByForJoined compiles GROUP BY for joined table queries.
+func (s *Storage) compileGroupByForJoined(selectors []aql.Selector, src *aql.JoinedTableSource) (string, error) {
+	var parts []string
+	for _, sel := range selectors {
+		parts = append(parts, s.compileSelectorForJoined(&sel, src))
+	}
+	return strings.Join(parts, ", "), nil
+}
+
+// compileOrderByForJoined compiles ORDER BY for joined table queries.
+func (s *Storage) compileOrderByForJoined(orders []aql.OrderSpec, src *aql.JoinedTableSource) (string, error) {
+	var parts []string
+	for _, o := range orders {
+		var sql string
+		switch expr := o.Expr.(type) {
+		case *aql.CountCall:
+			sql = "COUNT(*)"
+		case *aql.Selector:
+			sql = s.compileSelectorForJoined(expr, src)
+		default:
+			return "", fmt.Errorf("unsupported ORDER BY expression: %T", expr)
+		}
+		if o.Descending {
+			sql += " DESC"
+		}
+		parts = append(parts, sql)
+	}
+	return strings.Join(parts, ", "), nil
 }
 
 // compilePatternQuery compiles SELECT from pattern(s) using JOINs.
@@ -998,6 +1779,65 @@ func (s *Storage) allColumnsForTable(table string) string {
 	}
 }
 
+// allColumnsWithPrefix returns the column list with table prefix for CTE+JOIN queries.
+func (s *Storage) allColumnsWithPrefix(table string) string {
+	switch table {
+	case "nodes":
+		return "nodes.id, nodes.type, nodes.uri, nodes.key, nodes.name, nodes.labels, nodes.data, nodes.generation, nodes.root, nodes.created_at, nodes.updated_at"
+	case "edges":
+		return "edges.id, edges.type, edges.from_id, edges.to_id, edges.data, edges.generation, edges.created_at"
+	default:
+		return table + ".*"
+	}
+}
+
+// compileSelectWithPrefix compiles SELECT with explicit table prefix for all columns.
+// Used when FROM clause is CTE+JOIN to avoid ambiguous column references.
+func (s *Storage) compileSelectWithPrefix(stmt *aql.SelectStmt, table string) (string, error) {
+	var sqlBuilder strings.Builder
+	sqlBuilder.WriteString("SELECT")
+
+	if stmt.Distinct {
+		sqlBuilder.WriteString(" DISTINCT")
+	}
+
+	// Check for GROUP BY to validate * usage
+	hasGroupBy := len(stmt.GroupBy) > 0
+
+	for i, col := range stmt.Columns {
+		if i > 0 {
+			sqlBuilder.WriteString(",")
+		}
+		sqlBuilder.WriteString(" ")
+
+		switch expr := col.Expr.(type) {
+		case *aql.Star:
+			if hasGroupBy {
+				return "", fmt.Errorf("cannot use * with GROUP BY")
+			}
+			sqlBuilder.WriteString(s.allColumnsWithPrefix(table))
+
+		case *aql.CountCall:
+			sqlBuilder.WriteString("COUNT(*)")
+
+		case *aql.Selector:
+			field, _ := s.compileSelectorToSQL(expr, table)
+			sqlBuilder.WriteString(field)
+
+		default:
+			return "", fmt.Errorf("unsupported column expression: %T", expr)
+		}
+
+		// Alias
+		if col.Alias != "" {
+			sqlBuilder.WriteString(" AS ")
+			sqlBuilder.WriteString(col.Alias)
+		}
+	}
+
+	return sqlBuilder.String(), nil
+}
+
 // compileWhere compiles an expression to SQL WHERE clause.
 func (s *Storage) compileWhere(expr aql.Expression, table string) (string, []any, error) {
 	switch e := expr.(type) {
@@ -1016,7 +1856,7 @@ func (s *Storage) compileWhere(expr aql.Expression, table string) (string, []any
 	case *aql.IsNullExpr:
 		return s.compileIsNull(e, table)
 	case *aql.ExistsExpr:
-		return "", nil, fmt.Errorf("EXISTS not supported in Phase 1 (will be added in Phase 3)")
+		return s.compileExists(e, table)
 	case *aql.ParenExpr:
 		inner, args, err := s.compileWhere(e.Inner, table)
 		if err != nil {
@@ -1230,6 +2070,294 @@ func (s *Storage) compileIsNull(e *aql.IsNullExpr, table string) (string, []any,
 		return field + " IS NOT NULL", nil, nil
 	}
 	return field + " IS NULL", nil, nil
+}
+
+// compileExists compiles EXISTS/NOT EXISTS expressions to SQL subqueries.
+// Handles single-hop, multi-hop, and variable-length path patterns.
+func (s *Storage) compileExists(e *aql.ExistsExpr, table string) (string, []any, error) {
+	// Pattern must have elements (at minimum just a node, but typically node-edge-node)
+	if len(e.Pattern.Elements) == 0 {
+		return "", nil, fmt.Errorf("EXISTS pattern is empty")
+	}
+
+	// Check if this is a variable-length pattern
+	hasVariableLength := false
+	for _, elem := range e.Pattern.Elements {
+		if ep, ok := elem.(*aql.EdgePattern); ok && ep.IsVariableLength() {
+			hasVariableLength = true
+			break
+		}
+	}
+
+	var sql string
+	var args []any
+	var err error
+
+	if hasVariableLength {
+		// Use recursive CTE for variable-length paths
+		sql, args, err = s.compileExistsRecursive(e, table)
+	} else {
+		// Use simple JOIN-based subquery
+		sql, args, err = s.compileExistsSimple(e, table)
+	}
+
+	if err != nil {
+		return "", nil, err
+	}
+
+	if e.Not {
+		return "NOT " + sql, args, nil
+	}
+	return sql, args, nil
+}
+
+// compileExistsSimple compiles EXISTS for patterns without variable-length paths.
+// Handles patterns like: (source)-[:edge]->(target)
+func (s *Storage) compileExistsSimple(e *aql.ExistsExpr, table string) (string, []any, error) {
+	var sql strings.Builder
+	var args []any
+
+	// Pattern must be: node, edge, node (minimum 3 elements)
+	if len(e.Pattern.Elements) < 3 {
+		return "", nil, fmt.Errorf("EXISTS pattern requires at least 3 elements (node-edge-node)")
+	}
+
+	// Get source node (must be a variable from outer scope)
+	sourceNode, ok := e.Pattern.Elements[0].(*aql.NodePattern)
+	if !ok {
+		return "", nil, fmt.Errorf("EXISTS pattern must start with a node")
+	}
+	if sourceNode.Variable == "" {
+		return "", nil, fmt.Errorf("EXISTS pattern must start with a variable from outer scope")
+	}
+
+	// Start building the subquery
+	sql.WriteString("EXISTS (SELECT 1 FROM edges e JOIN nodes target ON ")
+
+	// Get first edge pattern (element 1)
+	edgePattern, ok := e.Pattern.Elements[1].(*aql.EdgePattern)
+	if !ok {
+		return "", nil, fmt.Errorf("expected edge pattern at position 1")
+	}
+
+	// Connect source to edge based on direction
+	switch edgePattern.Direction {
+	case aql.Outgoing:
+		// (source)-[:edge]->(target)
+		sql.WriteString(fmt.Sprintf("e.from_id = %s.id AND e.to_id = target.id", table))
+	case aql.Incoming:
+		// (source)<-[:edge]-(target)
+		sql.WriteString(fmt.Sprintf("e.to_id = %s.id AND e.from_id = target.id", table))
+	case aql.Undirected:
+		// (source)-[:edge]-(target)
+		sql.WriteString(fmt.Sprintf("((e.from_id = %s.id AND e.to_id = target.id) OR (e.to_id = %s.id AND e.from_id = target.id))",
+			table, table))
+	}
+
+	// Add WHERE conditions
+	var whereConditions []string
+
+	// Add edge type constraint
+	if edgePattern.Type != "" {
+		whereConditions = append(whereConditions, "e.type = ?")
+		args = append(args, edgePattern.Type)
+	} else if len(edgePattern.Types) > 0 {
+		placeholders := make([]string, len(edgePattern.Types))
+		for i := range edgePattern.Types {
+			placeholders[i] = "?"
+			args = append(args, edgePattern.Types[i])
+		}
+		whereConditions = append(whereConditions, fmt.Sprintf("e.type IN (%s)", strings.Join(placeholders, ", ")))
+	}
+
+	// Get target node (element 2)
+	targetNode, ok := e.Pattern.Elements[2].(*aql.NodePattern)
+	if !ok {
+		return "", nil, fmt.Errorf("expected node pattern at position 2")
+	}
+
+	// Add target node type constraint
+	if targetNode.Type != "" {
+		if strings.Contains(targetNode.Type, "*") || strings.Contains(targetNode.Type, "?") {
+			whereConditions = append(whereConditions, "target.type GLOB ?")
+			args = append(args, targetNode.Type)
+		} else {
+			whereConditions = append(whereConditions, "target.type = ?")
+			args = append(args, targetNode.Type)
+		}
+	}
+
+	// Add inline WHERE for target node
+	if targetNode.Where != nil {
+		whereSQL, whereArgs, err := s.compileWhere(targetNode.Where, "target")
+		if err != nil {
+			return "", nil, fmt.Errorf("compiling inline WHERE: %w", err)
+		}
+		whereConditions = append(whereConditions, whereSQL)
+		args = append(args, whereArgs...)
+	}
+
+	// Add WHERE clause if we have conditions
+	if len(whereConditions) > 0 {
+		sql.WriteString(" WHERE ")
+		sql.WriteString(strings.Join(whereConditions, " AND "))
+	}
+
+	sql.WriteString(")")
+
+	return sql.String(), args, nil
+}
+
+// compileExistsRecursive compiles EXISTS for patterns with variable-length paths using recursive CTEs.
+func (s *Storage) compileExistsRecursive(e *aql.ExistsExpr, table string) (string, []any, error) {
+	// Find the variable-length edge
+	var varLenEdge *aql.EdgePattern
+	var varLenIdx int
+	for i, elem := range e.Pattern.Elements {
+		if ep, ok := elem.(*aql.EdgePattern); ok && ep.IsVariableLength() {
+			varLenEdge = ep
+			varLenIdx = i
+			break
+		}
+	}
+
+	if varLenEdge == nil {
+		return "", nil, fmt.Errorf("no variable-length edge found")
+	}
+
+	// Get source and target nodes
+	if varLenIdx == 0 || varLenIdx >= len(e.Pattern.Elements)-1 {
+		return "", nil, fmt.Errorf("variable-length edge must be between two nodes")
+	}
+
+	sourceNode := e.Pattern.Elements[varLenIdx-1].(*aql.NodePattern)
+	targetNode := e.Pattern.Elements[varLenIdx+1].(*aql.NodePattern)
+
+	if sourceNode.Variable == "" {
+		return "", nil, fmt.Errorf("source node must have a variable")
+	}
+
+	var sql strings.Builder
+	var args []any
+
+	// Build recursive CTE
+	sql.WriteString("EXISTS (WITH RECURSIVE path(node_id, depth) AS (")
+
+	// Base case: start from source node
+	sql.WriteString("SELECT ")
+	sql.WriteString(table)
+	sql.WriteString(".id, 0 FROM ")
+	sql.WriteString(table)
+
+	// Add source node constraints (type and inline WHERE)
+	hasSourceConstraint := false
+	if sourceNode.Type != "" || sourceNode.Where != nil {
+		sql.WriteString(" WHERE ")
+		if sourceNode.Type != "" {
+			sql.WriteString(table)
+			sql.WriteString(".type = ?")
+			args = append(args, sourceNode.Type)
+			hasSourceConstraint = true
+		}
+		if sourceNode.Where != nil {
+			if hasSourceConstraint {
+				sql.WriteString(" AND ")
+			}
+			whereSQL, whereArgs, err := s.compileWhere(sourceNode.Where, table)
+			if err != nil {
+				return "", nil, fmt.Errorf("compiling source node inline WHERE in EXISTS: %w", err)
+			}
+			sql.WriteString(whereSQL)
+			args = append(args, whereArgs...)
+		}
+	}
+
+	// Recursive case: follow edges
+	sql.WriteString(" UNION ALL SELECT ")
+
+	switch varLenEdge.Direction {
+	case aql.Outgoing:
+		sql.WriteString("e.to_id")
+	case aql.Incoming:
+		sql.WriteString("e.from_id")
+	default:
+		return "", nil, fmt.Errorf("undirected variable-length paths not yet supported")
+	}
+
+	sql.WriteString(", path.depth + 1 FROM path JOIN edges e ON ")
+
+	switch varLenEdge.Direction {
+	case aql.Outgoing:
+		sql.WriteString("e.from_id = path.node_id")
+	case aql.Incoming:
+		sql.WriteString("e.to_id = path.node_id")
+	}
+
+	// Add edge type constraint
+	if varLenEdge.Type != "" {
+		sql.WriteString(" AND e.type = ?")
+		args = append(args, varLenEdge.Type)
+	} else if len(varLenEdge.Types) > 0 {
+		sql.WriteString(" AND e.type IN (")
+		for i, t := range varLenEdge.Types {
+			if i > 0 {
+				sql.WriteString(", ")
+			}
+			sql.WriteString("?")
+			args = append(args, t)
+		}
+		sql.WriteString(")")
+	}
+
+	// Add depth constraints
+	if varLenEdge.MinHops != nil {
+		sql.WriteString(fmt.Sprintf(" WHERE path.depth + 1 >= %d", *varLenEdge.MinHops))
+		if varLenEdge.MaxHops != nil {
+			sql.WriteString(fmt.Sprintf(" AND path.depth + 1 <= %d", *varLenEdge.MaxHops))
+		}
+	} else if varLenEdge.MaxHops != nil {
+		sql.WriteString(fmt.Sprintf(" WHERE path.depth + 1 <= %d", *varLenEdge.MaxHops))
+	}
+
+	sql.WriteString(") SELECT 1 FROM path JOIN nodes target ON path.node_id = target.id WHERE ")
+
+	// Correlate with outer query: target must match the outer table row
+	// If target node has a variable that matches the outer table, add correlation
+	if targetNode.Variable != "" && targetNode.Variable == "nodes" {
+		sql.WriteString("target.id = ")
+		sql.WriteString(table)
+		sql.WriteString(".id AND ")
+	}
+
+	// Add minimum depth constraint
+	if varLenEdge.MinHops != nil {
+		sql.WriteString(fmt.Sprintf("path.depth >= %d AND ", *varLenEdge.MinHops))
+	} else {
+		sql.WriteString("path.depth >= 1 AND ")
+	}
+
+	// Add target node type constraint
+	if targetNode.Type != "" {
+		sql.WriteString("target.type = ?")
+		args = append(args, targetNode.Type)
+	} else {
+		sql.WriteString("1=1")
+	}
+
+	// Add target node inline WHERE if present
+	if targetNode.Where != nil {
+		whereSQL, whereArgs, err := s.compileWhere(targetNode.Where, "target")
+		if err != nil {
+			return "", nil, fmt.Errorf("compiling inline WHERE in EXISTS: %w", err)
+		}
+		sql.WriteString(" AND ")
+		sql.WriteString(whereSQL)
+		args = append(args, whereArgs...)
+	}
+
+	sql.WriteString(")")
+
+	return sql.String(), args, nil
 }
 
 // compileGroupBy compiles GROUP BY clause.
@@ -1629,16 +2757,29 @@ func (s *Storage) executeCountQuery(ctx context.Context, query *aql.Query, sqlQu
 	defer rows.Close()
 
 	counts := make(map[string]int)
+	hasGroupBy := len(query.Select.GroupBy) > 0
 
 	for rows.Next() {
-		var key string
-		var count int
-
-		if err := rows.Scan(&key, &count); err != nil {
-			return nil, err
+		if hasGroupBy {
+			// GROUP BY query: scan (key, count)
+			// Use NullString to handle NULL values from json_each on empty arrays
+			var key sql.NullString
+			var count int
+			if err := rows.Scan(&key, &count); err != nil {
+				return nil, err
+			}
+			// Skip NULL keys (from empty JSON arrays)
+			if key.Valid {
+				counts[key.String] = count
+			}
+		} else {
+			// Scalar COUNT(*): scan single integer
+			var count int
+			if err := rows.Scan(&count); err != nil {
+				return nil, err
+			}
+			counts["_count"] = count
 		}
-
-		counts[key] = count
 	}
 
 	return counts, rows.Err()
