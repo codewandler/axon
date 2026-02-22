@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/codewandler/axon/aql"
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/types"
 	"github.com/spf13/cobra"
@@ -83,22 +84,24 @@ func runShow(cmd *cobra.Command, args []string) error {
 	return showNodeDetails(cmdCtx.Ctx, ax.Graph(), node)
 }
 
-// findNodesByPrefix finds all nodes whose ID starts with the given prefix
+// findNodesByPrefix finds all nodes whose ID starts with the given prefix using AQL
 func findNodesByPrefix(ctx context.Context, g *graph.Graph, prefix string) ([]*graph.Node, error) {
-	// Get all nodes and filter by prefix
-	// TODO: Add a more efficient prefix search to storage
-	allNodes, err := g.FindNodes(ctx, graph.NodeFilter{}, graph.QueryOptions{})
+	// Build AQL query: SELECT * FROM nodes WHERE id GLOB 'prefix*' LIMIT 100
+	// Note: GLOB uses the PRIMARY KEY index, while LIKE does not
+	query := aql.SelectStar().
+		From("nodes").
+		Where(aql.Glob("id", aql.String(prefix+"*"))).
+		Limit(100).
+		Build()
+
+	// Execute query through storage
+	result, err := g.Storage().Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
-	var matches []*graph.Node
-	for _, n := range allNodes {
-		if strings.HasPrefix(n.ID, prefix) {
-			matches = append(matches, n)
-		}
-	}
-	return matches, nil
+	// Return nodes from result
+	return result.Nodes, nil
 }
 
 // getNodeSummary returns a brief summary of a node for listing
