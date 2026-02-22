@@ -13,6 +13,7 @@ import (
 	"github.com/codewandler/axon/indexer"
 	"github.com/codewandler/axon/indexer/fs"
 	"github.com/codewandler/axon/indexer/git"
+	"github.com/codewandler/axon/indexer/golang"
 	"github.com/codewandler/axon/indexer/markdown"
 	"github.com/codewandler/axon/indexer/tagger"
 	"github.com/codewandler/axon/progress"
@@ -83,6 +84,7 @@ func New(cfg Config) (*Axon, error) {
 	types.RegisterFSTypes(registry)
 	types.RegisterVCSTypes(registry)
 	types.RegisterMarkdownTypes(registry)
+	types.RegisterGoTypes(registry)
 
 	// Create graph
 	g := graph.New(cfg.Storage, registry)
@@ -97,6 +99,7 @@ func New(cfg Config) (*Axon, error) {
 	}
 	idxRegistry.Register(fs.New(fs.Config{Ignore: ignore}))
 	idxRegistry.Register(git.New())
+	idxRegistry.Register(golang.New())
 	idxRegistry.Register(markdown.New())
 	idxRegistry.Register(tagger.New(tagger.Config{}))
 

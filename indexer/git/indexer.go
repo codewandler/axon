@@ -110,14 +110,12 @@ func (i *Indexer) HandleEvent(ctx context.Context, ictx *indexer.Context, event 
 		return err
 	}
 
-	// Link repo to directory (if we can find it)
+	// Link repo to directory (compute ID directly to avoid read during write)
 	dirURI := types.PathToURI(repoPath)
-	dirNode, err := ictx.Graph.GetNodeByURI(ctx, dirURI)
-	if err == nil {
-		edge := graph.NewEdge(types.EdgeLocatedAt, repoNode.ID, dirNode.ID)
-		if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
-			return err
-		}
+	dirID := graph.IDFromURI(dirURI)
+	edge := graph.NewEdge(types.EdgeLocatedAt, repoNode.ID, dirID)
+	if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
+		return err
 	}
 
 	// Index remotes

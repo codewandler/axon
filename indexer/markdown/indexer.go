@@ -173,15 +173,11 @@ func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 		targetPath := filepath.Clean(filepath.Join(link.basePath, link.targetPath))
 		targetURI := types.PathToURI(targetPath)
 
-		// Find the fs:file node
-		targetNode, err := ictx.Graph.GetNodeByURI(ctx, targetURI)
-		if err != nil {
-			// File doesn't exist in graph - skip
-			continue
-		}
+		// Compute target node ID directly (avoid read during write)
+		targetID := graph.IDFromURI(targetURI)
 
 		// Create links_to edge
-		edge := graph.NewEdge(types.EdgeLinksTo, link.fromNodeID, targetNode.ID)
+		edge := graph.NewEdge(types.EdgeLinksTo, link.fromNodeID, targetID)
 		if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
 			// Log but continue
 			continue
