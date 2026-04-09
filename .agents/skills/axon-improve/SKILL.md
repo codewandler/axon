@@ -11,24 +11,40 @@ trigger: self-improve, axon improve, improve axon, explore codebase, find bugs i
 
 # Axon Self-Improvement Workflow
 
-This skill guides an agent through **using axon to analyse axon** — eating its own
-dog food — so it can find real problems and fix them.
+This skill is divided into **two strictly ordered phases**.
 
-## Guiding Principle
+```
+Phase 1 — CLI-only exploration   (no source reading, no axon skill)
+Phase 2 — Deep analysis and fix  (load axon skill, then read source)
+```
 
-> "If you can't query it, it doesn't exist."
-
-Every finding must be grounded in something axon can actually show you.
-Don't speculate; query first, then read source, then propose a change.
+Do not skip ahead. Phase 1 forces you to find problems the way a user would:
+through the CLI alone. Phase 2 is where you confirm root causes and write code.
 
 ---
 
-## Phase 1 — Bootstrap: Index the Codebase
+## PHASE ONE — Raw CLI Exploration
 
-Before anything else, make sure the axon graph is up-to-date for this repo.
+> **Hard constraints for this entire phase:**
+> - ❌ Do NOT read any source file (`file_read`, `grep` on `.go` files, etc.)
+> - ❌ Do NOT load the `axon` skill
+> - ❌ Do NOT run `axon search` or `axon context`
+> - ✅ Only: `axon` CLI commands, `--help` flags, and `bash` for running the binary
+
+The goal is to surface findings **purely from what the CLI shows you**.
+If something looks wrong, suspicious, or confusing from the CLI output alone,
+that is a valid finding. Write it down. Confirm it with more CLI commands.
+Do NOT reach for source code to explain it yet.
+
+---
+
+### P1.1 — Bootstrap: Build and Index
 
 ```bash
-# Index the axon repo itself (local DB so it doesn't pollute the global one)
+# Build a fresh binary
+go build -o ./bin/axon ./cmd/axon
+
+# Index the axon repo itself (local DB, doesn't pollute global)
 axon init --local .
 
 # Confirm it worked
@@ -36,161 +52,75 @@ axon info
 axon stats -v
 ```
 
-Expected: you should see `fs:file`, `fs:dir`, `vcs:*`, `md:*` node types and
-edges like `contains`, `has`, `located_at`.
+Expected: `fs:file`, `fs:dir`, `vcs:*`, `md:*` node types; edges like
+`contains`, `has`, `located_at`.
 
 ---
 
-## Phase 2 — Structural Orientation
-
-Get the big picture before diving in.
+### P1.2 — Structural Orientation
 
 ```bash
-# High-level tree (2 levels deep)
+# High-level tree
 axon tree --depth 2 --types
 
-# What types of nodes exist?
+# Vocabulary
 axon types
-
-# What edge types exist?
 axon edges
-
-# Label vocabulary
 axon labels
-
-# How many of each?
 axon stats -v -g
 ```
 
-Exploration queries to run:
+Orientation queries:
 
 ```bash
-# Package breakdown – count files per directory
-axon query "SELECT name, type, COUNT(*) FROM nodes WHERE type = 'fs:dir' GROUP BY name ORDER BY name"
+# File count per directory
+axon query "SELECT name, COUNT(*) FROM nodes WHERE type = 'fs:dir' GROUP BY name ORDER BY name"
 
-# Go source files only
+# Go source files
 axon find --ext go --global --output table
 
 # Markdown docs
-axon find --type md:document --global
+axon find --type md:document
 
-# All CLI command files
-axon find --ext go --name "*.go" --global | grep cmd/
+# CLI command files
+axon find --ext go --global --output path | grep cmd/
 ```
 
-Refer to [./references/exploration-queries.md](./references/exploration-queries.md) for
-a fuller catalogue of useful queries.
+Refer to [./references/exploration-queries.md](./references/exploration-queries.md)
+for the full query catalogue.
 
 ---
 
-## Phase 3 — Deep-Dive with `ask` and `context`
+### P1.3 — CLI Behaviour Audit
 
-Use natural language interrogation to surface intent vs. implementation gaps.
+Run every command's `--help` and exercise each example it gives.
+Record every gap between what is claimed and what actually happens.
 
 ```bash
-# Understand core interfaces
-axon search "what is the Storage interface"
-axon search "what implements Indexer"
-axon search "what methods does Storage have"
-
-# Understand the AQL pipeline
-axon search "describe the AQL compiler"
-axon search "how does the aql builder work"
-axon search "explain the query validation"
-
-# Understand CLI plumbing
-axon search "how does db resolution work"
-axon search "explain the output formatting system"
-
-# Understand event routing
-axon search "how does event routing work"
-axon search "explain the indexer subscription system"
+axon find --help
+axon query --help
+axon tree --help
+axon stats --help
+axon info --help
+axon gc --help
+axon show --help
 ```
 
-Pump interesting answers through `context` to get the actual source:
+For each command, try the first two examples literally as written.
+If an example produces no output or an error, that is a finding.
 
 ```bash
-axon context --task "understand Storage interface and implementations" --tokens 8000
-axon context --task "trace an AQL query from CLI to SQLite" --tokens 10000
-axon context --task "how does axon find the database file" --tokens 6000
+# Exercise help examples, e.g.:
+axon find --type "md:*"          # Should return markdown nodes
+axon find --name README.md       # Should return README
+axon stats -v                    # Should show type breakdown
+axon stats -v -g                 # Should show global breakdown
+axon gc --dry-run                # Should report orphaned count
 ```
 
 ---
 
-## Phase 4 — Problem Detection
-
-Look for concrete categories of problems. For each, there are queries that
-reveal them.  See [./references/improvement-patterns.md](./references/improvement-patterns.md)
-for the full pattern library.
-
-### 4.1 CLI Behaviour vs. Help Text Gaps
-
-Run every command's `--help` and compare what it claims against what you can
-verify in the source.
-
-```bash
-# Get context for a command, then read its help text
-axon context --task "axon find command implementation" --tokens 6000
-axon search "what flags does the find command accept"
-bin/axon find --help
-```
-
-Questions to ask for each command:
-- Does the help text list ALL accepted flags?
-- Do examples in help text actually work?
-- Are error messages meaningful when bad input is given?
-
-### 4.2 AQL Edge Cases
-
-```bash
-# Find the AQL test file
-axon find --name "aql_test.go" --global
-
-# How many AQL tests are there?
-axon query "SELECT COUNT(*) FROM nodes WHERE type = 'fs:file' AND name GLOB '*aql*test*'"
-
-# Get context for the AQL compiler
-axon context --task "AQL compiler edge cases and error handling" --tokens 10000
-
-# Look for TODOs/FIXMEs in AQL code
-axon find --ext go --global | xargs grep -l "TODO\|FIXME\|HACK\|XXX" 2>/dev/null
-```
-
-Known areas to probe:
-- What happens with an empty `FROM` clause?
-- What happens when a pattern variable is used in `WHERE` but not in `FROM`?
-- Does `GROUP BY` work with pattern queries? (check the grammar)
-- Are integer literals in AQL treated as strings in some contexts?
-
-### 4.3 Error Handling Gaps
-
-```bash
-axon context --task "error handling in sqlite adapter" --tokens 8000
-axon search "how does axon handle database not found errors"
-axon search "what happens when init fails midway"
-```
-
-Look for:
-- Unchecked errors from `Flush()`
-- Silent failures in edge deletion
-- Missing `context.Context` cancellation checks in long operations
-
-### 4.4 Documentation vs. Reality
-
-```bash
-# Find all markdown files
-axon find --type md:document --global
-
-# Get every heading in docs
-axon query "SELECT name, uri FROM nodes WHERE type = 'md:heading' ORDER BY uri, name"
-```
-
-Questions:
-- Does `README.md` mention all CLI commands (`ask`, `context`, `info`)?
-- Does `aql/grammar.md` cover Phase 4 table functions?
-- Is the AGENTS.md `New: Type-Safe Fluent AQL API` section accurate?
-
-### 4.5 Graph Integrity
+### P1.4 — Graph Integrity Checks
 
 ```bash
 # Orphaned edges (should be zero after gc)
@@ -202,15 +132,77 @@ axon query "SELECT id, type, name FROM nodes WHERE NOT EXISTS (SELECT 1 FROM edg
 
 # Duplicate node URIs (should be empty)
 axon query "SELECT uri, COUNT(*) as c FROM nodes GROUP BY uri HAVING c > 1"
+
+# Node/edge count consistency: info vs stats
+axon info
+axon stats -v
+axon stats -v -g
+# Do the counts agree? Document any discrepancy.
 ```
 
 ---
 
-## Phase 5 — Produce Improvements
+### P1.5 — Record Findings (CLI-only evidence)
+
+For each problem found, write a brief entry:
+
+```
+## Finding: <short title>
+
+**Category**: CLI Bug | Output | Documentation | Graph Integrity | Performance
+
+**CLI Evidence**:
+- Command(s) that reveal the problem
+- Actual output (paste it)
+- Expected output
+
+**Hypothesis**: (a guess — NOT confirmed yet, that's Phase 2)
+```
+
+Do not start Phase 2 until you have at least one finding written down.
+
+---
+
+## PHASE TWO — Deep Analysis and Fix
+
+> **Start this phase by loading the axon skill:**
+>
+> ```
+> skill_load({"skill": "axon"})
+> ```
+>
+> Now you may read source files, run `axon search`, `axon context`, and use
+> all other tools. The axon skill gives you richer query patterns and
+> context-building commands to confirm root causes efficiently.
+
+---
+
+### P2.1 — Confirm Root Cause with `axon search` / `axon context`
+
+For each Phase 1 finding, confirm the root cause before touching any code.
+
+```bash
+# Understand the relevant subsystem
+axon search "what is the Storage interface"
+axon search "how does scoped querying work"
+axon search "what does ScopedTo do"
+
+# Pull the actual source into context
+axon context --task "trace a scoped find query end to end" --tokens 10000
+axon context --task "AQL compiler edge cases and error handling" --tokens 10000
+axon context --task "how does axon find the database file" --tokens 6000
+```
+
+Only after you have read the relevant source and confirmed the root cause
+should you write any code.
+
+---
+
+### P2.2 — Produce Improvements
 
 Each finding must become a **concrete, verifiable change**.
 
-### Output Format for Each Finding
+#### Output Format
 
 ```
 ## Finding: <short title>
@@ -218,9 +210,9 @@ Each finding must become a **concrete, verifiable change**.
 **Category**: CLI Bug | AQL Bug | Error Handling | Documentation | Performance | Test Gap
 
 **Evidence**:
-- Command/query that reveals the problem
+- CLI command that reveals the problem
 - Actual output vs. expected output
-- Relevant source file(s) from `axon context`
+- Source file(s) confirmed with `axon context`
 
 **Root Cause**: (confirmed, not guessed)
 
@@ -233,56 +225,26 @@ Each finding must become a **concrete, verifiable change**.
 - How to confirm the fix works
 ```
 
-### Workflow for Each Fix
+#### Fix Workflow
 
-1. **Write failing test first** — confirm it fails with `go test -v -run TestXxx ./...`
+1. **Write failing test first** — `go test -v -run TestXxx ./...` must fail
 2. **Implement fix** — minimal change, no unrelated cleanup
-3. **Run full test suite** — `go test ./...`
-4. **Re-run the axon query that exposed the bug** — confirm it no longer triggers it
+3. **Run full test suite** — `go test ./...` must pass
+4. **Re-run the CLI command that exposed the bug** — confirm it behaves correctly
 5. **Update docs if needed** — README, grammar.md, AGENTS.md
 
 ---
 
-## Phase 6 — Validate with Re-Index
-
-After applying fixes, re-index and verify the graph is consistent:
+### P2.3 — Validate with Re-Index
 
 ```bash
 axon init --local .
 axon gc
 axon stats -v
 
-# Re-run the integrity checks from Phase 4.5
+# Repeat the integrity checks from P1.4
 axon query "SELECT uri, COUNT(*) as c FROM nodes GROUP BY uri HAVING c > 1"
 axon query "SELECT COUNT(*) FROM edges"
-```
-
----
-
-## Quick-Start Checklist
-
-Run this sequence at the start of any self-improvement session:
-
-```bash
-# 1. Rebuild the binary
-go build -o ./bin/axon ./cmd/axon
-
-# 2. Re-index
-axon init --local .
-
-# 3. Orientation
-axon info
-axon stats -v
-axon types
-axon edges
-
-# 4. Start exploring
-axon search "explain the indexer system"
-axon context --task "overview of all CLI commands" --tokens 8000
-
-# 5. Look for known weak spots
-axon context --task "AQL error handling and edge cases" --tokens 10000
-axon context --task "CLI output formatting consistency" --tokens 8000
 ```
 
 ---
@@ -291,9 +253,10 @@ axon context --task "CLI output formatting consistency" --tokens 8000
 
 | Anti-Pattern | Correct Approach |
 |---|---|
-| "I noticed this bug" without a query | Run the query, show the evidence |
+| Reading source before finishing Phase 1 | Complete all P1 steps first |
+| Loading the `axon` skill during Phase 1 | It is not permitted until Phase 2 |
+| "I noticed this bug" without a CLI command | Show the command and its output |
 | Changing code without a failing test | Write test → confirm fail → fix |
-| Editing multiple unrelated things in one pass | One finding = one fix = one test |
-| Relying on `--help` text as ground truth | Verify help text against source with `axon context` |
+| Editing multiple unrelated things at once | One finding = one fix = one test |
 | Assuming graph is up-to-date | Always `axon init --local .` at session start |
-| Fixing symptoms | Use `axon search "root cause of …"` + read source |
+| Fixing symptoms | Confirm root cause with `axon context` first |
