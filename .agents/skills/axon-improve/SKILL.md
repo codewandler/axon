@@ -2,8 +2,9 @@
 name: axon-improve
 description: >
   Self-improvement skill: use the axon CLI to explore the axon codebase itself,
-  surface confusion, bugs, and gaps in CLI usability, then produce concrete code
-  improvements to this repository.
+  surface confusion, bugs, and gaps in CLI usability, then reason about their
+  root causes and produce a structured improvement report. Read-only — no code
+  is written or changed.
 license: MIT
 compatibility: opencode
 trigger: self-improve, axon improve, improve axon, explore codebase, find bugs in axon, axon self-analysis
@@ -11,15 +12,40 @@ trigger: self-improve, axon improve, improve axon, explore codebase, find bugs i
 
 # Axon Self-Improvement Workflow
 
-This skill is divided into **two strictly ordered phases**.
+> ⚠️ **This workflow is strictly read-only.**
+> No source files are modified. No tests are written. No code is changed.
+> The sole output is a structured markdown report.
+
+This skill is divided into **three strictly ordered phases**.
 
 ```
-Phase 1 — CLI-only exploration   (no source reading, no axon skill)
-Phase 2 — Deep analysis and fix  (load axon skill, then read source)
+Phase 1 — CLI-only exploration     (no source reading, no axon skill)
+Phase 2 — Source analysis          (load axon skill, read code, confirm causes)
+Phase 3 — Report writing           (produce .agents/improve/<timestamp>-slug.md)
 ```
 
-Do not skip ahead. Phase 1 forces you to find problems the way a user would:
-through the CLI alone. Phase 2 is where you confirm root causes and write code.
+Do not skip ahead. Phase 1 forces you to find problems the way a user would.
+Phase 2 confirms root causes by reading source. Phase 3 turns everything into
+a durable, actionable report with reasoned fix suggestions.
+
+---
+
+## Output File
+
+At the end of the session, write a single file:
+
+```
+.agents/improve/<timestamp>-<slug>.md
+```
+
+- **timestamp**: `YYYYMMDD-HHMMSS` (e.g. `20250115-143022`)
+- **slug**: 2–4 word kebab-case summary of the session theme
+  (e.g. `cli-help-drift`, `aql-edge-cases`, `graph-integrity`)
+
+**Example path**: `.agents/improve/20250115-143022-cli-help-drift.md`
+
+The file is the primary deliverable. If the session ends without writing it,
+the work is lost. Write it at the end of Phase 3, not before.
 
 ---
 
@@ -142,9 +168,9 @@ axon stats -v -g
 
 ---
 
-### P1.5 — Record Findings (CLI-only evidence)
+### P1.5 — Record Raw Findings
 
-For each problem found, write a brief entry:
+For each problem found, write a brief entry in your working notes:
 
 ```
 ## Finding: <short title>
@@ -163,7 +189,7 @@ Do not start Phase 2 until you have at least one finding written down.
 
 ---
 
-## PHASE TWO — Deep Analysis and Fix
+## PHASE TWO — Source Analysis
 
 > **Start this phase by loading the axon skill:**
 >
@@ -174,12 +200,14 @@ Do not start Phase 2 until you have at least one finding written down.
 > Now you may read source files, run `axon search`, `axon context`, and use
 > all other tools. The axon skill gives you richer query patterns and
 > context-building commands to confirm root causes efficiently.
+>
+> ⚠️ You are still **read-only**. Do not edit, create, or delete any files.
 
 ---
 
-### P2.1 — Confirm Root Cause with `axon search` / `axon context`
+### P2.1 — Confirm Root Cause
 
-For each Phase 1 finding, confirm the root cause before touching any code.
+For each Phase 1 finding, confirm the root cause before writing the report.
 
 ```bash
 # Understand the relevant subsystem
@@ -193,49 +221,31 @@ axon context --task "AQL compiler edge cases and error handling" --tokens 10000
 axon context --task "how does axon find the database file" --tokens 6000
 ```
 
-Only after you have read the relevant source and confirmed the root cause
-should you write any code.
+For each finding, answer:
+- Which source file(s) are involved?
+- What is the exact code path that produces the problem?
+- Is the hypothesis from Phase 1 correct? If not, what is the real cause?
+
+Read the source. Reason carefully. Do not guess.
 
 ---
 
-### P2.2 — Produce Improvements
+### P2.2 — Reason About Why
 
-Each finding must become a **concrete, verifiable change**.
+For each confirmed finding, reason about:
 
-#### Output Format
+1. **Why does this happen?** — design decision, oversight, or refactor artifact?
+2. **What is the minimal change that would fix it?** — sketch the fix in prose or pseudocode
+3. **Are there related problems?** — does the same pattern appear elsewhere?
+4. **What is the risk of fixing it?** — could it break other things?
 
-```
-## Finding: <short title>
-
-**Category**: CLI Bug | AQL Bug | Error Handling | Documentation | Performance | Test Gap
-
-**Evidence**:
-- CLI command that reveals the problem
-- Actual output vs. expected output
-- Source file(s) confirmed with `axon context`
-
-**Root Cause**: (confirmed, not guessed)
-
-**Proposed Fix**:
-- File(s) to change
-- What to change (with code snippet)
-- Test to add
-
-**Verification**:
-- How to confirm the fix works
-```
-
-#### Fix Workflow
-
-1. **Write failing test first** — `go test -v -run TestXxx ./...` must fail
-2. **Implement fix** — minimal change, no unrelated cleanup
-3. **Run full test suite** — `go test ./...` must pass
-4. **Re-run the CLI command that exposed the bug** — confirm it behaves correctly
-5. **Update docs if needed** — README, grammar.md, AGENTS.md
+This reasoning becomes the content of the report. Capture it as you go.
 
 ---
 
 ### P2.3 — Validate with Re-Index
+
+After analysis, re-index to confirm the graph state used for findings is fresh:
 
 ```bash
 axon init --local .
@@ -249,14 +259,122 @@ axon query "SELECT COUNT(*) FROM edges"
 
 ---
 
+## PHASE THREE — Report Writing
+
+Write the output file at `.agents/improve/<timestamp>-<slug>.md`.
+
+The file must be created by the agent using `file_write`. Do not print it to
+the terminal and ask the user to save it. Write it directly.
+
+---
+
+### Report Structure
+
+```markdown
+# Axon Improvement Report — <YYYY-MM-DD>
+
+**Session focus**: <one sentence describing the theme of this run>
+**DB used**: `.axon/graph.db` (local) | `~/.axon/graph.db` (global)
+**Phases completed**: Phase 1 ✅ | Phase 2 ✅
+
+---
+
+## Summary
+
+<2–4 sentences: what was explored, how many findings, overall health>
+
+| # | Finding | Category | Severity |
+|---|---------|----------|----------|
+| 1 | <title> | CLI Bug  | 🔴 High  |
+| 2 | <title> | Docs     | 🟡 Low   |
+
+---
+
+## Finding 1: <title>
+
+**Category**: CLI Bug | AQL Bug | Error Handling | Documentation | Performance | Graph Integrity
+
+**Severity**: 🔴 High | 🟠 Medium | 🟡 Low | 🟢 Nice-to-have
+
+### Evidence
+
+- CLI command that reveals the problem:
+  ```bash
+  axon <command>
+  ```
+- Actual output:
+  ```
+  <paste output>
+  ```
+- Expected output: <describe>
+
+### Root Cause
+
+<Confirmed root cause from Phase 2 source reading. Name the file and
+function. Quote relevant lines if helpful. Explain WHY the bug exists —
+design decision, oversight, refactor artifact?>
+
+### Suggested Fix
+
+<Describe what should change, in prose or pseudocode. Be specific:
+name the file, function, and the nature of the change. Do not write
+actual code changes — describe them.>
+
+Example:
+> In `cmd/axon/find.go`, the `--output` flag default is `"table"` but
+> the help text says `"json"`. Change the help text string in the
+> `Flags().StringVarP(...)` call to match `"table"`.
+
+### Related Patterns
+
+<Does the same problem exist elsewhere? List files or commands
+where a similar issue might occur.>
+
+---
+
+## Finding 2: <title>
+
+... (repeat structure)
+
+---
+
+## Observations Without Findings
+
+<List things that looked suspicious but turned out fine, or things
+that are worth monitoring but don't rise to the level of a finding.>
+
+---
+
+## Recommended Next Steps
+
+<Ordered list of the top 3–5 actions a developer should take, based
+on severity and effort. Do not write "fix the code" — write what to
+investigate or change and why.>
+```
+
+---
+
+### Severity Guide
+
+| Severity | When to use |
+|---|---|
+| 🔴 High | Panic, data loss, silent wrong result, crash |
+| 🟠 Medium | Confusing error, misleading help text, broken example |
+| 🟡 Low | Missing test coverage, doc drift, minor inconsistency |
+| 🟢 Nice | Output polish, naming, minor UX improvement |
+
+---
+
 ## Anti-Patterns to Avoid
 
 | Anti-Pattern | Correct Approach |
 |---|---|
 | Reading source before finishing Phase 1 | Complete all P1 steps first |
-| Loading the `axon` skill during Phase 1 | It is not permitted until Phase 2 |
-| "I noticed this bug" without a CLI command | Show the command and its output |
-| Changing code without a failing test | Write test → confirm fail → fix |
-| Editing multiple unrelated things at once | One finding = one fix = one test |
+| Loading the `axon` skill during Phase 1 | Not permitted until Phase 2 |
+| "I noticed this bug" without a CLI command | Show the command and its actual output |
+| Writing or editing any source file | This workflow is read-only — document the suggestion |
+| Writing tests | Read-only — describe the test that should exist, do not write it |
+| Printing the report to chat and not saving it | Always write `.agents/improve/<timestamp>-slug.md` with `file_write` |
 | Assuming graph is up-to-date | Always `axon init --local .` at session start |
-| Fixing symptoms | Confirm root cause with `axon context` first |
+| Stating a root cause without reading the source | Confirm with `axon context` before writing the report |
+| One big "everything is fine" observation | Be specific — name files, functions, line behaviours |

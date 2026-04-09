@@ -1,7 +1,8 @@
 # Improvement Patterns Reference
 
-Concrete patterns for detecting and fixing problems in the axon codebase,
-grounded in queries you can actually run.
+Concrete patterns for detecting problems in the axon codebase and reasoning
+about their root causes. All detection is via CLI or source reading only.
+**No code is written.** These patterns produce suggestions for the report.
 
 ---
 
@@ -34,12 +35,10 @@ axon context --task "axon query command complete implementation" --tokens 6000
 - Every help-text example is syntactically valid and actually runs
 - Default values shown in help match the code
 
-**Fix template**:
-```go
-// In cmd/axon/<command>.go — add/fix the flag description
-cmd.Flags().StringVarP(&output, "output", "o", "table",
-    "Output format: table, json, count")  // ← update this string
-```
+**Suggested fix direction**:
+> In `cmd/axon/<command>.go`, find the `Flags().StringVarP(...)` (or similar) call
+> for the drifting flag. Update either the flag description string or the default
+> value so they match actual runtime behaviour.
 
 ---
 
@@ -75,24 +74,11 @@ bin/axon parse "SELECT file FROM (dir)-[:contains]->(file)"
 axon context --task "AQL compiler edge cases validate and compile" --tokens 12000
 ```
 
-**Fix template**:
-```go
-// In aql/validate.go — add missing validation
-func validatePatternVariables(q *Query) error {
-    // collect all variables defined in FROM patterns
-    // check all WHERE references are defined
-}
-```
-
-**Test template**:
-```go
-// In adapters/sqlite/aql_test.go
-func TestQueryEdgeCase_UndefinedVariable(t *testing.T) {
-    // setup test DB
-    // execute the bad query
-    // assert: returns error, not panic
-}
-```
+**Suggested fix direction**:
+> In `aql/validate.go`, describe the missing validation rule that should catch
+> the problematic query (e.g. "all WHERE variable references must be bound in
+> the FROM pattern"). Name the function that should be added or extended.
+> Describe what error message the user should see.
 
 ---
 
@@ -116,16 +102,11 @@ grep -rn "json\.Marshal" --include="*.go" . | grep -v "_test.go" | grep -v "err 
 axon context --task "error handling in storage flush and close" --tokens 6000
 ```
 
-**Fix template**:
-```go
-// Before (bad):
-s.storage.Flush()
-
-// After (good):
-if err := s.storage.Flush(); err != nil {
-    return fmt.Errorf("flush: %w", err)
-}
-```
+**Suggested fix direction**:
+> For each unchecked call, describe: the file, the function, the line behaviour,
+> and what the corrected pattern should look like. Example:
+> "In `x.go`, `s.storage.Flush()` on line N discards the error. It should be
+> wrapped and returned: `if err := s.storage.Flush(); err != nil { return … }`."
 
 ---
 
@@ -146,18 +127,10 @@ grep -rn "filepath.Walk\|filepath.WalkDir\|fs.WalkDir" --include="*.go" . | grep
 axon search "which indexers check context cancellation"
 ```
 
-**Fix template**:
-```go
-// In a WalkDir callback:
-return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-    select {
-    case <-ctx.Done():
-        return ctx.Err()  // ← add this
-    default:
-    }
-    // ... existing logic
-})
-```
+**Suggested fix direction**:
+> In the WalkDir callback in `indexer/<name>/indexer.go`, describe where a
+> `select { case <-ctx.Done(): return ctx.Err(); default: }` block should be
+> inserted and why. Note whether this affects UX (e.g. Ctrl-C responsiveness).
 
 ---
 
@@ -185,10 +158,10 @@ grep -i "axon search\|axon context\|axon info" README.md
 axon context --task "current AQL builder API public methods" --tokens 6000
 ```
 
-**Fix template**:
-- Add missing commands to README.md command reference table
-- Update grammar.md with missing clauses
-- Sync AGENTS.md builder examples with `aql/builder.go` actual API
+**Suggested fix direction**:
+> List which specific sections of which doc files need updating. For each,
+> describe the current (wrong) text and what it should say. Do not edit the
+> files — describe the change precisely enough that a developer can apply it.
 
 ---
 
@@ -200,21 +173,6 @@ axon context --task "current AQL builder API public methods" --tokens 6000
 
 ```bash
 # Find files with no corresponding test file
-axon query "
-  SELECT f.name, f.uri
-  FROM nodes f
-  WHERE f.type = 'fs:file'
-    AND f.data.ext = 'go'
-    AND f.name NOT GLOB '*_test.go'
-    AND f.name NOT GLOB 'main.go'
-    AND NOT EXISTS (
-      SELECT 1
-      FROM nodes t
-      WHERE t.type = 'fs:file'
-        AND t.name = REPLACE(f.name, '.go', '_test.go')
-    )
-" --explain   # note: JOIN-based query, use --explain to check
-
 # Simpler: list all non-test Go files and check for test siblings
 axon find --ext go --global | grep -v "_test.go" | while read f; do
   base=$(basename "$f" .go)
@@ -238,15 +196,10 @@ axon query "
 "
 ```
 
-**Fix template**:
-```go
-// In <package>/<file>_test.go
-func TestXxx_EdgeCase(t *testing.T) {
-    // arrange
-    // act
-    // assert
-}
-```
+**Suggested fix direction**:
+> For each untested path, describe: what scenario is not covered, what a test
+> would need to arrange/act/assert, and which package the test should live in.
+> Do not write the test — describe its structure and intent.
 
 ---
 
@@ -269,9 +222,10 @@ axon search "explain the output formatting system"
 axon search "what is the results package"
 ```
 
-**Fix template**:
-- Standardise all JSON output to use a consistent envelope (or consistently bare arrays)
-- Add a shared `OutputResult(format, data)` helper if one doesn't exist
+**Suggested fix direction**:
+> Describe which commands produce inconsistent shapes and what the unified
+> shape should be. Note whether a shared helper already exists that is being
+> bypassed, or whether one needs to be introduced.
 
 ---
 
@@ -293,14 +247,10 @@ axon context --task "database file auto-lookup logic" --tokens 6000
 axon search "how does axon find the database file"
 ```
 
-**Fix template**:
-```go
-// In cmd/axon/db.go
-if db == nil {
-    return fmt.Errorf("no axon database found. Run 'axon init .' to create one")
-    //                 ↑ actionable message with the exact command to run
-}
-```
+**Suggested fix direction**:
+> In `cmd/axon/db.go` (or wherever the lookup lives), describe what the current
+> error message says and what it should say. An actionable error includes the
+> exact command a user should run next (e.g. `axon init .`).
 
 ---
 
@@ -330,14 +280,10 @@ axon context --task "generation-based cleanup in indexers" --tokens 8000
 axon search "how does stale node cleanup work"
 ```
 
-**Fix template**:
-```go
-// In indexer/<name>/indexer.go — ensure cleanup is called
-func (idx *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
-    // ... index all nodes ...
-    return ictx.Storage.DeleteStaleByURIPrefix(ctx, uriPrefix, ictx.Generation)
-}
-```
+**Suggested fix direction**:
+> For each indexer that does not call `DeleteStaleByURIPrefix`, describe where
+> in its `Index` method the call should be added, and what URI prefix it should
+> use. Confirm the generation value flows through correctly.
 
 ---
 
@@ -359,18 +305,24 @@ bin/axon tree         # same
 bin/axon query "SELECT COUNT(*) FROM nodes"  # same
 ```
 
+**Suggested fix direction**:
+> Describe which command or sub-operation ignores `--local`, trace where the
+> flag is parsed and where it is lost, and explain what the correct resolution
+> order should be (e.g. explicit `--db-dir` → `--local` → walk-up discovery →
+> global fallback).
+
 ---
 
 ## Triage Priority Matrix
 
-Use this matrix to decide which findings to fix first:
+Use this matrix to decide the severity rating in the report:
 
-| Severity | Category | Fix First? |
+| Severity | Category | Example |
 |---|---|---|
-| 🔴 High | Panic / data loss | Always |
-| 🔴 High | Silent wrong result (AQL bug) | Always |
-| 🟠 Medium | Confusing error messages | Yes |
-| 🟠 Medium | Help text drift | Yes |
-| 🟡 Low | Missing test coverage | When convenient |
-| 🟡 Low | Documentation sync | When convenient |
-| 🟢 Nice | Output formatting consistency | Batch together |
+| 🔴 High | Panic / data loss | nil deref crash, silent data corruption |
+| 🔴 High | Silent wrong result | AQL query returns wrong rows without error |
+| 🟠 Medium | Confusing error messages | "error: EOF" with no context |
+| 🟠 Medium | Help text drift | `--output` default says "json" but is "table" |
+| 🟡 Low | Missing test coverage | no test for a non-trivial path |
+| 🟡 Low | Documentation sync | README describes removed flag |
+| 🟢 Nice | Output formatting | spacing inconsistency in table output |
