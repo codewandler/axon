@@ -1717,3 +1717,82 @@ func TestQuery_Edges_WithExists(t *testing.T) {
 		t.Errorf("expected 'references' edge count 1, got %d", result.Counts["references"])
 	}
 }
+
+// TestQuery_ScopedTo_FollowsHasEdges verifies that ScopedTo traverses
+// both 'contains' and 'has' edges, so non-filesystem nodes (e.g. md:document)
+// that are children of indexed files are found in a scoped search.
+// Regression test for: axon find --type "md:*" returning empty without --global.
+func TestQuery_ScopedTo_FollowsHasEdges(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("failed to create storage: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	ctx := context.Background()
+
+	// Build a small graph:
+	// root (fs:dir)
+	//  └─contains─> file.md (fs:file)
+	//                 └─has─> doc (md:document)
+	//                           └─has─> section (md:section)
+	rootDir := graph.NewNode("fs:dir").WithURI("file:///proj").WithName("proj")
+	mdFile := graph.NewNode("fs:file").WithURI("file:///proj/README.md").WithName("README.md")
+	doc := graph.NewNode("md:document").WithURI("file+md:///proj/README.md").WithName("README.md")
+	section := graph.NewNode("md:section").WithURI("file+md:///proj/README.md#intro").WithName("intro")
+
+	for _, n := range []*graph.Node{rootDir, mdFile, doc, section} {
+		if err := s.PutNode(ctx, n); err != nil {
+			t.Fatalf("PutNode: %v", err)
+		}
+	}
+	for _, e := range []*graph.Edge{
+		graph.NewEdge("contains", rootDir.ID, mdFile.ID), // fs:dir -> fs:file
+		graph.NewEdge("has", mdFile.ID, doc.ID),          // fs:file -> md:document
+		graph.NewEdge("has", doc.ID, section.ID),          // md:document -> md:section
+	} {
+		if err := s.PutEdge(ctx, e); err != nil {
+			t.Fatalf("PutEdge: %v", err)
+		}
+	}
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	// Scoped query for md:document from the root directory.
+	// This should find the document even though it is connected via 'has', not 'contains'.
+	q := aql.Nodes.SelectStar().
+		Where(aql.And(
+			aql.Type.Eq("md:document"),
+			aql.Nodes.ScopedTo(rootDir.ID),
+		)).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if len(result.Nodes) != 1 {
+		t.Errorf("expected 1 md:document node in scope, got %d", len(result.Nodes))
+	}
+	if len(result.Nodes) == 1 && result.Nodes[0].ID != doc.ID {
+		t.Errorf("expected doc node %s, got %s", doc.ID, result.Nodes[0].ID)
+	}
+
+	// Also verify md:section is reachable (transitively via has)
+	q2 := aql.Nodes.SelectStar().
+		Where(aql.And(
+			aql.Type.Eq("md:section"),
+			aql.Nodes.ScopedTo(rootDir.ID),
+		)).
+		Build()
+
+	result2, err := s.Query(ctx, q2)
+	if err != nil {
+		t.Fatalf("Query2 failed: %v", err)
+	}
+
+	if len(result2.Nodes) != 1 {
+		t.Errorf("expected 1 md:section node in scope, got %d", len(result2.Nodes))
+	}
+}
