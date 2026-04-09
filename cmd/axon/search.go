@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -1151,14 +1153,16 @@ func extractPackageFromPath(path string) string {
 }
 
 func shortenPath(path string) string {
-	// Find "axon" in path and return from there
-	if idx := strings.Index(path, "/axon/"); idx != -1 {
-		return path[idx+1:]
+	// Use CWD-relative path for accurate display in any project
+	if cwd, err := os.Getwd(); err == nil {
+		if rel, err2 := filepath.Rel(cwd, path); err2 == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
 	}
-	// Otherwise just return last 3 parts
-	parts := strings.Split(path, "/")
+	// Fallback: last 3 path components
+	parts := strings.Split(path, string(filepath.Separator))
 	if len(parts) > 3 {
-		return ".../" + strings.Join(parts[len(parts)-3:], "/")
+		return strings.Join(parts[len(parts)-3:], string(filepath.Separator))
 	}
 	return path
 }

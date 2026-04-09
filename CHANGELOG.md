@@ -11,6 +11,52 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Multi-variable pattern SELECT** (`SELECT a, b FROM pattern`) now returns
+  both nodes per match instead of silently discarding all but the last variable.
+  A new `ResultTypeRows` result type is introduced; the compiler generates
+  aliased SQL columns (`n0.id AS "a.id"`, `n1.name AS "b.name"`) to avoid
+  name collisions, and a new `executeRowsQuery` scanner populates
+  `QueryResult.Rows []map[string]any`. Field-level cross-variable selectors
+  (`SELECT a.name, b.name`) are also fixed by the same aliasing. CLI table
+  and JSON output both handle the new result type. (`adapters/sqlite/aql.go`,
+  `graph/storage.go`, `cmd/axon/query.go`)
+
+- **`ResultTypeRows` added to `graph.QueryResult`** — `Rows []map[string]any`
+  field for multi-variable pattern query results. (`graph/storage.go`)
+
+- Regression tests: `TestQuery_MultiVariablePatternSelect` (3 sub-cases:
+  whole-node SELECT, reversed SELECT, and field-selector SELECT). (`adapters/sqlite/aql_test.go`)
+
+### Fixed
+
+- **`go:ref` nodes had malformed URIs containing a double-slash** —
+  `pos.Filename` is an absolute path; appending it to `moduleURI + "/ref/"`
+  produced `go+file:///…/ref//abs/path`. The fix uses
+  `pkg.Module.Dir` (already in scope) to make the filename module-relative
+  before building the URI. Affects all 21 k+ `go:ref` nodes; correct URIs
+  are regenerated on the next `axon init`. (`indexer/golang/indexer.go`)
+
+- **`axon search` and `axon context` displayed wrong file paths** — both
+  `shortenPath` implementations used hardcoded heuristics (`"/axon/"` string
+  search; `/src/`, `/pkg/`, `/cmd/`, `/internal/` markers) that produced
+  incorrect paths for any project not named `axon` or with files outside
+  the marker directories. Both are now replaced with `filepath.Rel(cwd, path)`,
+  falling back to last-3-components only when the path is outside CWD.
+  (`cmd/axon/search.go`, `context/format.go`)
+
+- **`axon context` showed "0 files, 0 tokens" with no explanation when
+  symbols were not found** — e.g. `--task "how does AQL parsing work"` extracts
+  `"AQL"` as a symbol but no Go node is named `"AQL"`. A hint is now prepended
+  to the output when `Walk()` returns zero items but symbols were extracted,
+  listing the searched symbols and suggesting alternatives.
+  (`context/context.go`)
+
+---
+
+## [0.2.0] — 2026-04-10
+
+### Added
+
 - **AQL `IN (SELECT ...)` subquery support** — `IN` and `NOT IN` now accept a
   full `SELECT` statement in place of a literal value list, enabling queries like
   `SELECT id FROM nodes WHERE id NOT IN (SELECT from_id FROM edges)`. The parser,

@@ -970,8 +970,10 @@ func (i *Indexer) indexReferences(ctx context.Context, ictx *indexer.Context, mo
 			continue
 		}
 
-		// Create reference node
-		refURI := fmt.Sprintf("%s/ref/%s:%d:%d", moduleURI, pos.Filename, pos.Line, pos.Column)
+		// Create reference node — use module-relative filename to avoid double-slash
+		// (pos.Filename is absolute; pkg.Module.Dir is the module root)
+		relFilename := strings.TrimPrefix(pos.Filename, pkg.Module.Dir+string(filepath.Separator))
+		refURI := fmt.Sprintf("%s/ref/%s:%d:%d", moduleURI, relFilename, pos.Line, pos.Column)
 
 		refNode := graph.NewNode(types.TypeGoRef).
 			WithURI(refURI).

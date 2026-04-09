@@ -1248,9 +1248,15 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 		}
 	}
 
-	// Build SELECT clause - for now, assume selecting node variables
-	// TODO: Handle COUNT(*), etc.
-	selectSQL, err := s.compilePatternSelect(q.Select, nodeAliases, edgeAliases)
+	// Detect multi-variable SELECT: two or more distinct variables referenced.
+	// This requires aliased SQL columns to avoid duplicate column names.
+	multiVar := detectMultiVarSelect(q.Select, nodeAliases, edgeAliases)
+	if multiVar && resultType == graph.ResultTypeNodes {
+		resultType = graph.ResultTypeRows
+	}
+
+	// Build SELECT clause
+	selectSQL, err := s.compilePatternSelect(q.Select, nodeAliases, edgeAliases, multiVar)
 	if err != nil {
 		return "", nil, 0, err
 	}
@@ -1633,8 +1639,33 @@ func (s *Storage) compileCTEVariableLength(q *aql.Query, startNode *aql.NodePatt
 	return sql.String(), args, graph.ResultTypeNodes, nil
 }
 
+// detectMultiVarSelect returns true when the SELECT clause references more than
+// one distinct variable name, which would produce duplicate column names in SQL
+// (e.g. SELECT n0.*, n1.* both emit "id", "type", …).
+func detectMultiVarSelect(stmt *aql.SelectStmt, nodeAliases, edgeAliases map[string]string) bool {
+	seen := map[string]bool{}
+	for _, col := range stmt.Columns {
+		sel, ok := col.Expr.(*aql.Selector)
+		if !ok {
+			continue
+		}
+		if len(sel.Parts) < 1 {
+			continue
+		}
+		varName := sel.Parts[0]
+		if _, isNode := nodeAliases[varName]; isNode {
+			seen[varName] = true
+		} else if _, isEdge := edgeAliases[varName]; isEdge {
+			seen[varName] = true
+		}
+	}
+	return len(seen) > 1
+}
+
 // compilePatternSelect compiles the SELECT clause for pattern queries.
-func (s *Storage) compilePatternSelect(stmt *aql.SelectStmt, nodeAliases map[string]string, edgeAliases map[string]string) (string, error) {
+// When multiVar is true, generates aliased columns ("var.field") to avoid
+// name collisions from multiple node variables in the same row.
+func (s *Storage) compilePatternSelect(stmt *aql.SelectStmt, nodeAliases map[string]string, edgeAliases map[string]string, multiVar bool) (string, error) {
 	var sqlBuilder strings.Builder
 	sqlBuilder.WriteString("SELECT")
 
@@ -1642,44 +1673,56 @@ func (s *Storage) compilePatternSelect(stmt *aql.SelectStmt, nodeAliases map[str
 		sqlBuilder.WriteString(" DISTINCT")
 	}
 
-	// SELECT can include node variables, edge variables, or field selectors
-	// For now, support simple variable selectors only
+	// Standard node fields expanded for whole-variable multi-var SELECTs
+	nodeFields := []string{"id", "type", "uri", "key", "name", "labels", "data", "generation"}
+
 	for i, col := range stmt.Columns {
 		if i > 0 {
 			sqlBuilder.WriteString(",")
 		}
 		sqlBuilder.WriteString(" ")
 
-		// Check if this is a variable selector
 		if sel, ok := col.Expr.(*aql.Selector); ok {
 			if len(sel.Parts) == 1 {
 				// Simple variable: SELECT file or SELECT e
 				varName := sel.Parts[0]
 
-				// Check if it's a node variable
 				if alias, ok := nodeAliases[varName]; ok {
-					// Select all columns from this node
-					sqlBuilder.WriteString(alias)
-					sqlBuilder.WriteString(".*")
+					if multiVar {
+						// Expand to aliased individual columns to avoid name collisions
+						parts := make([]string, len(nodeFields))
+						for j, field := range nodeFields {
+							parts[j] = fmt.Sprintf(`%s.%s AS "%s.%s"`, alias, field, varName, field)
+						}
+						sqlBuilder.WriteString(strings.Join(parts, ", "))
+					} else {
+						sqlBuilder.WriteString(alias)
+						sqlBuilder.WriteString(".*")
+					}
 					continue
 				}
 
-				// Check if it's an edge variable
 				if alias, ok := edgeAliases[varName]; ok {
-					// Select all columns from this edge
 					sqlBuilder.WriteString(alias)
 					sqlBuilder.WriteString(".*")
 					continue
 				}
 
 				return "", fmt.Errorf("undefined variable: %s", varName)
+
 			} else if len(sel.Parts) > 1 {
 				// Field selector: SELECT file.name or SELECT file.data.ext
 				resolved, err := s.resolvePatternSelector(sel, nodeAliases, edgeAliases)
 				if err != nil {
 					return "", err
 				}
-				sqlBuilder.WriteString(resolved)
+				if multiVar {
+					// Alias as "var.field" so rows.Columns() returns the dotted name
+					aliasName := strings.Join(sel.Parts, ".")
+					sqlBuilder.WriteString(fmt.Sprintf(`%s AS "%s"`, resolved, aliasName))
+				} else {
+					sqlBuilder.WriteString(resolved)
+				}
 				continue
 			}
 		}
@@ -2647,6 +2690,14 @@ func (s *Storage) executeQuery(ctx context.Context, query *aql.Query, sql string
 	result := &graph.QueryResult{Type: resultType}
 
 	switch resultType {
+	case graph.ResultTypeRows:
+		cols, rows, err := s.executeRowsQuery(ctx, sql, args)
+		if err != nil {
+			return nil, err
+		}
+		result.Rows = rows
+		result.SelectedColumns = cols
+
 	case graph.ResultTypeNodes:
 		nodes, err := s.executeNodeQuery(ctx, query, sql, args)
 		if err != nil {
@@ -2703,6 +2754,56 @@ func extractSelectedColumns(query *aql.Query) []string {
 		}
 	}
 	return cols
+}
+
+// executeRowsQuery executes SQL for multi-variable pattern queries, returning
+// each row as a map[string]any keyed by the aliased column name (e.g. "a.id").
+// JSON columns (labels, data) are parsed into Go values.
+func (s *Storage) executeRowsQuery(ctx context.Context, sqlQuery string, args []any) ([]string, []map[string]any, error) {
+	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var result []map[string]any
+	for rows.Next() {
+		scanDest := make([]any, len(cols))
+		for i := range scanDest {
+			scanDest[i] = new(any)
+		}
+		if err := rows.Scan(scanDest...); err != nil {
+			return nil, nil, err
+		}
+
+		row := make(map[string]any, len(cols))
+		for i, col := range cols {
+			v := *(scanDest[i].(*any))
+			// Parse JSON columns into Go values for cleaner output
+			if str, ok := v.(string); ok && str != "" {
+				if strings.HasSuffix(col, ".labels") {
+					var labels []string
+					if json.Unmarshal([]byte(str), &labels) == nil {
+						v = labels
+					}
+				} else if strings.HasSuffix(col, ".data") {
+					var data any
+					if json.Unmarshal([]byte(str), &data) == nil {
+						v = data
+					}
+				}
+			}
+			row[col] = v
+		}
+		result = append(result, row)
+	}
+
+	return cols, result, rows.Err()
 }
 
 // executeNodeQuery executes SQL returning nodes.

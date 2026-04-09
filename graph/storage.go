@@ -138,9 +138,10 @@ type AQLQuerier interface {
 type ResultType int
 
 const (
-	ResultTypeNodes ResultType = iota
+	ResultTypeNodes  ResultType = iota
 	ResultTypeEdges
 	ResultTypeCounts
+	ResultTypeRows // Multi-variable or cross-variable field-selector pattern queries
 )
 
 // QueryResult holds the results of an AQL query execution.
@@ -148,17 +149,16 @@ const (
 // - ResultTypeNodes: Nodes slice is populated
 // - ResultTypeEdges: Edges slice is populated
 // - ResultTypeCounts: Counts slice is populated
+// - ResultTypeRows: Rows slice is populated (multi-variable pattern SELECT)
 //
-// Note: When SELECT specifies specific columns (e.g., "SELECT name, type FROM nodes"),
-// only those fields will be populated in the returned Node/Edge structs.
-// Other fields will have their zero values.
 // SelectedColumns is set for non-star SELECT queries, in SELECT order.
 type QueryResult struct {
 	Type            ResultType
 	Nodes           []*Node
 	Edges           []*Edge
-	Counts          []CountItem // For GROUP BY queries, in SQLite result order
-	SelectedColumns []string    // Column names in SELECT order; nil means SELECT *
+	Counts          []CountItem      // For GROUP BY queries, in SQLite result order
+	SelectedColumns []string         // Column names in SELECT order; nil means SELECT *
+	Rows            []map[string]any // For ResultTypeRows: multi-variable pattern results
 }
 
 // Count returns the scalar count value for SELECT COUNT(*) queries.

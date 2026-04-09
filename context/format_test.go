@@ -177,18 +177,19 @@ func TestShortenPath(t *testing.T) {
 		want string
 	}{
 		{
-			// /src/ is found first, so path starts from there
+			// Path outside CWD: falls back to last 3 components
 			"/home/user/go/src/myproject/pkg/storage/storage.go",
-			"src/myproject/pkg/storage/storage.go",
+			"pkg/storage/storage.go",
 		},
 		{
+			// Path outside CWD: last 3 components happen to be "internal/db/db.go"
 			"/home/user/project/internal/db/db.go",
 			"internal/db/db.go",
 		},
 		{
-			// /pkg/ is found, path starts from there
+			// Path outside CWD: last 3 components
 			"/home/user/go/pkg/mod/github.com/example/repo/file.go",
-			"pkg/mod/github.com/example/repo/file.go",
+			"example/repo/file.go",
 		},
 		{
 			"/short/path.go",

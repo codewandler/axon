@@ -160,6 +160,8 @@ func printQueryResultJSON(result *graph.QueryResult) error {
 			rows[i] = countRow{Key: item.Name, Count: item.Count}
 		}
 		data = rows
+	case graph.ResultTypeRows:
+		data = result.Rows
 	}
 
 	enc := json.NewEncoder(os.Stdout)
@@ -183,6 +185,8 @@ func printQueryResultCount(result *graph.QueryResult) error {
 		for _, item := range result.Counts {
 			count += item.Count
 		}
+	case graph.ResultTypeRows:
+		count = len(result.Rows)
 	}
 	fmt.Println(count)
 	return nil
@@ -197,9 +201,43 @@ func printQueryResultTable(result *graph.QueryResult) error {
 		return printEdgesTable(result.Edges)
 	case graph.ResultTypeCounts:
 		return printCountsTable(result.Counts)
+	case graph.ResultTypeRows:
+		return printRowsTable(result.Rows, result.SelectedColumns)
 	default:
 		return fmt.Errorf("unknown result type: %v", result.Type)
 	}
+}
+
+// printRowsTable prints multi-variable pattern query results as a table.
+func printRowsTable(rows []map[string]any, cols []string) error {
+	if len(rows) == 0 {
+		fmt.Println("No results")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	defer w.Flush()
+
+	fmt.Fprintln(w, strings.Join(cols, "\t"))
+	for _, row := range rows {
+		vals := make([]string, len(cols))
+		for i, col := range cols {
+			v := row[col]
+			if v == nil {
+				vals[i] = ""
+				continue
+			}
+			switch sv := v.(type) {
+			case string:
+				vals[i] = truncate(sv, 40)
+			default:
+				b, _ := json.Marshal(v)
+				vals[i] = truncate(string(b), 40)
+			}
+		}
+		fmt.Fprintln(w, strings.Join(vals, "\t"))
+	}
+	return nil
 }
 
 // printNodesTable prints nodes as a table.

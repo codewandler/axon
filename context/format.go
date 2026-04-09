@@ -3,6 +3,7 @@ package context
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -176,30 +177,19 @@ func formatJSON(result *FitResult) string {
 	return string(data)
 }
 
-// shortenPath shortens a file path for display.
+// shortenPath shortens a file path for display using CWD-relative paths.
 func shortenPath(path string) string {
-	// Try to find a common project marker
-	markers := []string{"/src/", "/pkg/", "/cmd/", "/internal/"}
-	for _, marker := range markers {
-		if idx := strings.LastIndex(path, marker); idx != -1 {
-			return path[idx+1:]
+	// Use CWD-relative path for accurate display in any project
+	if cwd, err := os.Getwd(); err == nil {
+		if rel, err2 := filepath.Rel(cwd, path); err2 == nil && !strings.HasPrefix(rel, "..") {
+			return rel
 		}
 	}
-
-	// Try to shorten based on common project names
-	if idx := strings.Index(path, "/github.com/"); idx != -1 {
-		parts := strings.SplitN(path[idx+12:], "/", 3)
-		if len(parts) >= 3 {
-			return parts[1] + "/" + parts[2]
-		}
-	}
-
-	// Fall back to last 3 path components
+	// Fallback: last 3 path components
 	parts := strings.Split(path, string(filepath.Separator))
 	if len(parts) > 3 {
 		return strings.Join(parts[len(parts)-3:], string(filepath.Separator))
 	}
-
 	return path
 }
 

@@ -871,13 +871,13 @@ func TestPattern_SelectMultipleVariables(t *testing.T) {
 		t.Fatalf("Pattern query failed: %v", err)
 	}
 
-	// Result type is nodes (default when no edge variables selected)
-	if result.Type != graph.ResultTypeNodes {
-		t.Errorf("expected ResultTypeNodes, got %v", result.Type)
+	// With two node variables, result is now ResultTypeRows (aliased columns)
+	if result.Type != graph.ResultTypeRows {
+		t.Errorf("expected ResultTypeRows, got %v", result.Type)
 	}
 
-	// Should get results (actual behavior: returns nodes with columns from both)
-	if len(result.Nodes) == 0 {
+	// Should get results
+	if len(result.Rows) == 0 {
 		t.Error("expected some results")
 	}
 }
@@ -1006,8 +1006,8 @@ func TestPattern_UndirectedEdge(t *testing.T) {
 	// Should get 2 results (one for each direction of the same edge):
 	// 1. a=test1.go, b=main.go (forward)
 	// 2. a=main.go, b=test1.go (reverse)
-	if len(result.Nodes) != 2 {
-		t.Errorf("expected 2 results (both directions), got %d", len(result.Nodes))
+	if len(result.Rows) != 2 {
+		t.Errorf("expected 2 results (both directions), got %d", len(result.Rows))
 	}
 }
 
@@ -1031,14 +1031,16 @@ func TestPattern_UndirectedEdgeWithTypes(t *testing.T) {
 	}
 
 	// Should still get 2 results
-	if len(result.Nodes) != 2 {
-		t.Errorf("expected 2 results, got %d", len(result.Nodes))
+	if len(result.Rows) != 2 {
+		t.Errorf("expected 2 results, got %d", len(result.Rows))
 	}
 
 	// Verify all results are fs:file
-	for _, node := range result.Nodes {
-		if node.Type != "fs:file" {
-			t.Errorf("expected fs:file, got %s", node.Type)
+	for _, row := range result.Rows {
+		for _, varName := range []string{"file1", "file2"} {
+			if typ, ok := row[varName+".type"].(string); ok && typ != "fs:file" {
+				t.Errorf("expected fs:file for %s, got %s", varName, typ)
+			}
 		}
 	}
 }
@@ -1112,8 +1114,8 @@ func TestPattern_MultipleTransitive(t *testing.T) {
 	}
 
 	// Should get test1.go (the only .go file in src dir)
-	if len(result.Nodes) != 1 {
-		t.Errorf("expected 1 .go file, got %d", len(result.Nodes))
+	if len(result.Rows) != 1 {
+		t.Errorf("expected 1 .go file, got %d", len(result.Rows))
 	}
 }
 
@@ -1868,4 +1870,121 @@ func TestQuery_WhereNotInSubquery(t *testing.T) {
 			t.Logf("  node: %s (%s)", n.Name, n.ID)
 		}
 	}
+}
+
+// TestQuery_MultiVariablePatternSelect tests that SELECT a, b FROM pattern
+// returns both nodes per match rather than silently returning only the last one.
+func TestQuery_MultiVariablePatternSelect(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+	p := aql.NewParser()
+
+	t.Run("SELECT a, b returns both whole nodes", func(t *testing.T) {
+		// src -> test1.go and src -> test2.py via "contains"
+		query, err := p.Parse(`SELECT a, b FROM (a:fs:dir)-[:contains]->(b:fs:file)`)
+		if err != nil {
+			t.Fatalf("Parse failed: %v", err)
+		}
+
+		result, err := s.Query(ctx, query)
+		if err != nil {
+			t.Fatalf("Query failed: %v", err)
+		}
+
+		if result.Type != graph.ResultTypeRows {
+			t.Fatalf("expected ResultTypeRows, got %v", result.Type)
+		}
+
+		// src contains test1.go, test2.py; cmd contains main.go → 3 rows
+		if len(result.Rows) != 3 {
+			t.Errorf("expected 3 rows, got %d", len(result.Rows))
+		}
+
+		for i, row := range result.Rows {
+			// Both node ID fields must be present and distinct
+			aID, aOk := row["a.id"].(string)
+			bID, bOk := row["b.id"].(string)
+			if !aOk || !bOk {
+				t.Errorf("row %d: missing a.id or b.id: %v", i, row)
+				continue
+			}
+			if aID == bID {
+				t.Errorf("row %d: a.id == b.id (%s), nodes not distinct", i, aID)
+			}
+
+			// a must be a dir, b must be a file
+			aType, _ := row["a.type"].(string)
+			bType, _ := row["b.type"].(string)
+			if aType != "fs:dir" {
+				t.Errorf("row %d: expected a.type=fs:dir, got %q", i, aType)
+			}
+			if bType != "fs:file" {
+				t.Errorf("row %d: expected b.type=fs:file, got %q", i, bType)
+			}
+		}
+	})
+
+	t.Run("SELECT b, a reversed order still correct", func(t *testing.T) {
+		query, err := p.Parse(`SELECT b, a FROM (a:fs:dir)-[:contains]->(b:fs:file)`)
+		if err != nil {
+			t.Fatalf("Parse failed: %v", err)
+		}
+
+		result, err := s.Query(ctx, query)
+		if err != nil {
+			t.Fatalf("Query failed: %v", err)
+		}
+
+		if result.Type != graph.ResultTypeRows {
+			t.Fatalf("expected ResultTypeRows, got %v", result.Type)
+		}
+
+		// Both variables must still appear with correct types
+		for i, row := range result.Rows {
+			aType, _ := row["a.type"].(string)
+			bType, _ := row["b.type"].(string)
+			if aType != "fs:dir" {
+				t.Errorf("row %d: expected a.type=fs:dir, got %q", i, aType)
+			}
+			if bType != "fs:file" {
+				t.Errorf("row %d: expected b.type=fs:file, got %q", i, bType)
+			}
+		}
+	})
+
+	t.Run("SELECT a.name, b.name gives separate field values", func(t *testing.T) {
+		// Filter to src dir only to get predictable results
+		query, err := p.Parse(
+			`SELECT a.name, b.name FROM (a:fs:dir)-[:contains]->(b:fs:file) WHERE a.name = 'src' ORDER BY b.name`)
+		if err != nil {
+			t.Fatalf("Parse failed: %v", err)
+		}
+
+		result, err := s.Query(ctx, query)
+		if err != nil {
+			t.Fatalf("Query failed: %v", err)
+		}
+
+		if result.Type != graph.ResultTypeRows {
+			t.Fatalf("expected ResultTypeRows, got %v", result.Type)
+		}
+
+		// src contains test1.go and test2.py
+		if len(result.Rows) != 2 {
+			t.Errorf("expected 2 rows, got %d", len(result.Rows))
+		}
+
+		for i, row := range result.Rows {
+			aName, _ := row["a.name"].(string)
+			bName, _ := row["b.name"].(string)
+			if aName != "src" {
+				t.Errorf("row %d: expected a.name=src, got %q", i, aName)
+			}
+			if bName == "src" || bName == "" {
+				t.Errorf("row %d: expected b.name to be a file name, got %q", i, bName)
+			}
+			if aName == bName {
+				t.Errorf("row %d: a.name == b.name (%q), columns not distinct", i, aName)
+			}
+		}
+	})
 }

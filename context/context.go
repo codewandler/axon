@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/codewandler/axon/graph"
@@ -47,7 +48,19 @@ func Gather(ctx context.Context, storage graph.Storage, opts Options) (string, e
 	}
 	items, err := Walk(ctx, storage, task, walkOpts)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("walking graph: %w", err)
+	}
+
+	// Emit a hint when symbols were extracted but nothing was found in the graph.
+	// Common causes: acronyms (AQL, HTTP), unexported names, or misspellings.
+	var symbolHint string
+	if len(items) == 0 && len(task.Symbols) > 0 {
+		symbolHint = fmt.Sprintf(
+			"> **Note**: No Go symbols found matching %v. "+
+				"Try exact symbol names like `Parser`, `Query`, or `NewNode`. "+
+				"Use `axon search \"list structs\"` to browse available symbols.\n\n",
+			task.Symbols,
+		)
 	}
 
 	// Read source code
@@ -62,9 +75,9 @@ func Gather(ctx context.Context, storage graph.Storage, opts Options) (string, e
 
 	// Format output
 	if opts.ManifestOnly {
-		return FormatManifest(result), nil
+		return symbolHint + FormatManifest(result), nil
 	}
-	return Format(result, opts.Output), nil
+	return symbolHint + Format(result, opts.Output), nil
 }
 
 // GatherToWriter collects context and writes directly to a writer.
