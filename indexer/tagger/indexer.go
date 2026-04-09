@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
 	"github.com/codewandler/axon/types"
 )
@@ -272,13 +273,9 @@ func (i *Indexer) Handles(uri string) bool {
 }
 
 func (i *Indexer) Subscriptions() []indexer.Subscription {
-	// Subscribe to all file entry visits
-	return []indexer.Subscription{
-		{
-			EventType: indexer.EventEntryVisited,
-			NodeType:  types.TypeFile,
-		},
-	}
+	// Tagger is now called directly by FS indexer, no event subscriptions needed.
+	// This eliminates event channel overhead for high-volume file indexing.
+	return nil
 }
 
 func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
@@ -302,22 +299,36 @@ func (i *Indexer) HandleEvent(ctx context.Context, ictx *indexer.Context, event 
 		relPath = event.Name
 	}
 
+	if i.tagNode(node, event.NodeType, event.Name, relPath) {
+		// Emit updated node to storage
+		return ictx.Emitter.EmitNode(ctx, node)
+	}
+	return nil
+}
+
+// TagNode applies labels to a node based on matching rules.
+// This is the direct call interface for use by other indexers (e.g., FS indexer).
+// It modifies the node in-place and returns true if any labels were added.
+func (i *Indexer) TagNode(node *graph.Node, nodeType, name, relPath string) bool {
+	return i.tagNode(node, nodeType, name, relPath)
+}
+
+// tagNode is the internal implementation.
+func (i *Indexer) tagNode(node *graph.Node, nodeType, name, relPath string) bool {
 	// Collect labels from all matching rules
 	var labels []string
 	for _, rule := range i.config.Rules {
-		if rule.Matches(event.NodeType, event.Name, relPath) {
+		if rule.Matches(nodeType, name, relPath) {
 			labels = append(labels, rule.Labels...)
 		}
 	}
 
 	// If no labels matched, nothing to do
 	if len(labels) == 0 {
-		return nil
+		return false
 	}
 
 	// Add labels to the node (deduplicating)
 	node.AddLabels(labels...)
-
-	// Update the node in storage (goes to buffer, no DB round-trip)
-	return ictx.Emitter.EmitNode(ctx, node)
+	return true
 }

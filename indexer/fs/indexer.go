@@ -10,6 +10,7 @@ import (
 
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
+	"github.com/codewandler/axon/indexer/tagger"
 	"github.com/codewandler/axon/progress"
 	"github.com/codewandler/axon/types"
 )
@@ -23,11 +24,15 @@ type Config struct {
 // Indexer indexes filesystem directories and files.
 type Indexer struct {
 	config Config
+	tagger *tagger.Indexer
 }
 
 // New creates a new filesystem indexer with the given configuration.
 func New(cfg Config) *Indexer {
-	return &Indexer{config: cfg}
+	return &Indexer{
+		config: cfg,
+		tagger: tagger.New(tagger.Config{}),
+	}
 }
 
 func (i *Indexer) Name() string {
@@ -235,12 +240,20 @@ func (i *Indexer) indexEntry(ctx context.Context, ictx *indexer.Context, entry d
 			})
 	}
 
+	// Apply labels via tagger (direct call, no event overhead)
+	if node.Type == types.TypeFile {
+		rootPath := types.URIToPath(ictx.Root)
+		relPath, _ := filepath.Rel(rootPath, path)
+		i.tagger.TagNode(node, node.Type, d.Name(), relPath)
+	}
+
 	if err := ictx.Emitter.EmitNode(ctx, node); err != nil {
 		return nil, err
 	}
 	nodeIDs[path] = node.ID
 
 	// Emit event for visited entry (including ignored dirs for git indexer)
+	// Note: tagger no longer subscribes to these events (handled above)
 	if ictx.Events != nil {
 		ictx.Events <- indexer.Event{
 			Type:     indexer.EventEntryVisited,

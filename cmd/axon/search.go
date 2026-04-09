@@ -11,10 +11,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var askCmd = &cobra.Command{
-	Use:   "ask <question>",
-	Short: "Ask natural language questions about the codebase",
-	Long: `Ask natural language questions about the indexed codebase.
+var searchCmd = &cobra.Command{
+	Use:   "search <question>",
+	Short: "Search the codebase using natural language",
+	Long: `Search the indexed codebase using natural language.
 
 This command interprets your question and queries the graph to provide
 concise, structured answers optimized for AI agent consumption.
@@ -22,57 +22,57 @@ concise, structured answers optimized for AI agent consumption.
 Supported question types:
 
   WHAT IS / DESCRIBE:
-    axon ask "what is Storage"
-    axon ask "describe the Event struct"
+    axon search "what is Storage"
+    axon search "describe the Event struct"
 
   FIND REFERENCES:
-    axon ask "who calls NewNode"
-    axon ask "references to EmitNode"
-    axon ask "find usages of Storage"
+    axon search "who calls NewNode"
+    axon search "references to EmitNode"
+    axon search "find usages of Storage"
 
   IMPACT ANALYSIS:
-    axon ask "what uses Storage"
-    axon ask "impact of changing NewNode"
-    axon ask "what depends on graph package"
+    axon search "what uses Storage"
+    axon search "impact of changing NewNode"
+    axon search "what depends on graph package"
 
   LIST / FIND:
-    axon ask "list interfaces"          # exported only
-    axon ask "list all functions"       # include unexported
-    axon ask "find functions that return error"
-    axon ask "show Event types"
+    axon search "list interfaces"          # exported only
+    axon search "list all functions"       # include unexported
+    axon search "find functions that return error"
+    axon search "show Event types"
 
   METHODS:
-    axon ask "what methods does Storage have"
-    axon ask "methods of Node"
+    axon search "what methods does Storage have"
+    axon search "methods of Node"
 
   COMPARE:
-    axon ask "compare Storage and Graph"
-    axon ask "diff between Node and Edge"
+    axon search "compare Storage and Graph"
+    axon search "diff between Node and Edge"
 
   WHERE DEFINED:
-    axon ask "where is NewNode defined"
-    axon ask "definition of Storage"
+    axon search "where is NewNode defined"
+    axon search "definition of Storage"
 
   IMPLEMENTATIONS:
-    axon ask "what implements Storage"
-    axon ask "implementations of Indexer"
+    axon search "what implements Storage"
+    axon search "implementations of Indexer"
 
   EXPLAIN:
-    axon ask "explain the indexer system"
-    axon ask "how does event routing work"
+    axon search "explain the indexer system"
+    axon search "how does event routing work"
 
 Examples:
-  axon ask "what is the Indexer interface"
-  axon ask "who calls EmitNode"
-  axon ask "list structs"
-  axon ask "methods of Storage"
-  axon ask "compare Node and Edge"`,
+  axon search "what is the Indexer interface"
+  axon search "who calls EmitNode"
+  axon search "list structs"
+  axon search "methods of Storage"
+  axon search "compare Node and Edge"`,
 	Args: cobra.MinimumNArgs(1),
-	RunE: runAsk,
+	RunE: runSearch,
 }
 
 func init() {
-	rootCmd.AddCommand(askCmd)
+	rootCmd.AddCommand(searchCmd)
 }
 
 // questionType represents the type of question being asked
@@ -98,7 +98,7 @@ type parsedQuestion struct {
 	Filters []string // Additional filters
 }
 
-func runAsk(cmd *cobra.Command, args []string) error {
+func runSearch(cmd *cobra.Command, args []string) error {
 	question := strings.Join(args, " ")
 
 	cmdCtx, err := openDB(false)
@@ -240,8 +240,8 @@ func answerWhatIs(ctx context.Context, storage graph.Storage, q parsedQuestion) 
 	if len(result.Nodes) == 0 {
 		fmt.Printf("No definition found for '%s'\n", subject)
 		fmt.Println("\nTry:")
-		fmt.Printf("  axon ask \"references to %s\"\n", subject)
-		fmt.Printf("  axon ask \"list %s\"\n", subject)
+		fmt.Printf("  axon search \"references to %s\"\n", subject)
+		fmt.Printf("  axon search \"list %s\"\n", subject)
 		return nil
 	}
 
@@ -1043,9 +1043,9 @@ func answerFuzzy(ctx context.Context, storage graph.Storage, q parsedQuestion, o
 	if len(result.Nodes) == 0 {
 		fmt.Printf("No results found for '%s'\n\n", subject)
 		fmt.Println("Try:")
-		fmt.Println("  axon ask \"what is <symbol>\"")
-		fmt.Println("  axon ask \"who calls <function>\"")
-		fmt.Println("  axon ask \"list all interfaces\"")
+		fmt.Println("  axon search \"what is <symbol>\"")
+		fmt.Println("  axon search \"who calls <function>\"")
+		fmt.Println("  axon search \"list all interfaces\"")
 		return nil
 	}
 

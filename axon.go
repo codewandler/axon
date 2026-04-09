@@ -16,7 +16,6 @@ import (
 	"github.com/codewandler/axon/indexer/golang"
 	"github.com/codewandler/axon/indexer/markdown"
 	"github.com/codewandler/axon/indexer/project"
-	"github.com/codewandler/axon/indexer/tagger"
 	"github.com/codewandler/axon/progress"
 	"github.com/codewandler/axon/types"
 )
@@ -25,16 +24,30 @@ const (
 	// eventChannelBuffer is the buffer size for event channels.
 	// This provides backpressure - if subscribers are slow, events will queue
 	// up to this limit before the dispatcher drops them with a warning.
-	eventChannelBuffer = 100
+	eventChannelBuffer = 10000
 )
 
 // DefaultFSIgnore contains the default patterns to ignore when indexing.
 var DefaultFSIgnore = []string{
 	".git",
 	".axon",
+	".idea",   // JetBrains IDE config
+	".vscode", // VS Code config
 	"node_modules",
 	"__pycache__",
 	".DS_Store",
+	"target",      // Rust/Cargo build output
+	"vendor",      // Go vendor, PHP composer
+	".venv",       // Python virtual environments
+	".virtualenv", // Python virtual environments (alt)
+	"venv",        // Python virtual environments (alt)
+	"env",         // Python virtual environments (alt)
+	"dist",        // JS/TS build output
+	"build",       // Generic build output
+	".tox",        // Python tox testing
+	".pytest_cache",
+	".mypy_cache",
+	"site-packages", // Python packages (catches nested ones)
 }
 
 // Config holds configuration for an Axon instance.
@@ -104,7 +117,7 @@ func New(cfg Config) (*Axon, error) {
 	idxRegistry.Register(golang.New())
 	idxRegistry.Register(markdown.New())
 	idxRegistry.Register(project.New())
-	idxRegistry.Register(tagger.New(tagger.Config{}))
+	// Note: tagger is now called directly by fs indexer, not via events
 
 	return &Axon{
 		graph:    g,
