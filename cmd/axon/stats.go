@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/codewandler/axon/aql"
+	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/types"
 	"github.com/spf13/cobra"
 	"golang.org/x/text/language"
@@ -94,10 +95,10 @@ func runStats(cmd *cobra.Command, args []string) error {
 	ctx := cmdCtx.Ctx
 	cwd := cmdCtx.Cwd
 
-	var nodeTypes map[string]int
-	var edgeTypes map[string]int
-	var extensions map[string]int
-	var labels map[string]int
+	var nodeTypes []graph.CountItem
+	var edgeTypes []graph.CountItem
+	var extensions []graph.CountItem
+	var labels []graph.CountItem
 
 	if statsGlobal {
 		// Global: Use AQL queries for efficiency
@@ -112,7 +113,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 		}
 		nodeTypes = nodeResult.Counts
 		for _, c := range nodeTypes {
-			data.Nodes += c
+			data.Nodes += c.Count
 		}
 
 		// Edge count and types
@@ -126,7 +127,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 		}
 		edgeTypes = edgeResult.Counts
 		for _, c := range edgeTypes {
-			data.Edges += c
+			data.Edges += c.Count
 		}
 
 		// Extensions and labels for verbose mode using AQL
@@ -198,7 +199,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 		}
 		nodeTypes = nodeResult.Counts
 		for _, c := range nodeTypes {
-			data.Nodes += c
+			data.Nodes += c.Count
 		}
 
 		// Edge types using scoped pattern
@@ -213,7 +214,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 		}
 		edgeTypes = edgeResult.Counts
 		for _, c := range edgeTypes {
-			data.Edges += c
+			data.Edges += c.Count
 		}
 
 		// Extensions using DescendantsOf
@@ -249,10 +250,10 @@ func runStats(cmd *cobra.Command, args []string) error {
 
 	// Store detailed breakdowns
 	if statsVerbose || statsOutput == "json" {
-		data.NodeTypes = nodeTypes
-		data.EdgeTypes = edgeTypes
-		data.Extensions = topN(extensions, 10)
-		data.Labels = labels
+		data.NodeTypes = countItemsToMap(nodeTypes)
+		data.EdgeTypes = countItemsToMap(edgeTypes)
+		data.Extensions = topN(countItemsToMap(extensions), 10)
+		data.Labels = countItemsToMap(labels)
 	}
 
 	// Last indexed (always from database, not affected by scope)
@@ -276,6 +277,15 @@ func runStats(cmd *cobra.Command, args []string) error {
 		return renderStatsJSON(data)
 	}
 	return renderStatsText(data, statsVerbose)
+}
+
+// countItemsToMap converts a []graph.CountItem slice to a map[string]int.
+func countItemsToMap(items []graph.CountItem) map[string]int {
+	m := make(map[string]int, len(items))
+	for _, item := range items {
+		m[item.Name] = item.Count
+	}
+	return m
 }
 
 // topN returns the top N entries by count from a map

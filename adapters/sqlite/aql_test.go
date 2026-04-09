@@ -8,6 +8,17 @@ import (
 	"github.com/codewandler/axon/graph"
 )
 
+// findCount looks up a count by name in a []graph.CountItem slice.
+// Returns 0 if not found.
+func findCount(counts []graph.CountItem, name string) int {
+	for _, item := range counts {
+		if item.Name == name {
+			return item.Count
+		}
+	}
+	return 0
+}
+
 func setupAQLTest(t *testing.T) (*Storage, context.Context) {
 	t.Helper()
 	s, err := New(":memory:")
@@ -387,12 +398,12 @@ func TestQuery_GroupBy(t *testing.T) {
 		t.Errorf("expected 4 types, got %d", len(result.Counts))
 	}
 
-	if result.Counts["fs:file"] != 4 {
-		t.Errorf("expected 4 fs:file, got %d", result.Counts["fs:file"])
+	if findCount(result.Counts, "fs:file") != 4 {
+		t.Errorf("expected 4 fs:file, got %d", findCount(result.Counts, "fs:file"))
 	}
 
-	if result.Counts["fs:dir"] != 2 {
-		t.Errorf("expected 2 fs:dir, got %d", result.Counts["fs:dir"])
+	if findCount(result.Counts, "fs:dir") != 2 {
+		t.Errorf("expected 2 fs:dir, got %d", findCount(result.Counts, "fs:dir"))
 	}
 }
 
@@ -415,8 +426,8 @@ func TestQuery_GroupByWithHaving(t *testing.T) {
 		t.Errorf("expected 3 types with count > 1, got %d", len(result.Counts))
 	}
 
-	if result.Counts["fs:file"] != 4 {
-		t.Errorf("expected fs:file count 4, got %d", result.Counts["fs:file"])
+	if findCount(result.Counts, "fs:file") != 4 {
+		t.Errorf("expected fs:file count 4, got %d", findCount(result.Counts, "fs:file"))
 	}
 }
 
@@ -1192,12 +1203,12 @@ func TestPattern_GroupBy(t *testing.T) {
 		t.Errorf("expected 2 groups, got %d", len(result.Counts))
 	}
 
-	if result.Counts["src"] != 2 {
-		t.Errorf("expected src: 2, got %d", result.Counts["src"])
+	if findCount(result.Counts, "src") != 2 {
+		t.Errorf("expected src: 2, got %d", findCount(result.Counts, "src"))
 	}
 
-	if result.Counts["cmd"] != 1 {
-		t.Errorf("expected cmd: 1, got %d", result.Counts["cmd"])
+	if findCount(result.Counts, "cmd") != 1 {
+		t.Errorf("expected cmd: 1, got %d", findCount(result.Counts, "cmd"))
 	}
 }
 
@@ -1543,14 +1554,14 @@ func TestQuery_JsonEach_Labels(t *testing.T) {
 	// - test2.py has labels: test
 	// - src dir has labels: source
 	// So: test=2, code=1, source=1
-	if result.Counts["test"] != 2 {
-		t.Errorf("expected 'test' label count 2, got %d", result.Counts["test"])
+	if findCount(result.Counts, "test") != 2 {
+		t.Errorf("expected 'test' label count 2, got %d", findCount(result.Counts, "test"))
 	}
-	if result.Counts["code"] != 1 {
-		t.Errorf("expected 'code' label count 1, got %d", result.Counts["code"])
+	if findCount(result.Counts, "code") != 1 {
+		t.Errorf("expected 'code' label count 1, got %d", findCount(result.Counts, "code"))
 	}
-	if result.Counts["source"] != 1 {
-		t.Errorf("expected 'source' label count 1, got %d", result.Counts["source"])
+	if findCount(result.Counts, "source") != 1 {
+		t.Errorf("expected 'source' label count 1, got %d", findCount(result.Counts, "source"))
 	}
 }
 
@@ -1602,11 +1613,11 @@ func TestQuery_JsonEach_DataField(t *testing.T) {
 	}
 
 	// tags.go has: important (2), review (1)
-	if result.Counts["important"] != 2 {
-		t.Errorf("expected 'important' tag count 2, got %d", result.Counts["important"])
+	if findCount(result.Counts, "important") != 2 {
+		t.Errorf("expected 'important' tag count 2, got %d", findCount(result.Counts, "important"))
 	}
-	if result.Counts["review"] != 1 {
-		t.Errorf("expected 'review' tag count 1, got %d", result.Counts["review"])
+	if findCount(result.Counts, "review") != 1 {
+		t.Errorf("expected 'review' tag count 1, got %d", findCount(result.Counts, "review"))
 	}
 }
 
@@ -1668,14 +1679,14 @@ func TestQuery_JsonEach_WithExists(t *testing.T) {
 	// src contains test1.go (labels: test, code) and test2.py (labels: test)
 	// src itself has label: source
 	// So scoped labels should be: test=2, code=1, source=1
-	if result.Counts["test"] != 2 {
-		t.Errorf("expected 'test' label count 2, got %d", result.Counts["test"])
+	if findCount(result.Counts, "test") != 2 {
+		t.Errorf("expected 'test' label count 2, got %d", findCount(result.Counts, "test"))
 	}
-	if result.Counts["code"] != 1 {
-		t.Errorf("expected 'code' label count 1, got %d", result.Counts["code"])
+	if findCount(result.Counts, "code") != 1 {
+		t.Errorf("expected 'code' label count 1, got %d", findCount(result.Counts, "code"))
 	}
-	if result.Counts["source"] != 1 {
-		t.Errorf("expected 'source' label count 1, got %d", result.Counts["source"])
+	if findCount(result.Counts, "source") != 1 {
+		t.Errorf("expected 'source' label count 1, got %d", findCount(result.Counts, "source"))
 	}
 }
 
@@ -1710,11 +1721,11 @@ func TestQuery_Edges_WithExists(t *testing.T) {
 	// - src has 2 contains edges (to test1.go and test2.py)
 	// - test1.go has 1 references edge (to main.go)
 	// Total: contains=2, references=1
-	if result.Counts["contains"] != 2 {
-		t.Errorf("expected 'contains' edge count 2, got %d", result.Counts["contains"])
+	if findCount(result.Counts, "contains") != 2 {
+		t.Errorf("expected 'contains' edge count 2, got %d", findCount(result.Counts, "contains"))
 	}
-	if result.Counts["references"] != 1 {
-		t.Errorf("expected 'references' edge count 1, got %d", result.Counts["references"])
+	if findCount(result.Counts, "references") != 1 {
+		t.Errorf("expected 'references' edge count 1, got %d", findCount(result.Counts, "references"))
 	}
 }
 
@@ -1794,5 +1805,67 @@ func TestQuery_ScopedTo_FollowsHasEdges(t *testing.T) {
 
 	if len(result2.Nodes) != 1 {
 		t.Errorf("expected 1 md:section node in scope, got %d", len(result2.Nodes))
+	}
+}
+
+// TestQuery_WhereNotInSubquery tests IN (SELECT ...) and NOT IN (SELECT ...) subquery support.
+func TestQuery_WhereNotInSubquery(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// The test DB has 7 edges total; from_ids are:
+	//   src→test1.go, src→test2.py, cmd→main.go, repo→main, repo→dev, repo→src, test1.go→main.go
+	// Nodes with outgoing edges:
+	//   src(testNodes[4]), cmd(testNodes[5]), repo(testNodes[6]), test1.go(testNodes[0])
+	// Nodes WITHOUT outgoing edges (no from_id in edges):
+	//   test2.py, README.md, main.go, main-branch, dev-branch
+
+	// NOT IN (SELECT ...): nodes whose ID is NOT in edges.from_id
+	p := aql.NewParser()
+
+	query, err := p.Parse("SELECT id, name FROM nodes WHERE id NOT IN (SELECT from_id FROM edges)")
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	result, err := s.Query(ctx, query)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeNodes {
+		t.Fatalf("expected ResultTypeNodes, got %v", result.Type)
+	}
+
+	// We expect 5 nodes with no outgoing edges
+	if len(result.Nodes) != 5 {
+		t.Errorf("expected 5 nodes with no outgoing edges, got %d", len(result.Nodes))
+		for _, n := range result.Nodes {
+			t.Logf("  node: %s (%s)", n.Name, n.ID)
+		}
+	}
+
+	// Ensure none of the source nodes appear in the result
+	for _, n := range result.Nodes {
+		if n.Name == "src" || n.Name == "cmd" || n.Name == "myrepo" || n.Name == "test1.go" {
+			t.Errorf("unexpected source node in NOT IN result: %s", n.Name)
+		}
+	}
+
+	// IN (SELECT ...): nodes whose ID IS in edges.from_id
+	query2, err := p.Parse("SELECT id, name FROM nodes WHERE id IN (SELECT from_id FROM edges)")
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	result2, err := s.Query(ctx, query2)
+	if err != nil {
+		t.Fatalf("Query2 failed: %v", err)
+	}
+
+	if len(result2.Nodes) != 4 {
+		t.Errorf("expected 4 nodes with outgoing edges, got %d", len(result2.Nodes))
+		for _, n := range result2.Nodes {
+			t.Logf("  node: %s (%s)", n.Name, n.ID)
+		}
 	}
 }

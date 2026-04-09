@@ -196,9 +196,14 @@ CompOp     = "=" | "!=" | "<" | ">" | "<=" | ">=" | "LIKE" | "GLOB" ;
 ### Set Operations
 
 ```ebnf
-InExpr      = Selector "IN" "(" ValueList ")" ;
+InExpr      = Selector [ "NOT" ] "IN" "(" ( SelectStmt | ValueList ) ")" ;
 BetweenExpr = Selector "BETWEEN" Value "AND" Value ;
 ```
+
+The `IN` and `NOT IN` operators support both literal value lists and subqueries:
+- `field IN ('a', 'b', 'c')` — literal list
+- `field IN (SELECT col FROM ...)` — subquery (correlated to outer query's table)
+- `field NOT IN (SELECT col FROM ...)` — exclusion subquery
 
 ### Label Operations
 

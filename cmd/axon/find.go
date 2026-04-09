@@ -48,14 +48,14 @@ Examples:
   # Find files named README.md
   axon find --name README.md
 
-  # Find all branches (with wildcard query)
-  axon find --type vcs:branch --query "feature*"
+  # Find all branches (requires --global since vcs nodes use git+file:// URIs)
+  axon find --type vcs:branch --global --query "feature*"
 
   # Count git repositories
-  axon find --type vcs:repo --count
+  axon find --type vcs:repo --global --count
 
   # Show nodes with parent chain
-  axon find --type vcs:branch --show-parent
+  axon find --type vcs:branch --global --show-parent
 
   # Find CI configuration files
   axon find --label ci:config

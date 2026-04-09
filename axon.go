@@ -363,11 +363,10 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 		return nil, fmt.Errorf("flushing storage after post-index: %w", err)
 	}
 
-	// Clean up orphaned edges (edges pointing to deleted nodes)
-	// Optimization: Skip if no nodes were deleted (common case for re-indexing).
-	// Also skip if SkipGC option is set.
+	// Clean up orphaned edges (edges pointing to deleted/missing nodes).
+	// Always run unless explicitly skipped — the cost is a single fast SQL DELETE.
 	var orphanedEdges int
-	if !opts.SkipGC && ictx.NodesDeleted() > 0 {
+	if !opts.SkipGC {
 		if prog != nil {
 			prog <- progress.Started("gc")
 		}

@@ -18,8 +18,8 @@ type Node struct {
 	Labels     []string  `json:"labels,omitempty"` // Categorical labels (e.g., "ci:config", "agent:instructions")
 	Data       any       `json:"data,omitempty"`
 	Generation string    `json:"generation,omitempty"`
-	CreatedAt  time.Time `json:"created_at,omitempty"`
-	UpdatedAt  time.Time `json:"updated_at,omitempty"`
+	CreatedAt  *time.Time `json:"created_at,omitempty"`
+	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
 }
 
 // NewID generates a new unique node ID using gonanoid.
@@ -57,8 +57,8 @@ func NewNode(nodeType string) *Node {
 	return &Node{
 		ID:        NewID(),
 		Type:      nodeType,
-		CreatedAt: now,
-		UpdatedAt: now,
+		CreatedAt: &now,
+		UpdatedAt: &now,
 	}
 }
 
@@ -135,6 +135,14 @@ func (n *Node) Clone() *Node {
 	if n.Labels != nil {
 		clone.Labels = make([]string, len(n.Labels))
 		copy(clone.Labels, n.Labels)
+	}
+	if n.CreatedAt != nil {
+		t := *n.CreatedAt
+		clone.CreatedAt = &t
+	}
+	if n.UpdatedAt != nil {
+		t := *n.UpdatedAt
+		clone.UpdatedAt = &t
 	}
 	return &clone
 }

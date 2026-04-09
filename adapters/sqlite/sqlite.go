@@ -510,10 +510,17 @@ func (s *Storage) flushBatch(batch []writeOp) {
 				batchErr = err
 				break
 			}
+			var nodeCreatedAt, nodeUpdatedAt string
+			if op.Node.CreatedAt != nil {
+				nodeCreatedAt = op.Node.CreatedAt.Format(time.RFC3339)
+			}
+			if op.Node.UpdatedAt != nil {
+				nodeUpdatedAt = op.Node.UpdatedAt.Format(time.RFC3339)
+			}
 			_, err = nodeStmt.ExecContext(ctx,
 				op.Node.ID, op.Node.Type, op.Node.URI, op.Node.Key, op.Node.Name,
 				string(labels), dataStr, op.Node.Generation,
-				op.Node.CreatedAt.Format(time.RFC3339), op.Node.UpdatedAt.Format(time.RFC3339))
+				nodeCreatedAt, nodeUpdatedAt)
 			if err != nil {
 				log.Printf("sqlite: failed to insert node %s: %v", op.Node.ID, err)
 				batchErr = err
@@ -532,9 +539,13 @@ func (s *Storage) flushBatch(batch []writeOp) {
 				}
 				dataStr = sql.NullString{String: string(dataBytes), Valid: true}
 			}
+			var edgeCreatedAt string
+			if op.Edge.CreatedAt != nil {
+				edgeCreatedAt = op.Edge.CreatedAt.Format(time.RFC3339)
+			}
 			_, err = edgeStmt.ExecContext(ctx,
 				op.Edge.ID, op.Edge.Type, op.Edge.From, op.Edge.To, dataStr, op.Edge.Generation,
-				op.Edge.CreatedAt.Format(time.RFC3339))
+				edgeCreatedAt)
 			if err != nil {
 				log.Printf("sqlite: failed to insert edge %s: %v", op.Edge.ID, err)
 				batchErr = err
@@ -624,8 +635,12 @@ func (s *Storage) scanNode(row *sql.Row) (*graph.Node, error) {
 		node.Data = data
 	}
 
-	node.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-	node.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+	if t, err2 := time.Parse(time.RFC3339, createdAt); err2 == nil {
+		node.CreatedAt = &t
+	}
+	if t, err2 := time.Parse(time.RFC3339, updatedAt); err2 == nil {
+		node.UpdatedAt = &t
+	}
 
 	return &node, nil
 }
@@ -697,7 +712,9 @@ func (s *Storage) GetEdge(ctx context.Context, id string) (*graph.Edge, error) {
 		edge.Data = d
 	}
 
-	edge.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	if t, err2 := time.Parse(time.RFC3339, createdAt); err2 == nil {
+		edge.CreatedAt = &t
+	}
 
 	return &edge, nil
 }
@@ -775,7 +792,9 @@ func (s *Storage) scanEdges(rows *sql.Rows) ([]*graph.Edge, error) {
 			edge.Data = d
 		}
 
-		edge.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		if t, err2 := time.Parse(time.RFC3339, createdAt); err2 == nil {
+			edge.CreatedAt = &t
+		}
 		edges = append(edges, &edge)
 	}
 	return edges, rows.Err()
@@ -835,8 +854,12 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter, opts g
 			node.Data = data
 		}
 
-		node.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		node.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		if t, err2 := time.Parse(time.RFC3339, createdAt); err2 == nil {
+			node.CreatedAt = &t
+		}
+		if t, err2 := time.Parse(time.RFC3339, updatedAt); err2 == nil {
+			node.UpdatedAt = &t
+		}
 		nodes = append(nodes, &node)
 	}
 
@@ -1270,8 +1293,12 @@ func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGe
 			node.Data = data
 		}
 
-		node.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		node.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		if t, err2 := time.Parse(time.RFC3339, createdAt); err2 == nil {
+			node.CreatedAt = &t
+		}
+		if t, err2 := time.Parse(time.RFC3339, updatedAt); err2 == nil {
+			node.UpdatedAt = &t
+		}
 		nodes = append(nodes, &node)
 	}
 

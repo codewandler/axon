@@ -946,6 +946,12 @@ func (i *Indexer) indexReferences(ctx context.Context, ictx *indexer.Context, mo
 			continue
 		}
 
+		// Skip references to unexported symbols when ExportedOnly is set.
+		// Unexported symbol nodes are never created, so these edges would be orphaned.
+		if i.ExportedOnly && !obj.Exported() {
+			continue
+		}
+
 		// Determine reference kind and target type
 		kind, targetType := classifyReference(obj)
 		if kind == "" {

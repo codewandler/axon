@@ -300,7 +300,11 @@ func (n *navigator) loadEdgeCounts(nodeID string) (map[string]int, error) {
 		return nil, err
 	}
 
-	return result.Counts, nil
+	m := make(map[string]int, len(result.Counts))
+	for _, item := range result.Counts {
+		m[item.Name] = item.Count
+	}
+	return m, nil
 }
 
 // loadGroupNodes loads a page of nodes for an edge group using pattern queries.

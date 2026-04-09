@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/codewandler/axon/aql"
+	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/types"
 	"github.com/spf13/cobra"
 )
@@ -50,7 +51,7 @@ func runEdges(cmd *cobra.Command, args []string) error {
 	}
 
 	g := ax.Graph()
-	var counts map[string]int
+	var counts []graph.CountItem
 
 	if edgesGlobal {
 		// Global: SELECT type, COUNT(*) FROM edges GROUP BY type ORDER BY COUNT(*) DESC
@@ -112,7 +113,7 @@ func runEdges(cmd *cobra.Command, args []string) error {
 
 	// Build result
 	var result CountResult
-	result.FromMap(counts)
+	result.FromSlice(counts)
 	result.SortByCount()
 
 	// Render output

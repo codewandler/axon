@@ -98,7 +98,7 @@ func runInfo(cmd *cobra.Command, args []string) error {
 	}
 	data.NodeTypeCount = len(nodeResult.Counts)
 	for _, c := range nodeResult.Counts {
-		data.Nodes += c
+		data.Nodes += c.Count
 	}
 
 	// Edge count and types
@@ -112,7 +112,7 @@ func runInfo(cmd *cobra.Command, args []string) error {
 	}
 	data.EdgeTypeCount = len(edgeResult.Counts)
 	for _, c := range edgeResult.Counts {
-		data.Edges += c
+		data.Edges += c.Count
 	}
 
 	// Orphaned edges count
@@ -134,12 +134,14 @@ func runInfo(cmd *cobra.Command, args []string) error {
 	}
 	if len(projResult.Counts) > 0 {
 		total := 0
+		byLang := make(map[string]int)
 		for _, c := range projResult.Counts {
-			total += c
+			total += c.Count
+			byLang[c.Name] = c.Count
 		}
 		data.Projects = &projectSummary{
 			Total:  total,
-			ByLang: projResult.Counts,
+			ByLang: byLang,
 		}
 	}
 
@@ -192,9 +194,9 @@ func renderInfoText(data infoData) error {
 	p.Printf("Nodes:         %d\n", data.Nodes)
 	p.Printf("Edges:         %d\n", data.Edges)
 	if data.OrphanedEdges > 0 {
-		p.Printf("Orphaned:      %d (run 'axon gc' to clean)\n", data.OrphanedEdges)
+		p.Printf("Orphaned edges: %d (run 'axon gc' to clean)\n", data.OrphanedEdges)
 	} else {
-		fmt.Println("Orphaned:      0")
+		fmt.Println("Orphaned edges: 0")
 	}
 	fmt.Println()
 

@@ -147,20 +147,22 @@ const (
 // Fields are populated based on the result type:
 // - ResultTypeNodes: Nodes slice is populated
 // - ResultTypeEdges: Edges slice is populated
-// - ResultTypeCounts: Counts map is populated
+// - ResultTypeCounts: Counts slice is populated
 //
 // Note: When SELECT specifies specific columns (e.g., "SELECT name, type FROM nodes"),
 // only those fields will be populated in the returned Node/Edge structs.
 // Other fields will have their zero values.
+// SelectedColumns is set for non-star SELECT queries, in SELECT order.
 type QueryResult struct {
-	Type   ResultType
-	Nodes  []*Node
-	Edges  []*Edge
-	Counts map[string]int // For GROUP BY queries (key → count)
+	Type            ResultType
+	Nodes           []*Node
+	Edges           []*Edge
+	Counts          []CountItem // For GROUP BY queries, in SQLite result order
+	SelectedColumns []string    // Column names in SELECT order; nil means SELECT *
 }
 
 // Count returns the scalar count value for SELECT COUNT(*) queries.
-// For scalar COUNT queries (no GROUP BY), looks for the "_count" key.
+// For scalar COUNT queries (no GROUP BY), looks for the "_count" sentinel item.
 // For GROUP BY queries, returns the sum of all counts.
 // Returns 0 if not a count query or if result is empty.
 func (qr *QueryResult) Count() int {
@@ -168,15 +170,17 @@ func (qr *QueryResult) Count() int {
 		return 0
 	}
 
-	// Check for scalar count (special "_count" key)
-	if count, ok := qr.Counts["_count"]; ok {
-		return count
+	// Check for scalar count (special "_count" sentinel)
+	for _, item := range qr.Counts {
+		if item.Name == "_count" {
+			return item.Count
+		}
 	}
 
 	// Fallback: sum all counts (for GROUP BY queries)
 	total := 0
-	for _, c := range qr.Counts {
-		total += c
+	for _, item := range qr.Counts {
+		total += item.Count
 	}
 	return total
 }

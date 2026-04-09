@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/codewandler/axon/aql"
+	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/types"
 	"github.com/spf13/cobra"
 )
@@ -45,7 +46,7 @@ func runLabels(cmd *cobra.Command, args []string) error {
 	}
 	defer cmdCtx.Close()
 
-	var counts map[string]int
+	var counts []graph.CountItem
 
 	if labelsGlobal {
 		// Global mode: Use AQL with json_each for fast label unpacking
@@ -117,7 +118,7 @@ func runLabels(cmd *cobra.Command, args []string) error {
 
 	// Build result
 	var result CountResult
-	result.FromMap(counts)
+	result.FromSlice(counts)
 
 	// Filter by category if specified
 	if labelsCategory != "" {

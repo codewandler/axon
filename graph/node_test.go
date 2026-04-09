@@ -37,10 +37,10 @@ func TestNewNode(t *testing.T) {
 	if node.Type != nodeType {
 		t.Errorf("expected Type %q, got %q", nodeType, node.Type)
 	}
-	if node.CreatedAt.Before(before) || node.CreatedAt.After(after) {
+	if node.CreatedAt == nil || node.CreatedAt.Before(before) || node.CreatedAt.After(after) {
 		t.Error("CreatedAt not set correctly")
 	}
-	if node.UpdatedAt.Before(before) || node.UpdatedAt.After(after) {
+	if node.UpdatedAt == nil || node.UpdatedAt.Before(before) || node.UpdatedAt.After(after) {
 		t.Error("UpdatedAt not set correctly")
 	}
 }

@@ -182,7 +182,9 @@ func runBenchmark() {
 	fmt.Printf("Step 1 - Edge counts: %v (%s)\n", edgeResult.Counts, d1)
 
 	// === Step 2: Load nodes for each edge group ===
-	for edgeType, count := range edgeResult.Counts {
+	for _, ecItem := range edgeResult.Counts {
+		edgeType := ecItem.Name
+		count := ecItem.Count
 		t2 := time.Now()
 		centerN := aql.N("center").Build()
 		targetN := aql.N("target").Build()
@@ -258,7 +260,9 @@ func runBenchmark() {
 		fmt.Printf("File edge counts: %v (%s)\n", fEdgeResult.Counts, df1)
 
 		// Load each edge group
-		for edgeType, count := range fEdgeResult.Counts {
+		for _, fcItem := range fEdgeResult.Counts {
+			edgeType := fcItem.Name
+			count := fcItem.Count
 			tf2 := time.Now()
 			centerN := aql.N("center").Build()
 			targetN := aql.N("target").Build()
@@ -332,7 +336,9 @@ func runBenchmark() {
 		fmt.Printf("Huge edge counts: %v (%s)\n", hEdgeResult.Counts, dh1)
 
 		// Load each group
-		for edgeType, count := range hEdgeResult.Counts {
+		for _, hcItem := range hEdgeResult.Counts {
+			edgeType := hcItem.Name
+			count := hcItem.Count
 			th2 := time.Now()
 			centerN := aql.N("center").Build()
 			targetN := aql.N("target").Build()
@@ -404,7 +410,9 @@ func runBenchmark() {
 	fmt.Printf("Section edge counts: %v (%s)\n", secEdgeResult.Counts, d4)
 
 	// Load section children
-	for edgeType, count := range secEdgeResult.Counts {
+	for _, scItem := range secEdgeResult.Counts {
+		edgeType := scItem.Name
+		count := scItem.Count
 		t5 := time.Now()
 		centerN := aql.N("center").Build()
 		targetN := aql.N("target").Build()

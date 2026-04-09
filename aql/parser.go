@@ -544,13 +544,13 @@ type comparisonExprGrammar struct {
 	ContainsAll bool     `parser:"  | 'CONTAINS' @'ALL'"`
 	LabelList3  []string `parser:"    '(' @String (',' @String)* ')'"`
 
-	// IN (...)
-	In       bool            `parser:"  | @'IN'"`
-	InValues []*valueGrammar `parser:"    '(' @@ (',' @@)* ')'"`
+	// IN (...) or IN (SELECT ...)
+	In       bool           `parser:"  | @'IN'"`
+	InBody   *inBodyGrammar `parser:"    '(' @@ ')'"`
 
-	// NOT IN (...)
-	NotIn       bool            `parser:"  | @('NOT' 'IN')"`
-	NotInValues []*valueGrammar `parser:"    '(' @@ (',' @@)* ')'"`
+	// NOT IN (...) or NOT IN (SELECT ...)
+	NotIn       bool           `parser:"  | @('NOT' 'IN')"`
+	NotInBody   *inBodyGrammar `parser:"    '(' @@ ')'"`
 
 	// BETWEEN ... AND ...
 	Between     bool          `parser:"  | @'BETWEEN'"`
@@ -615,29 +615,25 @@ func (g *comparisonExprGrammar) toAST() Expression {
 		}
 	}
 
-	// IN
+	// IN / IN (SELECT ...)
 	if g.In {
-		var values []Value
-		for _, v := range g.InValues {
-			values = append(values, v.toAST())
-		}
+		subq, values := g.InBody.toAST()
 		return &InExpr{
 			Position: toPosition(g.Pos),
 			Left:     sel,
 			Values:   values,
+			Subquery: subq,
 		}
 	}
 
-	// NOT IN
+	// NOT IN / NOT IN (SELECT ...)
 	if g.NotIn {
-		var values []Value
-		for _, v := range g.NotInValues {
-			values = append(values, v.toAST())
-		}
+		subq, values := g.NotInBody.toAST()
 		return &InExpr{
 			Position: toPosition(g.Pos),
 			Left:     sel,
 			Values:   values,
+			Subquery: subq,
 			Not:      true,
 		}
 	}
@@ -669,6 +665,23 @@ func (g *comparisonExprGrammar) toAST() Expression {
 // ----------------------------------------------------------------------------
 // Values
 // ----------------------------------------------------------------------------
+
+// inBodyGrammar represents the body of IN (...): either a subquery or a list of literal values.
+type inBodyGrammar struct {
+	Pos      lexer.Position
+	Subquery *selectGrammar   `parser:"  @@"`
+	Values   []*valueGrammar  `parser:"| @@ (',' @@)*"`
+}
+
+func (g *inBodyGrammar) toAST() (subquery *Query, values []Value) {
+	if g.Subquery != nil {
+		return &Query{Position: toPosition(g.Pos), Select: g.Subquery.toAST()}, nil
+	}
+	for _, v := range g.Values {
+		values = append(values, v.toAST())
+	}
+	return nil, values
+}
 
 type valueGrammar struct {
 	Pos        lexer.Position

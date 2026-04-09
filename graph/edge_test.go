@@ -26,7 +26,7 @@ func TestNewEdge(t *testing.T) {
 	if edge.To != to {
 		t.Errorf("expected To %q, got %q", to, edge.To)
 	}
-	if edge.CreatedAt.Before(before) || edge.CreatedAt.After(after) {
+	if edge.CreatedAt == nil || edge.CreatedAt.Before(before) || edge.CreatedAt.After(after) {
 		t.Error("CreatedAt not set correctly")
 	}
 }

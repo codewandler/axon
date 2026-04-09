@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/codewandler/axon/aql"
 	"github.com/codewandler/axon/graph"
@@ -131,11 +132,34 @@ func printQueryResultJSON(result *graph.QueryResult) error {
 	var data any
 	switch result.Type {
 	case graph.ResultTypeNodes:
-		data = result.Nodes
+		if len(result.SelectedColumns) > 0 {
+			// Partial SELECT: project only the selected columns to avoid
+			// serializing zero-value timestamp fields and unselected fields.
+			projected := make([]map[string]any, len(result.Nodes))
+			for i, node := range result.Nodes {
+				row := make(map[string]any, len(result.SelectedColumns))
+				for _, col := range result.SelectedColumns {
+					row[col] = nodeFieldRaw(node, col)
+				}
+				projected[i] = row
+			}
+			data = projected
+		} else {
+			data = result.Nodes
+		}
 	case graph.ResultTypeEdges:
 		data = result.Edges
 	case graph.ResultTypeCounts:
-		data = result.Counts
+		// Preserve SQLite ORDER BY by rendering as [{key, count}] array
+		type countRow struct {
+			Key   string `json:"key"`
+			Count int    `json:"count"`
+		}
+		rows := make([]countRow, len(result.Counts))
+		for i, item := range result.Counts {
+			rows[i] = countRow{Key: item.Name, Count: item.Count}
+		}
+		data = rows
 	}
 
 	enc := json.NewEncoder(os.Stdout)
@@ -156,8 +180,8 @@ func printQueryResultCount(result *graph.QueryResult) error {
 		count = len(result.Edges)
 	case graph.ResultTypeCounts:
 		// Sum all counts
-		for _, c := range result.Counts {
-			count += c
+		for _, item := range result.Counts {
+			count += item.Count
 		}
 	}
 	fmt.Println(count)
@@ -168,7 +192,7 @@ func printQueryResultCount(result *graph.QueryResult) error {
 func printQueryResultTable(result *graph.QueryResult) error {
 	switch result.Type {
 	case graph.ResultTypeNodes:
-		return printNodesTable(result.Nodes)
+		return printNodesTable(result.Nodes, result.SelectedColumns)
 	case graph.ResultTypeEdges:
 		return printEdgesTable(result.Edges)
 	case graph.ResultTypeCounts:
@@ -179,7 +203,9 @@ func printQueryResultTable(result *graph.QueryResult) error {
 }
 
 // printNodesTable prints nodes as a table.
-func printNodesTable(nodes []*graph.Node) error {
+// If selectedCols is non-empty, renders columns in that exact order (SELECT column order).
+// Otherwise, auto-detects which columns have data.
+func printNodesTable(nodes []*graph.Node, selectedCols []string) error {
 	if len(nodes) == 0 {
 		fmt.Println("No results")
 		return nil
@@ -188,7 +214,30 @@ func printNodesTable(nodes []*graph.Node) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	defer w.Flush()
 
-	// Detect which columns have data across ALL nodes (not just first, since first might be empty)
+	if len(selectedCols) > 0 {
+		// Projection mode: render columns in SELECT order
+		headers := make([]string, len(selectedCols))
+		for i, col := range selectedCols {
+			headers[i] = colDisplayName(col)
+		}
+		fmt.Fprintln(w, strings.Join(headers, "\t"))
+		for _, node := range nodes {
+			row := make([]string, len(selectedCols))
+			for i, col := range selectedCols {
+				row[i] = nodeFieldValue(node, col)
+			}
+			fmt.Fprintln(w, strings.Join(row, "\t"))
+		}
+		return nil
+	}
+
+	// Auto-detect mode: show only columns that have data
+	return printNodesTableAutoDetect(nodes, w)
+}
+
+// printNodesTableAutoDetect renders nodes detecting populated columns automatically.
+func printNodesTableAutoDetect(nodes []*graph.Node, w *tabwriter.Writer) error {
+	// Detect which columns have data across ALL nodes
 	hasID := false
 	hasType := false
 	hasURI := false
@@ -277,6 +326,104 @@ func printNodesTable(nodes []*graph.Node) error {
 	return nil
 }
 
+// colDisplayName converts a SQL column name to a human-readable header.
+func colDisplayName(col string) string {
+	switch col {
+	case "id":
+		return "ID"
+	case "uri":
+		return "URI"
+	default:
+		return strings.Title(strings.ReplaceAll(strings.ReplaceAll(col, "_", " "), ".", " "))
+	}
+}
+
+// nodeFieldValue extracts a node field by column name for table display (returns string).
+func nodeFieldValue(node *graph.Node, col string) string {
+	switch col {
+	case "id":
+		return truncate(node.ID, 22)
+	case "type":
+		return node.Type
+	case "uri":
+		return truncate(node.URI, 60)
+	case "key":
+		return truncate(node.Key, 40)
+	case "name":
+		return node.Name
+	case "labels":
+		return strings.Join(node.Labels, ", ")
+	case "data":
+		b, _ := json.Marshal(node.Data)
+		return truncate(string(b), 40)
+	case "generation":
+		return node.Generation
+	case "created_at":
+		if node.CreatedAt != nil {
+			return node.CreatedAt.Format(time.RFC3339)
+		}
+		return ""
+	case "updated_at":
+		if node.UpdatedAt != nil {
+			return node.UpdatedAt.Format(time.RFC3339)
+		}
+		return ""
+	default:
+		// data.field selector
+		if strings.HasPrefix(col, "data.") {
+			field := strings.TrimPrefix(col, "data.")
+			if m, ok := node.Data.(map[string]any); ok {
+				if v, ok2 := m[field]; ok2 {
+					b, _ := json.Marshal(v)
+					return strings.Trim(string(b), `"`)
+				}
+			}
+		}
+		return ""
+	}
+}
+
+// nodeFieldRaw extracts a node field by column name for JSON output (returns any).
+func nodeFieldRaw(node *graph.Node, col string) any {
+	switch col {
+	case "id":
+		return node.ID
+	case "type":
+		return node.Type
+	case "uri":
+		return node.URI
+	case "key":
+		return node.Key
+	case "name":
+		return node.Name
+	case "labels":
+		return node.Labels
+	case "data":
+		return node.Data
+	case "generation":
+		return node.Generation
+	case "created_at":
+		if node.CreatedAt != nil {
+			return node.CreatedAt.Format(time.RFC3339)
+		}
+		return nil
+	case "updated_at":
+		if node.UpdatedAt != nil {
+			return node.UpdatedAt.Format(time.RFC3339)
+		}
+		return nil
+	default:
+		// data.field selector
+		if strings.HasPrefix(col, "data.") {
+			field := strings.TrimPrefix(col, "data.")
+			if m, ok := node.Data.(map[string]any); ok {
+				return m[field]
+			}
+		}
+		return nil
+	}
+}
+
 // printEdgesTable prints edges as a table.
 func printEdgesTable(edges []*graph.Edge) error {
 	if len(edges) == 0 {
@@ -307,7 +454,7 @@ func printEdgesTable(edges []*graph.Edge) error {
 }
 
 // printCountsTable prints count aggregations as a table.
-func printCountsTable(counts map[string]int) error {
+func printCountsTable(counts []graph.CountItem) error {
 	if len(counts) == 0 {
 		fmt.Println("No results")
 		return nil
@@ -317,8 +464,8 @@ func printCountsTable(counts map[string]int) error {
 	defer w.Flush()
 
 	fmt.Fprintln(w, "Key\tCount")
-	for key, count := range counts {
-		fmt.Fprintf(w, "%s\t%d\n", key, count)
+	for _, item := range counts {
+		fmt.Fprintf(w, "%s\t%d\n", item.Name, item.Count)
 	}
 
 	return nil

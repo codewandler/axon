@@ -1081,3 +1081,58 @@ func TestParser_Values(t *testing.T) {
 		})
 	}
 }
+
+func TestParser_InSubquery(t *testing.T) {
+	p := NewParser()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantNot bool
+	}{
+		{
+			name:    "IN (SELECT ...)",
+			input:   "SELECT id FROM nodes WHERE id IN (SELECT from_id FROM edges)",
+			wantNot: false,
+		},
+		{
+			name:    "NOT IN (SELECT ...)",
+			input:   "SELECT id FROM nodes WHERE id NOT IN (SELECT from_id FROM edges)",
+			wantNot: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q, err := p.Parse(tt.input)
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			inExpr, ok := q.Select.Where.(*InExpr)
+			if !ok {
+				t.Fatalf("expected *InExpr in WHERE, got %T", q.Select.Where)
+			}
+			if inExpr.Not != tt.wantNot {
+				t.Errorf("expected Not=%v, got %v", tt.wantNot, inExpr.Not)
+			}
+			if inExpr.Subquery == nil {
+				t.Fatal("expected Subquery to be non-nil")
+			}
+			if len(inExpr.Values) != 0 {
+				t.Errorf("expected Values to be empty for subquery, got %d", len(inExpr.Values))
+			}
+			// Verify inner query structure
+			inner := inExpr.Subquery
+			if inner.Select == nil {
+				t.Fatal("expected inner Select")
+			}
+			src, ok := inner.Select.From.(*TableSource)
+			if !ok {
+				t.Fatalf("expected TableSource in subquery FROM, got %T", inner.Select.From)
+			}
+			if src.Table != "edges" {
+				t.Errorf("expected subquery FROM edges, got %q", src.Table)
+			}
+		})
+	}
+}

@@ -398,11 +398,13 @@ func (op ComparisonOp) String() string {
 }
 
 // InExpr represents field IN (value1, value2, ...) or field NOT IN (...).
+// Exactly one of Values or Subquery is set.
 type InExpr struct {
 	Position Position
 	Left     *Selector
-	Values   []Value
-	Not      bool // NOT IN
+	Values   []Value // set for IN ('a', 'b') — literal list
+	Subquery *Query  // set for IN (SELECT ...) — subquery
+	Not      bool    // NOT IN
 }
 
 func (i *InExpr) Pos() Position { return i.Position }

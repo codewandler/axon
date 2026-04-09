@@ -10,19 +10,20 @@ type Edge struct {
 	To         string    `json:"to,omitempty"`
 	Data       any       `json:"data,omitempty"`
 	Generation string    `json:"generation,omitempty"`
-	CreatedAt  time.Time `json:"created_at,omitempty"`
+	CreatedAt  *time.Time `json:"created_at,omitempty"`
 }
 
 // NewEdge creates a new edge with the given type and endpoints.
 // The edge ID is deterministic based on (type, from, to), ensuring
 // the same edge always has the same ID.
 func NewEdge(edgeType, from, to string) *Edge {
+	now := time.Now()
 	return &Edge{
 		ID:        IDFromEdgeKey(edgeType, from, to),
 		Type:      edgeType,
 		From:      from,
 		To:        to,
-		CreatedAt: time.Now(),
+		CreatedAt: &now,
 	}
 }
 

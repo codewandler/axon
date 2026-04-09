@@ -971,6 +971,18 @@ func (s *Storage) compileWhereForJoined(expr aql.Expression, src *aql.JoinedTabl
 
 	case *aql.InExpr:
 		left := s.compileSelectorForJoined(e.Left, src)
+		op := "IN"
+		if e.Not {
+			op = "NOT IN"
+		}
+		// Subquery: IN (SELECT ...)
+		if e.Subquery != nil {
+			innerSQL, innerArgs, _, err := s.compileToSQL(e.Subquery)
+			if err != nil {
+				return "", nil, fmt.Errorf("subquery in %s: %w", op, err)
+			}
+			return fmt.Sprintf("%s %s (%s)", left, op, innerSQL), innerArgs, nil
+		}
 		var args []any
 		placeholders := make([]string, len(e.Values))
 		for i, v := range e.Values {
@@ -981,7 +993,7 @@ func (s *Storage) compileWhereForJoined(expr aql.Expression, src *aql.JoinedTabl
 			placeholders[i] = "?"
 			args = append(args, val)
 		}
-		return fmt.Sprintf("%s IN (%s)", left, strings.Join(placeholders, ", ")), args, nil
+		return fmt.Sprintf("%s %s (%s)", left, op, strings.Join(placeholders, ", ")), args, nil
 
 	default:
 		return "", nil, fmt.Errorf("unsupported expression type in joined query: %T", expr)
@@ -1787,6 +1799,20 @@ func (s *Storage) compilePatternIn(e *aql.InExpr, nodeAliases map[string]string,
 		return "", nil, err
 	}
 
+	op := "IN"
+	if e.Not {
+		op = "NOT IN"
+	}
+
+	// Subquery: IN (SELECT ...)
+	if e.Subquery != nil {
+		innerSQL, innerArgs, _, err := s.compileToSQL(e.Subquery)
+		if err != nil {
+			return "", nil, fmt.Errorf("subquery in %s: %w", op, err)
+		}
+		return fmt.Sprintf("%s %s (%s)", field, op, innerSQL), innerArgs, nil
+	}
+
 	var args []any
 	placeholders := make([]string, len(e.Values))
 	for i, v := range e.Values {
@@ -1798,11 +1824,7 @@ func (s *Storage) compilePatternIn(e *aql.InExpr, nodeAliases map[string]string,
 		args = append(args, val)
 	}
 
-	sql := fmt.Sprintf("%s IN (%s)", field, strings.Join(placeholders, ", "))
-	if e.Not {
-		sql = fmt.Sprintf("%s NOT IN (%s)", field, strings.Join(placeholders, ", "))
-	}
-	return sql, args, nil
+	return fmt.Sprintf("%s %s (%s)", field, op, strings.Join(placeholders, ", ")), args, nil
 }
 func (s *Storage) compilePatternBetween(e *aql.BetweenExpr, nodeAliases map[string]string, edgeAliases map[string]string) (string, []any, error) {
 	field, err := s.resolvePatternSelector(e.Left, nodeAliases, edgeAliases)
@@ -2157,10 +2179,25 @@ func (s *Storage) compileValue(v aql.Value) (any, error) {
 	}
 }
 
-// compileIn compiles IN expressions.
+// compileIn compiles IN / NOT IN expressions, including IN (SELECT ...) subqueries.
 func (s *Storage) compileIn(e *aql.InExpr, table string) (string, []any, error) {
 	field, _ := s.compileSelectorToSQL(e.Left, table)
 
+	op := "IN"
+	if e.Not {
+		op = "NOT IN"
+	}
+
+	// Subquery: IN (SELECT ...)
+	if e.Subquery != nil {
+		innerSQL, innerArgs, _, err := s.compileToSQL(e.Subquery)
+		if err != nil {
+			return "", nil, fmt.Errorf("subquery in %s: %w", op, err)
+		}
+		return fmt.Sprintf("%s %s (%s)", field, op, innerSQL), innerArgs, nil
+	}
+
+	// Literal value list
 	var args []any
 	placeholders := make([]string, len(e.Values))
 	for i, v := range e.Values {
@@ -2172,11 +2209,7 @@ func (s *Storage) compileIn(e *aql.InExpr, table string) (string, []any, error) 
 		args = append(args, val)
 	}
 
-	sql := fmt.Sprintf("%s IN (%s)", field, strings.Join(placeholders, ", "))
-	if e.Not {
-		sql = fmt.Sprintf("%s NOT IN (%s)", field, strings.Join(placeholders, ", "))
-	}
-	return sql, args, nil
+	return fmt.Sprintf("%s %s (%s)", field, op, strings.Join(placeholders, ", ")), args, nil
 }
 
 // compileBetween compiles BETWEEN expressions.
@@ -2620,6 +2653,8 @@ func (s *Storage) executeQuery(ctx context.Context, query *aql.Query, sql string
 			return nil, err
 		}
 		result.Nodes = nodes
+		// Populate SelectedColumns for non-star SELECT queries
+		result.SelectedColumns = extractSelectedColumns(query)
 
 	case graph.ResultTypeEdges:
 		edges, err := s.executeEdgeQuery(ctx, query, sql, args)
@@ -2640,6 +2675,34 @@ func (s *Storage) executeQuery(ctx context.Context, query *aql.Query, sql string
 	}
 
 	return result, nil
+}
+
+// extractSelectedColumns returns the column names from a non-star SELECT clause,
+// preserving their order. Returns nil for SELECT *.
+func extractSelectedColumns(query *aql.Query) []string {
+	if query.Select == nil || len(query.Select.Columns) == 0 {
+		return nil
+	}
+	// SELECT * → nil
+	if len(query.Select.Columns) == 1 {
+		if _, ok := query.Select.Columns[0].Expr.(*aql.Star); ok {
+			return nil
+		}
+	}
+	var cols []string
+	for _, col := range query.Select.Columns {
+		switch expr := col.Expr.(type) {
+		case *aql.Selector:
+			if col.Alias != "" {
+				cols = append(cols, col.Alias)
+			} else {
+				cols = append(cols, expr.String())
+			}
+		case *aql.CountCall:
+			// COUNT(*) is part of ResultTypeCounts path, skip here
+		}
+	}
+	return cols
 }
 
 // executeNodeQuery executes SQL returning nodes.
@@ -2698,8 +2761,12 @@ func (s *Storage) executeNodeQuery(ctx context.Context, query *aql.Query, sqlQue
 				node.Data = data
 			}
 
-			node.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-			node.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+			if t, err2 := time.Parse(time.RFC3339, createdAt); err2 == nil {
+				node.CreatedAt = &t
+			}
+			if t, err2 := time.Parse(time.RFC3339, updatedAt); err2 == nil {
+				node.UpdatedAt = &t
+			}
 			nodes = append(nodes, &node)
 		} else {
 			// Partial columns - scan dynamically
@@ -2777,11 +2844,15 @@ func (s *Storage) scanNodePartial(rows *sql.Rows, cols []string) (*graph.Node, e
 			}
 		case "created_at":
 			if str, ok := val.(string); ok {
-				node.CreatedAt, _ = time.Parse(time.RFC3339, str)
+				if t, err2 := time.Parse(time.RFC3339, str); err2 == nil {
+					node.CreatedAt = &t
+				}
 			}
 		case "updated_at":
 			if str, ok := val.(string); ok {
-				node.UpdatedAt, _ = time.Parse(time.RFC3339, str)
+				if t, err2 := time.Parse(time.RFC3339, str); err2 == nil {
+					node.UpdatedAt = &t
+				}
 			}
 		default:
 			// Handle json_extract columns: json_extract(data, '$.field')
@@ -2854,7 +2925,9 @@ func (s *Storage) executeEdgeQuery(ctx context.Context, query *aql.Query, sqlQue
 				edge.Data = data
 			}
 
-			edge.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+			if t, err2 := time.Parse(time.RFC3339, createdAt); err2 == nil {
+				edge.CreatedAt = &t
+			}
 			edges = append(edges, &edge)
 		} else {
 			// Partial columns - scan dynamically
@@ -2925,7 +2998,9 @@ func (s *Storage) scanEdgePartial(rows *sql.Rows, cols []string) (*graph.Edge, e
 			}
 		case "created_at":
 			if str, ok := val.(string); ok {
-				edge.CreatedAt, _ = time.Parse(time.RFC3339, str)
+				if t, err2 := time.Parse(time.RFC3339, str); err2 == nil {
+					edge.CreatedAt = &t
+				}
 			}
 		}
 	}
@@ -2934,14 +3009,14 @@ func (s *Storage) scanEdgePartial(rows *sql.Rows, cols []string) (*graph.Edge, e
 }
 
 // executeCountQuery executes GROUP BY COUNT(*) queries.
-func (s *Storage) executeCountQuery(ctx context.Context, query *aql.Query, sqlQuery string, args []any) (map[string]int, error) {
+func (s *Storage) executeCountQuery(ctx context.Context, query *aql.Query, sqlQuery string, args []any) ([]graph.CountItem, error) {
 	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	counts := make(map[string]int)
+	var counts []graph.CountItem
 	hasGroupBy := len(query.Select.GroupBy) > 0
 
 	for rows.Next() {
@@ -2955,7 +3030,7 @@ func (s *Storage) executeCountQuery(ctx context.Context, query *aql.Query, sqlQu
 			}
 			// Skip NULL keys (from empty JSON arrays)
 			if key.Valid {
-				counts[key.String] = count
+				counts = append(counts, graph.CountItem{Name: key.String, Count: count})
 			}
 		} else {
 			// Scalar COUNT(*): scan single integer
@@ -2963,7 +3038,7 @@ func (s *Storage) executeCountQuery(ctx context.Context, query *aql.Query, sqlQu
 			if err := rows.Scan(&count); err != nil {
 				return nil, err
 			}
-			counts["_count"] = count
+			counts = append(counts, graph.CountItem{Name: "_count", Count: count})
 		}
 	}
 

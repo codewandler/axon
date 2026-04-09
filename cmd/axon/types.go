@@ -107,7 +107,7 @@ func runTypes(cmd *cobra.Command, args []string) error {
 
 	// Build result from counts
 	var countResult CountResult
-	countResult.FromMap(result.Counts)
+	countResult.FromSlice(result.Counts)
 	// Already sorted by COUNT DESC from query
 
 	// Render output

@@ -1,24 +1,31 @@
 package main
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/codewandler/axon/graph"
+)
+
+// CountItem is an alias for graph.CountItem for CLI use.
+type CountItem = graph.CountItem
 
 // CountResult represents aggregated counts (for labels, types, edges).
 type CountResult struct {
 	Items []CountItem `json:"items"`
 }
 
-// CountItem represents a single count entry.
-type CountItem struct {
-	Name  string `json:"name"`
-	Count int    `json:"count"`
-}
-
 // FromMap creates a CountResult from a map of counts.
+// Note: map iteration order is non-deterministic; prefer FromSlice when order matters.
 func (r *CountResult) FromMap(m map[string]int) {
 	r.Items = make([]CountItem, 0, len(m))
 	for name, count := range m {
 		r.Items = append(r.Items, CountItem{Name: name, Count: count})
 	}
+}
+
+// FromSlice creates a CountResult from an ordered slice, preserving SQLite result order.
+func (r *CountResult) FromSlice(items []graph.CountItem) {
+	r.Items = items
 }
 
 // SortByCount sorts items by count descending, then by name ascending.
