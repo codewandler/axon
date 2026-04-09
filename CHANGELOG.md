@@ -7,6 +7,17 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.1] — 2026-04-10
+
+### Added
+
+- **`Makefile`** with `build`, `install`, `test`, `lint`, and `clean` targets.
+  `make install` and `make build` stamp the version via
+  `-ldflags "-X main.version=$(git describe --tags --always --dirty)"`
+  so `axon --version` always reports the correct release tag.
+
+---
+
 ## [0.3.0] — 2026-04-10
 
 ### Added
