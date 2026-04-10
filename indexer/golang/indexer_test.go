@@ -1135,3 +1135,184 @@ func TestGreet(t *testing.T) {
 		}
 	}
 }
+
+// TestCallGraph verifies that:
+//   - go:ref nodes have CallerURI/CallerName/CallerType set when the usage is
+//     inside a function/method body.
+//   - A deduplicated go:func -[calls]-> go:func edge is emitted for each unique
+//     (caller, callee) pair.
+func TestCallGraph(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/callgraph\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	// main.go: Greet is called multiple times by Run to verify edge de-dup.
+	mainGo := `package main
+
+import "fmt"
+
+// Greet returns a greeting string.
+func Greet(name string) string {
+	return fmt.Sprintf("Hello, %s", name)
+}
+
+// Run calls Greet twice (edge must be deduplicated to one).
+func Run() {
+	_ = Greet("World")
+	_ = Greet("again")
+	fmt.Println("done")
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(mainGo), 0644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+
+	g, ictx := setupAndIndex(t, dir)
+
+	moduleURI := ictx.Root
+	pkgURI := moduleURI + "/pkg/example.com/callgraph"
+	greetURI := pkgURI + "/func/Greet"
+	runURI := pkgURI + "/func/Run"
+	greetID := graph.IDFromURI(greetURI)
+	runID := graph.IDFromURI(runURI)
+
+	// --- 1. go:ref nodes for calls to Greet must have CallerURI pointing to Run ---
+	refs, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeGoRef}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes refs: %v", err)
+	}
+
+	var callRefsToGreet int
+	for _, ref := range refs {
+		data, ok := ref.Data.(map[string]any)
+		if !ok {
+			continue
+		}
+		if data["kind"] != types.RefKindCall || data["name"] != "Greet" {
+			continue
+		}
+		callRefsToGreet++
+		callerURI, _ := data["caller_uri"].(string)
+		if callerURI != runURI {
+			t.Errorf("ref.CallerURI = %q, want %q", callerURI, runURI)
+		}
+		callerName, _ := data["caller_name"].(string)
+		if callerName != "Run" {
+			t.Errorf("ref.CallerName = %q, want \"Run\"", callerName)
+		}
+		callerType, _ := data["caller_type"].(string)
+		if callerType != types.TypeGoFunc {
+			t.Errorf("ref.CallerType = %q, want %q", callerType, types.TypeGoFunc)
+		}
+	}
+	if callRefsToGreet < 2 {
+		// Greet is called twice, so at least 2 call-refs should exist
+		t.Errorf("expected >= 2 call refs to Greet, got %d", callRefsToGreet)
+	}
+
+	// --- 2. Exactly one calls edge from Run -> Greet (de-duplicated) ---
+	runEdges, err := g.GetEdgesFrom(ctx, runID)
+	if err != nil {
+		t.Fatalf("GetEdgesFrom Run: %v", err)
+	}
+	var callsEdgesToGreet int
+	for _, e := range runEdges {
+		if e.Type == types.EdgeCalls && e.To == greetID {
+			callsEdgesToGreet++
+		}
+	}
+	if callsEdgesToGreet != 1 {
+		t.Errorf("expected exactly 1 calls edge Run->Greet, got %d", callsEdgesToGreet)
+	}
+
+	// --- 3. No calls edge in the reverse direction ---
+	greetEdges, err := g.GetEdgesFrom(ctx, greetID)
+	if err != nil {
+		t.Fatalf("GetEdgesFrom Greet: %v", err)
+	}
+	for _, e := range greetEdges {
+		if e.Type == types.EdgeCalls && e.To == runID {
+			t.Error("unexpected calls edge Greet->Run")
+		}
+	}
+}
+
+// TestEmbeds verifies that go:struct -[embeds]-> go:struct edges are emitted
+// for both value embeddings and pointer embeddings.
+func TestEmbeds(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/embeds\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	mainGo := `package main
+
+// Base is the embedded type.
+type Base struct {
+	ID int
+}
+
+// Derived embeds Base by value.
+type Derived struct {
+	Base
+	Name string
+}
+
+// WithPtr embeds Base by pointer.
+type WithPtr struct {
+	*Base
+	Label string
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(mainGo), 0644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+
+	g, ictx := setupAndIndex(t, dir)
+
+	moduleURI := ictx.Root
+	pkgURI := moduleURI + "/pkg/example.com/embeds"
+	baseURI := pkgURI + "/struct/Base"
+	derivedURI := pkgURI + "/struct/Derived"
+	withPtrURI := pkgURI + "/struct/WithPtr"
+	baseID := graph.IDFromURI(baseURI)
+	derivedID := graph.IDFromURI(derivedURI)
+	withPtrID := graph.IDFromURI(withPtrURI)
+
+	// Derived -[embeds]-> Base
+	derivedEdges, err := g.GetEdgesFrom(ctx, derivedID)
+	if err != nil {
+		t.Fatalf("GetEdgesFrom Derived: %v", err)
+	}
+	foundDerivedEmbedsBase := false
+	for _, e := range derivedEdges {
+		if e.Type == types.EdgeEmbeds && e.To == baseID {
+			foundDerivedEmbedsBase = true
+			break
+		}
+	}
+	if !foundDerivedEmbedsBase {
+		t.Errorf("expected Derived -[embeds]-> Base edge; Derived edges: %v", derivedEdges)
+	}
+
+	// WithPtr -[embeds]-> Base (pointer embed)
+	withPtrEdges, err := g.GetEdgesFrom(ctx, withPtrID)
+	if err != nil {
+		t.Fatalf("GetEdgesFrom WithPtr: %v", err)
+	}
+	foundWithPtrEmbedsBase := false
+	for _, e := range withPtrEdges {
+		if e.Type == types.EdgeEmbeds && e.To == baseID {
+			foundWithPtrEmbedsBase = true
+			break
+		}
+	}
+	if !foundWithPtrEmbedsBase {
+		t.Errorf("expected WithPtr -[embeds]-> Base edge (pointer embed); WithPtr edges: %v", withPtrEdges)
+	}
+}
