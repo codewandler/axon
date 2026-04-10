@@ -2,6 +2,14 @@
   <img src="assets/logo.svg" alt="axon — AI-native graph database" width="800"/>
 </p>
 
+<p align="center">
+  <a href="https://pkg.go.dev/github.com/codewandler/axon"><img src="https://pkg.go.dev/badge/github.com/codewandler/axon.svg" alt="Go Reference"/></a>
+  <a href="https://goreportcard.com/report/github.com/codewandler/axon"><img src="https://goreportcard.com/badge/github.com/codewandler/axon" alt="Go Report Card"/></a>
+  <a href="https://github.com/codewandler/axon/actions/workflows/ci.yml"><img src="https://github.com/codewandler/axon/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+  <a href="https://github.com/codewandler/axon/releases/latest"><img src="https://img.shields.io/github/v/release/codewandler/axon" alt="Latest Release"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"/></a>
+</p>
+
 <p align="center"><strong>AI-native graph database and indexing system — built for agents, runs locally.</strong></p>
 
 <br/>
