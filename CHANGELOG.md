@@ -7,6 +7,20 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.19.0] — 2026-04-11
+
+### Added
+
+- **`axon gc` verbose listing** — by default, both `axon gc` and `axon gc --dry-run`
+  now print each orphaned edge with its type, resolved from-node description, and
+  resolved to-node description (e.g. `[contains]  (from: vcs:repo .)  →  (to: <missing>)`).
+  Missing endpoints are shown as `<missing>`. (#27)
+- **`axon gc --quiet` / `-q`** — suppresses per-record lines; prints only the summary
+  count line. Useful for CI and scripts. (#27)
+- **`FindOrphanedEdges` storage method** — new method on `StalenessManager` interface
+  and SQLite adapter returns the full `[]*Edge` list of orphaned edges without deleting
+  them. (#27)
+
 ## [0.18.1] — 2026-04-10
 
 ### Fixed
