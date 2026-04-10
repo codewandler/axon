@@ -7,6 +7,42 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.12.0] — 2026-04-10
+
+### Added
+
+- **`indexer/todo`** — new language-agnostic indexer that scans every source
+  file for `// TODO`, `// FIXME`, `// HACK`, `// XXX`, and `// NOTE` annotation
+  comments and emits one `code:todo` graph node per match. Closes #12.
+  - Supports `//` (Go/JS/TS/Java/C), `#` (Python/Shell/YAML/Ruby), `--`
+    (SQL/Lua), and `;` (Lisp/Assembly) comment prefixes.
+  - Skips binary files (null byte in first 512 bytes) and files >2 MB.
+  - Delete-then-rewrite on re-index: edits and removed annotations are
+    reflected correctly without manual cleanup.
+  - Watch mode: subscribes to `EventEntryVisited` so any file change
+    automatically triggers a re-scan.
+- **`types.TodoData`** — `{File, Line, Kind, Text, Context}` data struct for
+  `code:todo` nodes; `TodoURI()` and `TodoURIPrefix()` helpers.
+- **`types.RegisterTodoTypes()`** — registers `code:todo` with the graph registry.
+
+### Usage
+
+```bash
+# All annotations
+axon find --type code:todo --global
+
+# Just FIXMEs
+axon find --type code:todo --label fixme --global
+
+# Semantic search (requires embeddings)
+axon find "error handling" --type code:todo
+
+# Count by kind
+axon query "SELECT data.kind, COUNT(*) FROM nodes WHERE type = 'code:todo' GROUP BY data.kind"
+```
+
+---
+
 ## [0.11.0] — 2026-04-10
 
 ### Added
