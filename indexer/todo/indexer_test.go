@@ -236,3 +236,27 @@ func TestIndexer_NameTruncation(t *testing.T) {
 		t.Errorf("truncated name should end with '...': %q", emitter.Nodes[0].Name)
 	}
 }
+
+func TestIndexer_NoMatchMidLine(t *testing.T) {
+	// A TODO/FIXME that appears mid-line (e.g. inside backtick-quoted code in
+	// markdown, or inside a string literal) must NOT produce a node.
+	content := strings.Join([]string{
+		"Use `// TODO` and `// FIXME` annotations in your code.",
+		`fmt.Println("// TODO: not a real todo")`,
+		"// TODO: this IS a real todo",
+	}, "\n")
+
+	path := setupTestFile(t, "prose.md", content)
+	idx := New()
+	emitter, err := indexFileEvent(t, idx, path, "f6")
+	if err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if len(emitter.Nodes) != 1 {
+		t.Errorf("expected 1 node (only the comment-start TODO), got %d", len(emitter.Nodes))
+		for _, n := range emitter.Nodes {
+			d, _ := n.Data.(types.TodoData)
+			t.Logf("  line %d: %s", d.Line, n.Name)
+		}
+	}
+}
