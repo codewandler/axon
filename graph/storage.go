@@ -18,7 +18,8 @@ type NodeFilter struct {
 	NodeIDs     []string // Filter to specific node IDs (OR logic)
 	Generation  string   // Filter by exact generation ID (empty = any). Pass indexer.Context.Generation
 	             // to scope a query to only nodes written in the current indexing run.
-	Root        bool     // Only nodes with no incoming containment edges (top-level roots)
+	Root         bool     // Only nodes with no incoming containment edges (top-level roots)
+	ExcludeTypes []string // Exclude nodes whose type matches any of these values (OR logic)
 }
 
 // Normalize returns a copy of f with normalized field values.
