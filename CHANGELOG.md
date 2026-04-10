@@ -30,6 +30,21 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.12.2] — 2026-04-10
+
+### Fixed
+
+- **`code:todo` nodes now included in embeddings** — `types.TypeTodo` was missing
+  from `DefaultEmbedTypes`, silently excluding all TODO/FIXME annotations from
+  semantic search (`axon find "..." --type code:todo` returned zero results even
+  with an embedding provider configured).
+- **Richer embedding text for `code:todo`** — `buildNodeText` now extracts the
+  `context` field (the surrounding source line, e.g. the enclosing function
+  signature) alongside the annotation text, improving semantic similarity for
+  queries like *"todos related to authentication"*.
+
+---
+
 ## [0.12.1] — 2026-04-10
 
 ### Fixed
