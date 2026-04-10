@@ -2,11 +2,13 @@ package axon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	iofs "io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -429,6 +431,60 @@ func (a *Axon) RegisterIndexer(idx indexer.Indexer) {
 	a.indexers.Register(idx)
 }
 
+// SemanticSearchResult is a node with its best-match score and the query that produced it.
+type SemanticSearchResult struct {
+	*graph.NodeWithScore
+	MatchedQuery string
+}
+
+// ErrNoEmbeddingProvider is returned when SemanticSearch is called but no
+// EmbeddingProvider was configured.
+var ErrNoEmbeddingProvider = errors.New("axon: no embedding provider configured; use axon init --embed to generate embeddings")
+
+// SemanticSearch embeds each query string using the configured EmbeddingProvider
+// and runs vector similarity search for each. Results across all queries are merged
+// and deduplicated — the best score per node wins. Returns up to limit results sorted
+// by score descending.
+//
+// Returns ErrNoEmbeddingProvider if no provider is set in Config.
+func (a *Axon) SemanticSearch(ctx context.Context, queries []string, limit int, filter *graph.NodeFilter) ([]*SemanticSearchResult, error) {
+	if a.config.EmbeddingProvider == nil {
+		return nil, ErrNoEmbeddingProvider
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+
+	// best maps nodeID → highest-scoring SemanticSearchResult across all queries.
+	best := make(map[string]*SemanticSearchResult)
+
+	for _, q := range queries {
+		vec, err := a.config.EmbeddingProvider.Embed(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("embedding query %q: %w", q, err)
+		}
+		results, err := a.storage.FindSimilar(ctx, vec, limit, filter)
+		if err != nil {
+			return nil, fmt.Errorf("similarity search for %q: %w", q, err)
+		}
+		for _, r := range results {
+			if existing, ok := best[r.ID]; !ok || r.Score > existing.Score {
+				best[r.ID] = &SemanticSearchResult{NodeWithScore: r, MatchedQuery: q}
+			}
+		}
+	}
+
+	out := make([]*SemanticSearchResult, 0, len(best))
+	for _, r := range best {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // IndexResult contains statistics from an indexing operation.
 type IndexResult struct {
 	Files        int
@@ -480,12 +536,39 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 	}
 	defer watcher.Close()
 
-	// Walk directory tree and register every subdirectory with the watcher.
+	// Resolve the DB directory so we can exclude it from the watcher.
+	// Writing to the database would otherwise trigger re-index storms.
+	dbDir := ""
+	if a.storage != nil {
+		if dbPather, ok := a.storage.(interface{ Path() string }); ok {
+			dbDir = filepath.Dir(dbPather.Path())
+		}
+	}
+	// Fallback: look for a .axon directory under the watched path.
+	if dbDir == "" {
+		candidate := filepath.Join(absPath, ".axon")
+		if info, err2 := os.Stat(candidate); err2 == nil && info.IsDir() {
+			dbDir = candidate
+		}
+	}
+
+	// Walk directory tree and register every subdirectory with the watcher,
+	// skipping the DB directory to avoid self-triggering.
+	skipDir := func(p string) bool {
+		if dbDir == "" {
+			return false
+		}
+		rel, err2 := filepath.Rel(dbDir, p)
+		return err2 == nil && !strings.HasPrefix(rel, "..")
+	}
 	if err := filepath.WalkDir(absPath, func(p string, d iofs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip inaccessible paths
 		}
 		if d.IsDir() {
+			if skipDir(p) {
+				return iofs.SkipDir
+			}
 			if watchErr := watcher.Add(p); watchErr != nil {
 				log.Printf("axon: watch: failed to watch %s: %v", p, watchErr)
 			}
@@ -507,6 +590,10 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return nil
+			}
+			// Skip events originating from the DB directory.
+			if skipDir(event.Name) {
+				continue
 			}
 			pending[event.Name] = struct{}{}
 			debounce = time.After(opts.Debounce) // reset/start debounce window
