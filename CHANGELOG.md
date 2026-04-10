@@ -11,6 +11,14 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.6.1] — 2026-04-10
+
+### Fixed
+
+- **Install instruction in `AGENTS.md`** — replaced bare `go install ./cmd/axon`
+  with `task install`; the former skips `-ldflags` and embeds `"dev"` as the
+  version string instead of the git tag.
+
 ## [0.6.0] — 2026-04-10
 
 ### Added
