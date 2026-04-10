@@ -60,14 +60,18 @@ axon find --show-parent        # Show parent chain to CWD or root
 axon find --output json        # Output format: path, uri, json, table
 ```
 
-## Natural Language Search
+## Semantic Search
+
+Pass a text argument to `axon find` for vector similarity search
+(requires `axon index --embed` first):
 
 ```bash
-axon search "what is the Indexer interface"
-axon search "who calls NewNode"
-axon search "what implements Storage"
-axon search --semantic "handles token budget overflow"  # vector search (requires --embed)
-axon search --type go:func "error recovery"
+axon find "what is the Indexer interface"
+axon find "who calls NewNode"
+axon find "what implements Storage"
+axon find "handles token budget overflow"
+axon find "error recovery" --type go:func
+axon find "recent commits about logo" --type vcs:commit --limit 5
 ```
 
 ## Context Generation
