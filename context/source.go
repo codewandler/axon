@@ -205,24 +205,20 @@ func buildReason(items []RelevanceItem) string {
 		return items[0].Reason
 	}
 
-	// Collect unique reasons
-	reasons := make(map[string]bool)
-	for _, item := range items {
-		if item.Reason != "" {
-			reasons[item.Reason] = true
-		}
-	}
-
-	// Take first 3 unique reasons
+	// Collect unique reasons, preserving first-seen insertion order.
+	seen := make(map[string]bool)
 	var parts []string
-	for reason := range reasons {
-		parts = append(parts, reason)
-		if len(parts) >= 3 {
-			break
+	for _, item := range items {
+		if item.Reason != "" && !seen[item.Reason] {
+			seen[item.Reason] = true
+			parts = append(parts, item.Reason)
+			if len(parts) >= 3 {
+				break
+			}
 		}
 	}
 
-	if len(reasons) > 3 {
+	if len(seen) > 3 {
 		return strings.Join(parts, "; ") + " (+ more)"
 	}
 	return strings.Join(parts, "; ")
