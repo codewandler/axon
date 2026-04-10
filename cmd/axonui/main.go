@@ -15,9 +15,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "axontui [path-or-id]",
+	Use:   "axonui [path-or-id]",
 	Short: "Interactive graph explorer for Axon",
-	Long: `axontui is an interactive TUI for exploring Axon's knowledge graph.
+	Long: `axonui is an interactive TUI for exploring Axon's knowledge graph.
 
 Navigate the graph by drilling into nodes, viewing incoming and outgoing
 edges, and using AQL queries to filter the view.

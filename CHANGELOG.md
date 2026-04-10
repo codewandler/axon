@@ -7,6 +7,18 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.17.0] — 2026-04-10
+
+### Changed
+
+- **TUI binary renamed `axontui` → `axonui`** — the interactive graph explorer
+  is now installed and invoked as `axonui`. The source package moves from
+  `cmd/axontui/` to `cmd/axonui/`. Taskfile tasks (`build:tui`, `install:tui`,
+  `build:all`, `install:all`) and the `./bin/axonui` output path are updated
+  accordingly.
+
+---
+
 ## [0.16.1] — 2026-04-11
 
 ### Fixed

@@ -68,7 +68,7 @@ axon/
 ├── progress/            # Progress reporting (coordinator, bubbletea UI)
 ├── render/              # Tree rendering utilities
 ├── cmd/axon/            # CLI commands (init, query, tree, find, show, etc.)
-└── cmd/axontui/         # Terminal UI explorer
+└── cmd/axonui/          # Terminal UI explorer
 ```
 
 ## Code Style Guidelines

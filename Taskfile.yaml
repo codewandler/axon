@@ -6,6 +6,7 @@ vars:
     sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
   LDFLAGS: -X main.version={{.VERSION}}
   BIN: ./bin/axon
+  BIN_TUI: ./bin/axonui
 
 tasks:
   default:
@@ -23,10 +24,32 @@ tasks:
     generates:
       - "{{.BIN}}"
 
+  build:tui:
+    desc: Build the axonui binary to ./bin/axonui
+    cmds:
+      - go build -ldflags "{{.LDFLAGS}}" -o {{.BIN_TUI}} ./cmd/axonui
+    sources:
+      - "**/*.go"
+    generates:
+      - "{{.BIN_TUI}}"
+
+  build:all:
+    desc: Build all binaries (axon + axonui)
+    deps: [build, build:tui]
+
   install:
     desc: Install axon to GOPATH/bin
     cmds:
       - go install -ldflags "{{.LDFLAGS}}" ./cmd/axon
+
+  install:tui:
+    desc: Install axonui to GOPATH/bin
+    cmds:
+      - go install -ldflags "{{.LDFLAGS}}" ./cmd/axonui
+
+  install:all:
+    desc: Install all binaries (axon + axonui)
+    deps: [install, install:tui]
 
   test:
     desc: Run all tests (no cache)
@@ -54,6 +77,6 @@ tasks:
       - gofmt -w .
 
   clean:
-    desc: Remove built binary
+    desc: Remove all built binaries
     cmds:
-      - rm -f {{.BIN}}
+      - rm -f {{.BIN}} {{.BIN_TUI}}

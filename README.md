@@ -835,7 +835,7 @@ Axon consists of:
   - `embeddings` - Embedding providers (Ollama, Hugot, null)
 - **Context Engine** (`context/`) - Token-budget-aware context gathering for AI agents
 - **CLI** (`cmd/axon/`) - Command-line interface
-- **TUI** (`cmd/axontui/`) - Terminal UI explorer
+- **TUI** (`cmd/axonui/`) - Terminal UI explorer
 
 **Key Features**:
 
