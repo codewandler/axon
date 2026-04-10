@@ -7,6 +7,16 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.2] — 2026-04-10
+
+### Changed
+
+- **README** — added Table of Contents; rewrote Go Library section to document
+  `WriteNode`, `PutNode`/`Flush`/`GetNodeByURI`, `SearchOptions`, and
+  `types.URIPrefixForType` introduced in v0.9.1.
+
+---
+
 ## [0.9.1] — 2026-04-10
 
 ### Added
