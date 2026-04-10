@@ -26,6 +26,7 @@ var (
 	findExt        []string
 	findCount      bool
 	findLimit      int
+	findMinScore   float64
 	findOutput     string
 	findShowParent bool
 	findCompact    bool
@@ -75,6 +76,7 @@ func init() {
 	findCmd.Flags().StringArrayVarP(&findExt, "ext", "e", nil, "Filter by file extension without dot (e.g., 'go', 'py'). Can be repeated.")
 	findCmd.Flags().BoolVarP(&findCount, "count", "c", false, "Just show count")
 	findCmd.Flags().IntVarP(&findLimit, "limit", "l", 0, "Limit results (0 for unlimited)")
+	findCmd.Flags().Float64Var(&findMinScore, "min-score", 0.5, "Minimum similarity score for semantic results (0 to disable)")
 	findCmd.Flags().StringVarP(&findOutput, "output", "o", "path", "Output format: path, uri, json, table")
 	findCmd.Flags().BoolVar(&findShowParent, "show-parent", false, "Show parent chain to CWD or root")
 	findCmd.Flags().BoolVar(&findCompact, "compact", false, "Hide parent chain details (with --show-parent)")
@@ -480,6 +482,22 @@ func runSemanticFind(query string) error {
 	if len(results) == 0 {
 		fmt.Println("No results found.")
 		fmt.Println("Tip: run 'axon index --embed .' to generate embeddings first.")
+		return nil
+	}
+
+	// Drop results below the minimum score threshold.
+	if findMinScore > 0 {
+		filtered := results[:0]
+		for _, r := range results {
+			if float64(r.Score) >= findMinScore {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+
+	if len(results) == 0 {
+		fmt.Printf("No results above minimum score %.2f (use --min-score 0 to see all results).\n", findMinScore)
 		return nil
 	}
 

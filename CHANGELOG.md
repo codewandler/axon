@@ -7,6 +7,16 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.4] — 2026-05-13
+
+### Added
+
+- **`--min-score` flag for `axon find`** — semantic results below the threshold
+  are dropped. Defaults to `0.5`, which cuts noise when only a few strong
+  matches exist. Set to `0` to restore the old behaviour and see all results.
+
+---
+
 ## [0.8.3] — 2026-05-13
 
 ### Fixed
