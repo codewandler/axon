@@ -19,11 +19,12 @@ import (
 // Describe calls Flush before querying so that any buffered writes are visible
 // in the results.
 func (a *Axon) Describe(ctx context.Context, includeFields bool) (*graph.SchemaDescription, error) {
-	if err := a.graph.Storage().Flush(ctx); err != nil {
+	store := a.graph.Storage()
+	if err := store.Flush(ctx); err != nil {
 		return nil, fmt.Errorf("describe: flush: %w", err)
 	}
 
-	d, ok := a.graph.Storage().(graph.Describer)
+	d, ok := store.(graph.Describer)
 	if !ok {
 		return nil, fmt.Errorf("describe: storage backend does not support schema introspection")
 	}

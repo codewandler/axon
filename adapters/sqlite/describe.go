@@ -55,7 +55,7 @@ func (s *Storage) describeNodeTypes(ctx context.Context) ([]graph.NodeTypeInfo, 
 	}
 	defer rows.Close()
 
-	var result []graph.NodeTypeInfo
+	result := []graph.NodeTypeInfo{}
 	for rows.Next() {
 		var info graph.NodeTypeInfo
 		if err := rows.Scan(&info.Type, &info.Count); err != nil {
@@ -114,9 +114,8 @@ func (s *Storage) describeEdgeTypes(ctx context.Context) ([]graph.EdgeTypeInfo, 
 	defer rows.Close()
 
 	// Accumulate connections per edge type, preserving insertion order.
-	type edgeKey = string
-	indexMap := make(map[edgeKey]int) // edge type → index in result slice
-	var result []graph.EdgeTypeInfo
+	indexMap := make(map[string]int) // edge type → index in result slice
+	result := []graph.EdgeTypeInfo{}
 
 	for rows.Next() {
 		var edgeType, fromType, toType string

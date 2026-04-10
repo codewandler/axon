@@ -14,6 +14,7 @@ import (
 var (
 	describeFields bool
 	describeOutput string
+	describeGlobal bool
 )
 
 var describeCmd = &cobra.Command{
@@ -25,6 +26,9 @@ Reports all node types with counts, all edge types with their from/to
 node-type connection patterns, and (with --fields) the JSON data field
 names stored on each node type.
 
+Note: describe always reports the entire graph (equivalent to --global).
+Scoped output is not yet supported.
+
 Examples:
   axon describe              # schema overview (text)
   axon describe -o json      # machine-readable JSON
@@ -35,6 +39,9 @@ Examples:
 func init() {
 	describeCmd.Flags().BoolVarP(&describeFields, "fields", "f", false, "Include data field names per node type (slightly slower)")
 	describeCmd.Flags().StringVarP(&describeOutput, "output", "o", "text", "Output format: text, json")
+	// --global is accepted for CLI consistency with other commands; describe is
+	// always global (scoped output is not yet implemented).
+	describeCmd.Flags().BoolVarP(&describeGlobal, "global", "g", false, "Search entire graph (default behaviour; flag accepted for consistency)")
 }
 
 func runDescribe(cmd *cobra.Command, args []string) error {
