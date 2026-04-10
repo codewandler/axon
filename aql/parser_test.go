@@ -383,6 +383,38 @@ func TestParser_Where(t *testing.T) {
 			},
 		},
 		{
+			name:  "NOT CONTAINS ANY",
+			input: "SELECT * FROM nodes WHERE labels NOT CONTAINS ANY ('x', 'y')",
+			check: func(t *testing.T, q *Query) {
+				lbl, ok := q.Select.Where.(*LabelExpr)
+				if !ok {
+					t.Fatalf("expected LabelExpr, got %T", q.Select.Where)
+				}
+				if lbl.Op != OpNotContainsAny {
+					t.Fatalf("expected OpNotContainsAny, got %s", lbl.Op)
+				}
+				if len(lbl.Labels) != 2 {
+					t.Fatalf("expected 2 labels, got %d", len(lbl.Labels))
+				}
+			},
+		},
+		{
+			name:  "NOT CONTAINS ALL",
+			input: "SELECT * FROM nodes WHERE labels NOT CONTAINS ALL ('x', 'y')",
+			check: func(t *testing.T, q *Query) {
+				lbl, ok := q.Select.Where.(*LabelExpr)
+				if !ok {
+					t.Fatalf("expected LabelExpr, got %T", q.Select.Where)
+				}
+				if lbl.Op != OpNotContainsAll {
+					t.Fatalf("expected OpNotContainsAll, got %s", lbl.Op)
+				}
+				if len(lbl.Labels) != 2 {
+					t.Fatalf("expected 2 labels, got %d", len(lbl.Labels))
+				}
+			},
+		},
+		{
 			name:  "complex boolean",
 			input: "SELECT * FROM nodes WHERE (type = 'fs:file' OR type = 'fs:dir') AND labels CONTAINS ANY ('a', 'b') AND labels NOT CONTAINS ('x')",
 			check: func(t *testing.T, q *Query) {

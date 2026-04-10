@@ -534,7 +534,13 @@ type comparisonExprGrammar struct {
 	IsNotNull bool `parser:"    @'NOT'?"`
 	Null      bool `parser:"    @'NULL'"`
 
-	// CONTAINS [ANY|ALL] / NOT CONTAINS
+	// CONTAINS [ANY|ALL] / NOT CONTAINS [ANY|ALL]
+	NotContainsAny bool     `parser:"  | @('NOT' 'CONTAINS' 'ANY')"`
+	LabelList4     []string `parser:"    '(' @String (',' @String)* ')'"`
+
+	NotContainsAll bool     `parser:"  | @('NOT' 'CONTAINS' 'ALL')"`
+	LabelList5     []string `parser:"    '(' @String (',' @String)* ')'"`
+
 	NotContains bool     `parser:"  | @('NOT' 'CONTAINS')"`
 	LabelList1  []string `parser:"    '(' @String (',' @String)* ')'"`
 
@@ -582,6 +588,26 @@ func (g *comparisonExprGrammar) toAST() Expression {
 			Position: toPosition(g.Pos),
 			Selector: sel,
 			Not:      g.IsNotNull,
+		}
+	}
+
+	// NOT CONTAINS ANY
+	if g.NotContainsAny {
+		return &LabelExpr{
+			Position: toPosition(g.Pos),
+			Selector: sel,
+			Op:       OpNotContainsAny,
+			Labels:   stringsToValues(g.LabelList4),
+		}
+	}
+
+	// NOT CONTAINS ALL
+	if g.NotContainsAll {
+		return &LabelExpr{
+			Position: toPosition(g.Pos),
+			Selector: sel,
+			Op:       OpNotContainsAll,
+			Labels:   stringsToValues(g.LabelList5),
 		}
 	}
 

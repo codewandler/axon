@@ -273,6 +273,30 @@ func TestExpressionString(t *testing.T) {
 			want: "labels CONTAINS ALL ('test:file', 'build:config')",
 		},
 		{
+			name: "NOT CONTAINS ANY expression",
+			expr: &LabelExpr{
+				Selector: &Selector{Parts: []string{"labels"}},
+				Op:       OpNotContainsAny,
+				Labels: []Value{
+					&StringLit{Value: "a"},
+					&StringLit{Value: "b"},
+				},
+			},
+			want: "labels NOT CONTAINS ANY ('a', 'b')",
+		},
+		{
+			name: "NOT CONTAINS ALL expression",
+			expr: &LabelExpr{
+				Selector: &Selector{Parts: []string{"labels"}},
+				Op:       OpNotContainsAll,
+				Labels: []Value{
+					&StringLit{Value: "a"},
+					&StringLit{Value: "b"},
+				},
+			},
+			want: "labels NOT CONTAINS ALL ('a', 'b')",
+		},
+		{
 			name: "Parenthesized expression",
 			expr: &ParenExpr{
 				Inner: &ComparisonExpr{

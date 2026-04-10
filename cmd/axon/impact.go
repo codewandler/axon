@@ -67,6 +67,31 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("Impact analysis: %s (%s)\n\n", target.Name, target.Type)
 
+	// Pre-load all go:package nodes to build dir↔importPath maps.
+	// This avoids repeated queries in Step 4 and fixes the filesystem-path
+	// vs Go-import-path mismatch.
+	allPkgQuery, _ := aql.Parse(`SELECT * FROM nodes WHERE type = 'go:package'`)
+	allPkgResult, err := storage.Query(ctx, allPkgQuery)
+	if err != nil {
+		return fmt.Errorf("loading packages: %w", err)
+	}
+	dirToImportPath := make(map[string]string) // /abs/fs/dir → github.com/org/pkg
+	importPathToID := make(map[string]string)  // github.com/org/pkg → nodeID
+	for _, pkg := range allPkgResult.Nodes {
+		d, ok := pkg.Data.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		dir, _ := d["dir"].(string)
+		ip, _ := d["import_path"].(string)
+		if ip != "" {
+			importPathToID[ip] = pkg.ID
+		}
+		if dir != "" && ip != "" {
+			dirToImportPath[dir] = ip
+		}
+	}
+
 	// Step 2: Find all go:ref nodes that reference the target via `references` edges
 	// Get edges pointing TO the target
 	edges, err := storage.GetEdgesTo(ctx, target.ID)
@@ -118,6 +143,18 @@ func runImpact(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Translate filesystem dirs to Go import paths using the pre-built map.
+	importPathGroups := make(map[string]*refGroup)
+	for fsDir, g := range refsByPkg {
+		if ip, ok := dirToImportPath[fsDir]; ok {
+			g.pkgPath = ip
+			importPathGroups[ip] = g
+		} else {
+			importPathGroups[fsDir] = g // keep raw dir as fallback
+		}
+	}
+	refsByPkg = importPathGroups
+
 	totalRefs := 0
 	for _, g := range refsByPkg {
 		totalRefs += g.count
@@ -168,18 +205,13 @@ func runImpact(cmd *cobra.Command, args []string) error {
 	// For each affected package, find who imports it via `imports` edges
 	importerMap := make(map[string][]string) // importer pkg path -> imported pkg paths
 	for _, pkgPath := range affectedPkgs {
-		// Find the go:package node for this pkgPath
-		pkgQuery, _ := aql.Parse(fmt.Sprintf(
-			`SELECT * FROM nodes WHERE type = 'go:package' AND data.import_path = '%s' LIMIT 1`,
-			escapeSQL(pkgPath)))
-		pkgResult, err := storage.Query(ctx, pkgQuery)
-		if err != nil || len(pkgResult.Nodes) == 0 {
+		pkgNodeID, ok := importPathToID[pkgPath]
+		if !ok {
 			continue
 		}
-		pkgNode := pkgResult.Nodes[0]
 
 		// Find all edges pointing TO this package via `imports`
-		importerEdges, err := storage.GetEdgesTo(ctx, pkgNode.ID)
+		importerEdges, err := storage.GetEdgesTo(ctx, pkgNodeID)
 		if err != nil {
 			continue
 		}

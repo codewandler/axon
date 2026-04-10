@@ -226,6 +226,89 @@ func TestQuery_WhereLabelsNotContains(t *testing.T) {
 	}
 }
 
+// Test WHERE labels NOT CONTAINS ANY
+func TestQuery_WhereLabelsNotContainsAny(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// NOT CONTAINS ANY ('test') means: nodes that have none of the listed labels
+	// Same semantics as NOT CONTAINS for a single label
+	q := aql.Nodes.SelectStar().
+		Where(aql.Labels.NotContainsAny("test")).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	// Nodes without "test" label: src (source), cmd, README, main.go, repo, 2 branches = 7
+	if len(result.Nodes) != 7 {
+		t.Errorf("expected 7 nodes without test label, got %d", len(result.Nodes))
+	}
+}
+
+// Test WHERE labels NOT CONTAINS ANY via parsed query string
+func TestQuery_ParseNotContainsAny(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	q, err := aql.Parse("SELECT * FROM nodes WHERE labels NOT CONTAINS ANY ('test')")
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	// Nodes without "test" label: src (source), cmd, README, main.go, repo, 2 branches = 7
+	if len(result.Nodes) != 7 {
+		t.Errorf("expected 7 nodes without test label, got %d", len(result.Nodes))
+	}
+}
+
+// Test WHERE labels NOT CONTAINS ALL
+func TestQuery_WhereLabelsNotContainsAll(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// NOT CONTAINS ALL ('test', 'code') means: nodes missing at least one of those labels
+	// test1.go has both → excluded
+	// All others are included (9 total - 1 = 8)
+	q := aql.Nodes.SelectStar().
+		Where(aql.Labels.NotContainsAll("test", "code")).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	// test1.go has both test+code labels → excluded; all others included = 8
+	if len(result.Nodes) != 8 {
+		t.Errorf("expected 8 nodes missing at least one of test/code labels, got %d", len(result.Nodes))
+	}
+}
+
+// Test WHERE labels NOT CONTAINS ALL via parsed query string
+func TestQuery_ParseNotContainsAll(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	q, err := aql.Parse("SELECT * FROM nodes WHERE labels NOT CONTAINS ALL ('test', 'code')")
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	// test1.go has both test+code labels → excluded; all others included = 8
+	if len(result.Nodes) != 8 {
+		t.Errorf("expected 8 nodes missing at least one of test/code labels, got %d", len(result.Nodes))
+	}
+}
+
 // Test WHERE data.ext = 'go' (JSON extraction)
 func TestQuery_WhereJSONField(t *testing.T) {
 	s, ctx := setupAQLTest(t)
@@ -1449,6 +1532,40 @@ func TestPattern_VariableLengthMultiType(t *testing.T) {
 	// Should find: branch (1 hop via has), file (2 hops via has then contains)
 	if len(result.Nodes) < 2 {
 		t.Errorf("expected at least 2 nodes, got %d", len(result.Nodes))
+	}
+}
+
+func TestPattern_VariableLength_SelectStar(t *testing.T) {
+	s, err := New(":memory:")
+	if err != nil {
+		t.Fatalf("sqlite.New: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	root := graph.NewNode("fs:dir").WithURI("file:///r").WithName("root")
+	child := graph.NewNode("fs:file").WithURI("file:///r/f.go").WithName("f.go")
+	s.PutNode(ctx, root)
+	s.PutNode(ctx, child)
+	s.PutEdge(ctx, graph.NewEdge("contains", root.ID, child.ID))
+	s.Flush(ctx)
+
+	// SELECT * previously crashed: n_end.* returned columns in DDL order but
+	// the isStar scan expected them in a different order, causing a nanoid
+	// to be json.Unmarshalled as labels → "invalid character 'X'..."
+	q, err := aql.Parse(`SELECT * FROM (r:fs:dir)-[:contains*1..1]->(f:fs:file)`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query (was crashing before fix): %v", err)
+	}
+	if len(result.Nodes) == 0 {
+		t.Fatal("expected at least one result node")
+	}
+	if result.Nodes[0].Name != "f.go" {
+		t.Errorf("expected name f.go, got %q", result.Nodes[0].Name)
 	}
 }
 

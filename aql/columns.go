@@ -251,3 +251,31 @@ func (c colType) NotContains(labels ...string) Expression {
 		Labels:   vals,
 	}
 }
+
+// NotContainsAny creates a NOT CONTAINS ANY expression for label arrays.
+// Returns nodes that do NOT have any of the specified labels.
+func (c colType) NotContainsAny(labels ...string) Expression {
+	vals := make([]Value, len(labels))
+	for i, l := range labels {
+		vals[i] = &StringLit{Value: l}
+	}
+	return &LabelExpr{
+		Selector: c.toSelector(),
+		Op:       OpNotContainsAny,
+		Labels:   vals,
+	}
+}
+
+// NotContainsAll creates a NOT CONTAINS ALL expression for label arrays.
+// Returns nodes that do NOT have all of the specified labels (i.e., missing at least one).
+func (c colType) NotContainsAll(labels ...string) Expression {
+	vals := make([]Value, len(labels))
+	for i, l := range labels {
+		vals[i] = &StringLit{Value: l}
+	}
+	return &LabelExpr{
+		Selector: c.toSelector(),
+		Op:       OpNotContainsAll,
+		Labels:   vals,
+	}
+}

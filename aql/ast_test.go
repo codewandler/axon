@@ -134,6 +134,8 @@ func TestLabelOp_String(t *testing.T) {
 		{OpContainsAny, "CONTAINS ANY"},
 		{OpContainsAll, "CONTAINS ALL"},
 		{OpNotContains, "NOT CONTAINS"},
+		{OpNotContainsAny, "NOT CONTAINS ANY"},
+		{OpNotContainsAll, "NOT CONTAINS ALL"},
 		{LabelOp(99), "?"},
 	}
 

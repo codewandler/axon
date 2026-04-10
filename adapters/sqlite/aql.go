@@ -1404,16 +1404,31 @@ func (s *Storage) compileUnrolledVariableLength(q *aql.Query, startNode *aql.Nod
 	var sql strings.Builder
 	hasEdgeType := edge.Type != "" || len(edge.Types) > 0
 
+	// cols returns an explicit SELECT column list for the given table alias,
+	// matching the order expected by executeNodeQuery's isStar scan:
+	// id, type, uri, key, name, labels, data, generation, root, created_at, updated_at
+	cols := func(alias string) string {
+		return fmt.Sprintf(
+			"SELECT %[1]s.id, %[1]s.type, %[1]s.uri, %[1]s.key, %[1]s.name, %[1]s.labels, %[1]s.data, %[1]s.generation, %[1]s.root, %[1]s.created_at, %[1]s.updated_at",
+			alias)
+	}
+
 	// Determine which node to select
 	selectVar := ""
+	isStar := false
 	if len(q.Select.Columns) > 0 {
 		if sel, ok := q.Select.Columns[0].Expr.(*aql.Selector); ok {
 			if len(sel.Parts) == 1 {
 				selectVar = sel.Parts[0]
 			}
+		} else if _, ok := q.Select.Columns[0].Expr.(*aql.Star); ok {
+			isStar = true
 		}
 	}
-	selectingEndNode := selectVar == endNode.Variable
+	// SELECT * on a variable-length traversal naturally yields the end node.
+	// Without an explicit variable, selectVar is "", so we must handle isStar
+	// separately to avoid silently returning the start node.
+	selectingEndNode := selectVar == endNode.Variable || isStar
 
 	// Build a UNION ALL of JOIN chains for each hop depth from minHops to maxHops
 	first := true
@@ -1424,9 +1439,9 @@ func (s *Storage) compileUnrolledVariableLength(q *aql.Query, startNode *aql.Nod
 		first = false
 
 		if selectingEndNode {
-			sql.WriteString("SELECT n_end.*\nFROM edges e0\n")
+			sql.WriteString(cols("n_end") + "\nFROM edges e0\n")
 		} else {
-			sql.WriteString("SELECT n_start.*\nFROM edges e0\n")
+			sql.WriteString(cols("n_start") + "\nFROM edges e0\n")
 		}
 
 		// INDEXED BY hint on first edge
@@ -2166,7 +2181,7 @@ func (s *Storage) compileBetween(e *aql.BetweenExpr, table string) (string, []an
 	return sql, []any{low, high}, nil
 }
 
-// compileLabel compiles label operations (CONTAINS ANY/ALL, NOT CONTAINS).
+// compileLabel compiles label operations (CONTAINS ANY/ALL, NOT CONTAINS/ANY/ALL).
 func (s *Storage) compileLabel(e *aql.LabelExpr, table string) (string, []any, error) {
 	if table != "nodes" {
 		return "", nil, fmt.Errorf("label operations only supported on nodes table")
@@ -2192,6 +2207,10 @@ func (s *Storage) compileLabel(e *aql.LabelExpr, table string) (string, []any, e
 		sql = "(" + strings.Join(conditions, " AND ") + ")"
 	case aql.OpNotContains:
 		sql = "NOT (" + strings.Join(conditions, " OR ") + ")"
+	case aql.OpNotContainsAny:
+		sql = "NOT (" + strings.Join(conditions, " OR ") + ")"
+	case aql.OpNotContainsAll:
+		sql = "NOT (" + strings.Join(conditions, " AND ") + ")"
 	default:
 		return "", nil, fmt.Errorf("unsupported label operator: %v", e.Op)
 	}

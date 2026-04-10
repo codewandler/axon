@@ -436,9 +436,11 @@ func (*LabelExpr) expr()           {}
 type LabelOp int
 
 const (
-	OpContainsAny LabelOp = iota // CONTAINS ANY
-	OpContainsAll                // CONTAINS ALL
-	OpNotContains                // NOT CONTAINS
+	OpContainsAny    LabelOp = iota // CONTAINS ANY
+	OpContainsAll                   // CONTAINS ALL
+	OpNotContains                   // NOT CONTAINS
+	OpNotContainsAny                // NOT CONTAINS ANY
+	OpNotContainsAll                // NOT CONTAINS ALL
 )
 
 func (op LabelOp) String() string {
@@ -449,6 +451,10 @@ func (op LabelOp) String() string {
 		return "CONTAINS ALL"
 	case OpNotContains:
 		return "NOT CONTAINS"
+	case OpNotContainsAny:
+		return "NOT CONTAINS ANY"
+	case OpNotContainsAll:
+		return "NOT CONTAINS ALL"
 	default:
 		return "?"
 	}
