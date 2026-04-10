@@ -1,0 +1,59 @@
+# https://taskfile.dev
+version: "3"
+
+vars:
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+  LDFLAGS: -X main.version={{.VERSION}}
+  BIN: ./bin/axon
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  build:
+    desc: Build the axon binary to ./bin/axon
+    cmds:
+      - go build -ldflags "{{.LDFLAGS}}" -o {{.BIN}} ./cmd/axon
+    sources:
+      - "**/*.go"
+    generates:
+      - "{{.BIN}}"
+
+  install:
+    desc: Install axon to GOPATH/bin
+    cmds:
+      - go install -ldflags "{{.LDFLAGS}}" ./cmd/axon
+
+  test:
+    desc: Run all tests (no cache)
+    cmds:
+      - go test -count=1 ./...
+
+  test:verbose:
+    desc: Run all tests with verbose output
+    cmds:
+      - go test -v -count=1 ./...
+
+  test:race:
+    desc: Run all tests with race detector
+    cmds:
+      - go test -race ./...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
+  fmt:
+    desc: Format all Go source files
+    cmds:
+      - gofmt -w .
+
+  clean:
+    desc: Remove built binary
+    cmds:
+      - rm -f {{.BIN}}
