@@ -26,7 +26,7 @@ type FileData struct {
 	Size        int64       `json:"size"`
 	Modified    time.Time   `json:"modified"`
 	Mode        os.FileMode `json:"mode"`
-	Ext         string      `json:"ext"`          // File extension (e.g., ".md", ".go")
+	Ext         string      `json:"ext"`          // File extension without leading dot (e.g., "md", "go")
 	ContentType string      `json:"content_type"` // MIME type (e.g., "text/markdown")
 }
 

@@ -43,7 +43,7 @@ var defaultCategories = []category{
 		buildFn: func() aql.Expression {
 			return aql.And(
 				aql.Var("target").Field("type").Eq("fs:file"),
-				aql.Var("target").DataField("ext").In(".go", ".py", ".js", ".ts", ".tsx", ".rs", ".c", ".cpp", ".java", ".rb", ".sh", ".lua", ".zig", ".swift"),
+				aql.Var("target").DataField("ext").In("go", "py", "js", "ts", "tsx", "rs", "c", "cpp", "java", "rb", "sh", "lua", "zig", "swift"),
 			)
 		},
 	},

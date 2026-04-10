@@ -197,11 +197,10 @@ func runFind(cmd *cobra.Command, args []string) error {
 	// Extension filtering (OR logic - node has one of the extensions)
 	if len(findExt) > 0 {
 		var extConditions []aql.Expression
+		// Extensions are stored in data.ext without a leading dot.
+		// Accept both 'go' and '.go' from the user for convenience.
 		for _, ext := range findExt {
-			// Extensions are stored in data.ext field with leading dot
-			if !strings.HasPrefix(ext, ".") {
-				ext = "." + ext
-			}
+			ext = strings.TrimPrefix(ext, ".")
 			extConditions = append(extConditions, aql.DataExt.Eq(ext))
 		}
 		if len(extConditions) == 1 {

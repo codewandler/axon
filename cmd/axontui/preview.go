@@ -25,50 +25,51 @@ var (
 // Max bytes to read from a file for preview
 const maxPreviewBytes = 32 * 1024 // 32KB
 
-// Known code extensions mapped to glamour/chroma language names
+// Known code extensions mapped to glamour/chroma language names.
+// Keys are without leading dot, matching the data.ext field (e.g. "go", "py").
 var codeExtensions = map[string]string{
-	".go":    "go",
-	".py":    "python",
-	".js":    "javascript",
-	".ts":    "typescript",
-	".tsx":   "tsx",
-	".jsx":   "jsx",
-	".rs":    "rust",
-	".c":     "c",
-	".h":     "c",
-	".cpp":   "cpp",
-	".cc":    "cpp",
-	".java":  "java",
-	".rb":    "ruby",
-	".sh":    "bash",
-	".bash":  "bash",
-	".zsh":   "bash",
-	".yaml":  "yaml",
-	".yml":   "yaml",
-	".json":  "json",
-	".toml":  "toml",
-	".xml":   "xml",
-	".html":  "html",
-	".css":   "css",
-	".sql":   "sql",
-	".lua":   "lua",
-	".vim":   "vim",
-	".zig":   "zig",
-	".swift": "swift",
-	".kt":    "kotlin",
-	".scala": "scala",
-	".hs":    "haskell",
-	".ex":    "elixir",
-	".exs":   "elixir",
-	".erl":   "erlang",
-	".ml":    "ocaml",
-	".r":     "r",
-	".php":   "php",
-	".pl":    "perl",
-	".tf":    "hcl",
-	".proto": "protobuf",
-	".mod":   "gomod",
-	".sum":   "gomod",
+	"go":     "go",
+	"py":     "python",
+	"js":     "javascript",
+	"ts":     "typescript",
+	"tsx":    "tsx",
+	"jsx":    "jsx",
+	"rs":     "rust",
+	"c":      "c",
+	"h":      "c",
+	"cpp":    "cpp",
+	"cc":     "cpp",
+	"java":   "java",
+	"rb":     "ruby",
+	"sh":     "bash",
+	"bash":   "bash",
+	"zsh":    "bash",
+	"yaml":   "yaml",
+	"yml":    "yaml",
+	"json":   "json",
+	"toml":   "toml",
+	"xml":    "xml",
+	"html":   "html",
+	"css":    "css",
+	"sql":    "sql",
+	"lua":    "lua",
+	"vim":    "vim",
+	"zig":    "zig",
+	"swift":  "swift",
+	"kt":     "kotlin",
+	"scala":  "scala",
+	"hs":     "haskell",
+	"ex":     "elixir",
+	"exs":    "elixir",
+	"erl":    "erlang",
+	"ml":     "ocaml",
+	"r":      "r",
+	"php":    "php",
+	"pl":     "perl",
+	"tf":     "hcl",
+	"proto":  "protobuf",
+	"mod":    "gomod",
+	"sum":    "gomod",
 }
 
 // resolvePreview returns rendered preview content for a node.
@@ -167,7 +168,7 @@ func previewFile(node *graph.Node, data types.FileData, width int) string {
 	ext := strings.ToLower(data.Ext)
 
 	// Markdown files
-	if ext == ".md" || ext == ".markdown" || ext == ".mdx" {
+	if ext == "md" || ext == "markdown" || ext == "mdx" {
 		content := readFilePreview(node.URI)
 		if content != "" {
 			return renderGlamour(content, width)
@@ -235,7 +236,7 @@ func previewMapData(ctx context.Context, g *graph.Graph, node *graph.Node, data 
 	case types.TypeFile:
 		ext, _ := data["ext"].(string)
 		ext = strings.ToLower(ext)
-		if ext == ".md" || ext == ".markdown" || ext == ".mdx" {
+		if ext == "md" || ext == "markdown" || ext == "mdx" {
 			content := readFilePreview(node.URI)
 			if content != "" {
 				return renderGlamour(content, width)
@@ -439,7 +440,7 @@ func hasPreviewContent(node *graph.Node) bool {
 		switch data := node.Data.(type) {
 		case types.FileData:
 			ext := strings.ToLower(data.Ext)
-			if ext == ".md" || ext == ".markdown" || ext == ".mdx" {
+			if ext == "md" || ext == "markdown" || ext == "mdx" {
 				return true
 			}
 			if _, ok := codeExtensions[ext]; ok {
@@ -448,7 +449,7 @@ func hasPreviewContent(node *graph.Node) bool {
 		case map[string]any:
 			ext, _ := data["ext"].(string)
 			ext = strings.ToLower(ext)
-			if ext == ".md" || ext == ".markdown" || ext == ".mdx" {
+			if ext == "md" || ext == "markdown" || ext == "mdx" {
 				return true
 			}
 			if _, ok := codeExtensions[ext]; ok {

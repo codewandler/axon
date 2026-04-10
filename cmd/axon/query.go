@@ -35,7 +35,7 @@ Examples:
   axon query "SELECT name, type FROM nodes WHERE type = 'fs:file'"
 
   # Query with JSON field access
-  axon query "SELECT * FROM nodes WHERE data.ext = '.go'"
+  axon query "SELECT * FROM nodes WHERE data.ext = 'go'"
 
   # Group and count by type
   axon query "SELECT type, COUNT(*) FROM nodes GROUP BY type"

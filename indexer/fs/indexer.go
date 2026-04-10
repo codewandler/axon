@@ -225,6 +225,9 @@ func (i *Indexer) indexEntry(ctx context.Context, ictx *indexer.Context, entry d
 		}
 		ext := filepath.Ext(d.Name())
 		contentType := mime.TypeByExtension(ext)
+		// Strip the leading dot so data.ext = 'go' works in AQL
+		// (filepath.Ext returns ".go"; we store "go" for intuitive queries).
+		ext = strings.TrimPrefix(ext, ".")
 		node = graph.NewNode(types.TypeFile).
 			WithURI(uri).
 			WithKey(path).

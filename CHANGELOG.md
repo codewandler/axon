@@ -162,9 +162,16 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in `printQueryResultJSON` now fall back to typed empty slices when the
   result slice is nil. (`cmd/axon/query.go`)
 
-- **`axon query --help` example `data.ext = 'go'` returned 0 rows** —
-  extensions are stored with a leading dot (`.go`), so the correct literal
-  is `data.ext = '.go'`. (`cmd/axon/query.go`)
+- **`data.ext` field now stored without leading dot** —
+  `data.ext` was stored as `".go"` (with dot, matching `filepath.Ext()`
+  output) but every query example and user expectation used `'go'`
+  (without dot). The fs indexer now strips the leading dot before storing,
+  so `data.ext = 'go'` and `axon find --ext go` work consistently. The
+  `codeExtensions` map and TUI querybar filter updated accordingly.
+  The previous CHANGELOG entry recording `data.ext = '.go'` as correct
+  is superseded by this fix.
+  (`indexer/fs/indexer.go`, `types/fs.go`, `cmd/axon/find.go`,
+  `cmd/axon/query.go`, `cmd/axontui/preview.go`, `cmd/axontui/querybar.go`)
 
 - **`GROUP BY` queries used hardcoded `"key"` as the JSON field name** —
   `SELECT type, COUNT(*) … GROUP BY type` produced `{"key": "fs:file", …}`
