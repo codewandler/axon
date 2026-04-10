@@ -614,3 +614,104 @@ func TestIndexerTagCommitReference(t *testing.T) {
 		t.Error("expected 'references' edge from tag to its commit")
 	}
 }
+
+func TestIndexerCommitName(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestRepoWithCommits(t, 1)
+	g := setupGraph(t)
+
+	idx := New()
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+	ictx := &indexer.Context{
+		Root:       types.RepoPathToURI(dir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	gitDir := filepath.Join(dir, ".git")
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(gitDir),
+		Path:     gitDir,
+		Name:     ".git",
+		NodeType: types.TypeDir,
+		NodeID:   "test-git-dir-id",
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	commits, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeCommit}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes: %v", err)
+	}
+	if len(commits) == 0 {
+		t.Fatal("no commits found")
+	}
+
+	c := commits[0]
+	// Name is a plain text column in SQLite -- always preserved verbatim.
+	// setupTestRepoWithCommits commits with message "commit 0", which is
+	// non-empty, so the name should be "sha8 -- commit 0".
+	const sep = " -- "
+	if len(c.Name) <= 8 {
+		t.Errorf("commit Name has no subject appended: %q (want sha8 -- subject format)", c.Name)
+	} else if c.Name[8:8+len(sep)] != sep {
+		t.Errorf("commit Name missing ' -- ' separator: %q", c.Name)
+	}
+}
+
+func TestCommitName(t *testing.T) {
+	tests := []struct {
+		name    string
+		sha     string
+		subject string
+		want    string
+	}{
+		{
+			name:    "normal commit",
+			sha:     "ee48448eabcdef01",
+			subject: "fix: prevent agent loss",
+			want:    "ee48448e -- fix: prevent agent loss",
+		},
+		{
+			name:    "no subject",
+			sha:     "ee48448eabcdef01",
+			subject: "",
+			want:    "ee48448e",
+		},
+		{
+			name:    "subject exactly 72 chars",
+			sha:     "ee48448eabcdef01",
+			subject: "123456789012345678901234567890123456789012345678901234567890123456789012",
+			want:    "ee48448e -- 123456789012345678901234567890123456789012345678901234567890123456789012",
+		},
+		{
+			// subject is 73 chars; truncated at 69 + "..." = 72 chars
+			name:    "subject over 72 chars truncated",
+			sha:     "ee48448eabcdef01",
+			subject: "1234567890123456789012345678901234567890123456789012345678901234567890123",
+			want:    "ee48448e -- 123456789012345678901234567890123456789012345678901234567890123456789...",
+		},
+		{
+			name:    "short SHA no panic",
+			sha:     "abc",
+			subject: "something",
+			want:    "abc -- something",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := commitName(tt.sha, tt.subject)
+			if got != tt.want {
+				t.Errorf("commitName(%q, %q)\n  got:  %q\n  want: %q", tt.sha, tt.subject, got, tt.want)
+			}
+		})
+	}
+}

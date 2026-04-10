@@ -1,6 +1,8 @@
 package types
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/codewandler/axon/graph"
@@ -114,4 +116,34 @@ func URIToRepoPath(uri string) string {
 		return uri[len(prefix):]
 	}
 	return uri
+}
+
+// Description returns a human-readable one-liner for display in search results,
+// CLIs, and any other consumer of the library.
+// Format: sha8 -- subject  by author (YYYY-MM-DD, N files)
+// All parts are omitted gracefully when the underlying field is empty/zero.
+func (d CommitData) Description() string {
+	short := d.SHA
+	if len(d.SHA) >= 8 {
+		short = d.SHA[:8]
+	}
+	var meta []string
+	if !d.AuthorDate.IsZero() {
+		meta = append(meta, d.AuthorDate.Format("2006-01-02"))
+	}
+	if d.FilesChanged > 0 {
+		meta = append(meta, fmt.Sprintf("%d files", d.FilesChanged))
+	}
+	suffix := ""
+	if len(meta) > 0 {
+		suffix = " (" + strings.Join(meta, ", ") + ")"
+	}
+	by := ""
+	if d.AuthorName != "" {
+		by = "  by " + d.AuthorName
+	}
+	if d.Message == "" {
+		return short + by + suffix
+	}
+	return short + " -- " + d.Message + by + suffix
 }

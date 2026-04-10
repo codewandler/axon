@@ -122,6 +122,12 @@ func getNodeSummary(n *graph.Node) string {
 		name = data.Name
 	case types.TagData:
 		name = data.Name
+	case types.CommitData:
+		if data.Message != "" {
+			name = data.SHA[:8] + " -- " + data.Message
+		} else {
+			name = data.SHA[:8]
+		}
 	case types.DocumentData:
 		name = data.Title
 	case types.SectionData:
@@ -144,6 +150,17 @@ func getNodeSummary(n *graph.Node) string {
 			name = nm
 		} else if text, ok := data["text"].(string); ok && text != "" {
 			name = text
+		} else if sha, ok := data["sha"].(string); ok && sha != "" {
+			// vcs:commit nodes have sha + message instead of a name field
+			short := sha
+			if len(sha) >= 8 {
+				short = sha[:8]
+			}
+			if msg, ok := data["message"].(string); ok && msg != "" {
+				name = short + " -- " + msg
+			} else {
+				name = short
+			}
 		} else if lang, ok := data["language"].(string); ok {
 			lines := 0
 			if l, ok := data["lines"].(float64); ok {
@@ -273,6 +290,35 @@ func printNodeData(ctx context.Context, g *graph.Graph, node *graph.Node) {
 		fmt.Printf("  Name: %s\n", data.Name)
 		if data.Commit != "" {
 			fmt.Printf("  Commit: %s\n", data.Commit)
+		}
+
+	case types.CommitData:
+		fmt.Println("\nData:")
+		if len(data.SHA) >= 8 {
+			fmt.Printf("  SHA:     %s\n", data.SHA[:8])
+		}
+		if data.Message != "" {
+			fmt.Printf("  Subject: %s\n", data.Message)
+		}
+		if data.Body != "" {
+			fmt.Println("  Body:")
+			for _, line := range strings.Split(data.Body, "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+		if data.AuthorEmail != "" {
+			fmt.Printf("  Author:  %s <%s>\n", data.AuthorName, data.AuthorEmail)
+		} else if data.AuthorName != "" {
+			fmt.Printf("  Author:  %s\n", data.AuthorName)
+		}
+		if !data.AuthorDate.IsZero() {
+			fmt.Printf("  Date:    %s\n", data.AuthorDate.Format("2006-01-02"))
+		}
+		if data.FilesChanged > 0 {
+			fmt.Printf("  Files:   %d changed, +%d -%d lines\n", data.FilesChanged, data.Insertions, data.Deletions)
+		}
+		if len(data.Parents) > 0 {
+			fmt.Printf("  Parents: %d\n", len(data.Parents))
 		}
 
 	// Markdown types - render content with glamour
@@ -625,6 +671,43 @@ func printMapData(ctx context.Context, g *graph.Graph, nodeType string, node *gr
 			fmt.Printf("  Commit: %s\n", commit)
 		}
 
+	case types.TypeCommit:
+		fmt.Println("\nData:")
+		sha := getMapString(data, "sha")
+		if len(sha) >= 8 {
+			fmt.Printf("  SHA:     %s\n", sha[:8])
+		}
+		if msg := getMapString(data, "message"); msg != "" {
+			fmt.Printf("  Subject: %s\n", msg)
+		}
+		if body := getMapString(data, "body"); body != "" {
+			fmt.Println("  Body:")
+			for _, line := range strings.Split(body, "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+		author := getMapString(data, "author_name")
+		email := getMapString(data, "author_email")
+		if author != "" {
+			if email != "" {
+				fmt.Printf("  Author:  %s <%s>\n", author, email)
+			} else {
+				fmt.Printf("  Author:  %s\n", author)
+			}
+		}
+		if dateStr := getMapString(data, "author_date"); dateStr != "" {
+			fmt.Printf("  Date:    %s\n", dateStr)
+		}
+		fc := int(getMapFloat(data, "files_changed"))
+		if fc > 0 {
+			ins := int(getMapFloat(data, "insertions"))
+			del := int(getMapFloat(data, "deletions"))
+			fmt.Printf("  Files:   %d changed, +%d -%d lines\n", fc, ins, del)
+		}
+		if parents, ok := data["parents"].([]any); ok && len(parents) > 0 {
+			fmt.Printf("  Parents: %d\n", len(parents))
+		}
+
 	// Markdown types from JSON
 	case types.TypeMarkdownDoc:
 		fmt.Println("\nData:")
@@ -714,4 +797,12 @@ func shortID(id string) string {
 		return id[:7]
 	}
 	return id
+}
+
+// getMapFloat extracts a float64 from a map (JSON numbers are always float64).
+func getMapFloat(data map[string]any, key string) float64 {
+	if v, ok := data[key].(float64); ok {
+		return v
+	}
+	return 0
 }

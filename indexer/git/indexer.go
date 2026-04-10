@@ -333,7 +333,7 @@ func (i *Indexer) indexCommits(ctx context.Context, ictx *indexer.Context, repo 
 		commitNode := graph.NewNode(types.TypeCommit).
 			WithURI(commitURI).
 			WithKey(sha).
-			WithName(sha[:8]).
+			WithName(commitName(sha, subject)).
 			WithData(types.CommitData{
 				SHA:            sha,
 				Message:        subject,
@@ -394,4 +394,21 @@ func (i *Indexer) cleanup(ctx context.Context, ictx *indexer.Context, repoPath s
 		ictx.AddNodesDeleted(deleted)
 	}
 	return err
+}
+
+// commitName builds the human-readable Name for a vcs:commit node.
+// Format: "sha8" if no subject, "sha8 -- subject" otherwise.
+// Subject is truncated to 72 characters with "..." suffix if longer.
+func commitName(sha, subject string) string {
+	short := sha
+	if len(sha) >= 8 {
+		short = sha[:8]
+	}
+	if subject == "" {
+		return short
+	}
+	if len(subject) > 72 {
+		subject = subject[:69] + "..."
+	}
+	return short + " -- " + subject
 }

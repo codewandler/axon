@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/codewandler/axon/aql"
 	"github.com/codewandler/axon/graph"
@@ -296,11 +297,7 @@ func outputPath(nodes []*graph.Node, showParent, compact bool, ctx context.Conte
 	}
 
 	for _, node := range nodes {
-		path := types.URIToPath(node.URI)
-		if path == "" {
-			path = node.Key
-		}
-		fmt.Printf("[%s] %s (%s)\n", shortID(node.ID), path, node.Type)
+		fmt.Printf("[%s] %s (%s)\n", shortID(node.ID), nodeDisplay(node), node.Type)
 	}
 	return nil
 }
@@ -537,14 +534,7 @@ func outputSemanticResults(results []*graph.NodeWithScore, format string) error 
 
 	default: // "path"
 		for _, r := range results {
-			path := types.URIToPath(r.URI)
-			if path == "" {
-				path = r.Key
-			}
-			if path == "" {
-				path = r.Name
-			}
-			fmt.Printf("%.3f  [%s] %s (%s)\n", r.Score, shortID(r.ID), path, r.Type)
+			fmt.Printf("%.3f  [%s] %s (%s)\n", r.Score, shortID(r.ID), nodeDisplay(r.Node), r.Type)
 		}
 		return nil
 	}
@@ -558,4 +548,48 @@ func uriPrefixForScope(absPath, nodeType string) string {
 // escapeSQL escapes single quotes in a string for safe interpolation into AQL/SQL.
 func escapeSQL(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
+}
+
+// nodeDisplay returns the display string for a node in find output.
+// For vcs:commit nodes it shows enriched metadata via commitDisplay.
+// For filesystem nodes it returns the path. For all others it falls back to Key then Name.
+func nodeDisplay(node *graph.Node) string {
+	if node.Type == types.TypeCommit {
+		return commitDisplay(node)
+	}
+	path := types.URIToPath(node.URI)
+	if path == "" {
+		path = node.Key
+	}
+	if path == "" {
+		path = node.Name
+	}
+	return path
+}
+
+// commitDisplay formats a vcs:commit node for one-line display.
+// For the typed path (in-memory CommitData), delegates to CommitData.Description() --
+// the single source of truth for commit formatting, accessible to all library users.
+// For the map path (SQLite-loaded nodes), reconstructs CommitData and calls the same
+// Description() method so output is identical in both cases.
+func commitDisplay(node *graph.Node) string {
+	switch d := node.Data.(type) {
+	case types.CommitData:
+		return d.Description()
+	case map[string]any:
+		t, _ := time.Parse(time.RFC3339, getMapString(d, "author_date"))
+		cd := types.CommitData{
+			SHA:          getMapString(d, "sha"),
+			Message:      getMapString(d, "message"),
+			AuthorName:   getMapString(d, "author_name"),
+			AuthorDate:   t,
+			FilesChanged: int(getMapFloat(d, "files_changed")),
+		}
+		return cd.Description()
+	}
+	// Last resort: use the enriched Name (includes subject after re-index).
+	if node.Name != "" {
+		return node.Name
+	}
+	return node.Key
 }
