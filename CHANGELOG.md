@@ -7,6 +7,20 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.18.0] — 2026-04-11
+
+### Added
+
+- **`axon neighbors` command** — explore the knowledge graph by walking edges
+  from a node. Given a URI (or name or node ID), returns all immediately
+  connected nodes with edge type and direction. Supports `--direction in|out|both`,
+  `--edge-type` (repeatable filter), `--max`, and `--output text|table|json`.
+  Closes #2.
+- **`(*Axon).Neighbors` library API** — `NeighborResult` and `NeighborsOptions`
+  types plus the `Neighbors(ctx, uri, opts)` method for programmatic edge traversal.
+
+---
+
 ## [0.17.0] — 2026-04-10
 
 ### Changed
