@@ -7,6 +7,33 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.4] — 2026-04-10
+
+### Changed
+
+- **`AGENTS.md`** — Reduced token footprint by ~210 lines:
+  - AQL Phase 1–4 checklist replaced with a single-paragraph capability summary.
+  - `New: Type-Safe Fluent AQL API` section (166 lines) replaced with a
+    12-line pointer + 4 representative examples; full reference lives in
+    `.agents/skills/axon/references/aql_go_querybuilder.md`.
+  - Removed stale `Removed: GraphTraverser` section (feature deleted long ago).
+- **`aql_go_querybuilder.md`** — Reduced from 611 to 376 lines (−235 lines):
+  - Removed Table of Contents (anchor links unused in AI context).
+  - Removed duplicate `Between` expression line.
+  - Removed `Common CLI Patterns` section (all examples duplicated earlier).
+  - Removed `Migration Guide` section (old string-based API is gone).
+  - Removed `Benefits of New API` marketing copy.
+- **`SKILL.md`** — Corrected and completed node/edge type listings:
+  - Replaced non-existent `md:heading` with real types: `md:codeblock`,
+    `md:link`, `md:image`.
+  - Added missing node types: `vcs:remote`, `project:root`, `go:module`,
+    `go:method`, `go:field`, `go:const`, `go:var`.
+  - Added missing edge types: `depends_on`, `tests`, `parent_of`, `modifies`.
+- **Removed `axon-improve` skill** — deleted `.agents/skills/axon-improve/`
+  (SKILL.md + two reference files, 1050 lines).
+
+---
+
 ## [0.9.3] — 2026-04-10
 
 ### Changed
