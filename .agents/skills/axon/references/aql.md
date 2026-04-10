@@ -271,3 +271,13 @@ SELECT a.name, b.name
 FROM (a:fs:file)-[:references]-(b:fs:file)
 WHERE a.data.ext = 'go'
 ```
+
+**Top-called functions (call frequency)**:
+```sql
+SELECT callee.name, COUNT(*)
+FROM (caller)-[:calls]->(callee)
+WHERE callee.type IN ('go:func', 'go:method')
+GROUP BY callee.id
+ORDER BY COUNT(*) DESC
+LIMIT 25
+```

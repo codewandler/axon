@@ -523,7 +523,7 @@ Skipping this step is what creates documentation debt — do not defer it.
 #### Checklist
 
 | Changed | What to update |
-|---|---|
+|---|-----------|
 | New CLI flag | `README.md` — the relevant `axon <cmd>` section; `.agents/skills/axon/SKILL.md` — the matching section |
 | New node type | `README.md` — add entry under the correct `## Node Types` subsection with data fields; `SKILL.md` — add to **Node Types** list; add a usage example to the **Finding Nodes** or **Semantic Search** section |
 | New edge type | `README.md` — add to `## Edge Types`; `SKILL.md` — add to **Edge Types** list |
@@ -531,6 +531,9 @@ Skipping this step is what creates documentation debt — do not defer it.
 | New indexer | `README.md` — add to the Architecture indexers list |
 | New AQL capability | `README.md` — add example to the AQL section |
 | Changed agent/workflow behaviour | `AGENTS.md` — update the relevant step |
+
+> **Skill scope**: `.agents/skills/axon/SKILL.md` covers the **`axon` CLI only**.
+> Do **not** add `axonui` (TUI) commands, options, or usage examples to the skill.
 
 #### How to apply
 
