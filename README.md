@@ -1,5 +1,9 @@
 # Axon
 
+<p align="center">
+  <img src="assets/logo.svg" alt="axon — AI-native graph database" width="800"/>
+</p>
+
 **AI-native graph database and indexing system for local knowledge management**
 
 Axon transforms your filesystem, git repositories, and documents into a queryable knowledge graph—designed from the ground up for AI agents. It provides both persistent agent memory and powerful retrieval capabilities, all running locally on your machine.
@@ -29,11 +33,8 @@ Requires Go 1.23 or later.
 Initialize and index a directory:
 
 ```bash
-# Index current directory (uses ~/.axon/graph.db)
-axon init .
-
-# Or use project-local database
-axon init --local .
+# Index current directory (creates .axon/graph.db in the current directory)
+axon index .
 
 # Check what was indexed
 axon tree
@@ -44,15 +45,18 @@ axon query "SELECT * FROM nodes WHERE type = 'fs:file' AND data.ext = 'go'"
 
 Basic CLI commands:
 
-- `axon init [path]` - Index a directory
-- `axon init --embed [path]` - Index and generate embeddings for semantic search
+- `axon index [path]` - Index a directory (alias: `axon init`)
+- `axon index --embed [path]` - Index and generate embeddings for semantic search
 - `axon index --watch [path]` - Watch for changes and keep graph up to date
 - `axon query "<aql>"` - Execute AQL queries
 - `axon tree [path]` - Display graph as tree
 - `axon find` - Search nodes with filters
 - `axon show <node-id>` - Show node details
 - `axon impact <symbol>` - Show blast radius of changing a symbol
+- `axon search "<question>"` - Natural language code search
 - `axon search --semantic "<query>"` - Semantic vector similarity search
+- `axon context --task "<description>"` - Generate AI-optimised context for a task
+- `axon info` - Database status and statistics dashboard
 - `axon stats` - Database statistics
 
 ## AQL: Axon Query Language
@@ -237,20 +241,19 @@ WHERE (type = 'fs:file' OR type = 'fs:dir')
 
 ### Global Flags
 
-- `--db-dir <path>` - Use specific database directory
-- `--local` - Use `.axon` directory in project root
+- `--db-dir <path>` - Use a specific database directory
+- `--global` - Walk up from CWD to find an existing `.axon/graph.db`, then fall back to `~/.axon/graph.db`
 
-**Database Resolution**: Axon automatically locates the database by walking up directories from the current working directory. If no `.axon/graph.db` is found, it falls back to `~/.axon/graph.db`.
+**Database Resolution**: By default, axon uses `<cwd>/.axon/graph.db` — no directory traversal. Pass `--global` to search parent directories and fall back to `~/.axon/graph.db` if nothing is found locally.
 
-### axon init
+### axon index
 
-Index a directory and create the graph:
+Index a directory and create the graph (alias: `axon init`):
 
 ```bash
-axon init .                    # Index current dir
-axon init --local .            # Use project-local .axon
-axon init --no-gc /path/to/dir # Skip garbage collection
-axon init --embed .            # Index + generate embeddings for semantic search
+axon index .                    # Index current dir → creates .axon/graph.db here
+axon index --no-gc /path/to/dir # Skip garbage collection
+axon index --embed .            # Index + generate embeddings for semantic search
 ```
 
 **What gets indexed**:
@@ -281,12 +284,13 @@ axon query --explain "SELECT file FROM (dir)-[:contains]->(file)"
 Display the graph as a tree structure:
 
 ```bash
-axon tree                      # Current directory subtree
+axon tree                      # Current directory subtree (depth 3, IDs + types shown by default)
 axon tree /path/to/dir         # Specific path
-axon tree --depth 2            # Limit depth
-axon tree --ids                # Show node IDs
-axon tree --types              # Show node types
-axon tree --type fs:file       # Filter by type
+axon tree nI3NDos              # Subtree rooted at node by ID prefix
+axon tree --depth 2            # Limit depth (0 = unlimited; default 3)
+axon tree --type fs:file       # Filter by node type (glob: 'fs:*', 'md:*')
+axon tree --no-color           # Disable colored output
+axon tree --no-emoji           # Disable emoji icons
 ```
 
 ### axon find
@@ -295,11 +299,17 @@ Search for nodes with filters:
 
 ```bash
 axon find --type fs:file               # All files
-axon find --name "main.go"             # By name
-axon find --ext go                     # By extension
-axon find --query "SELECT * FROM ..."  # Custom AQL
-axon find --global                     # Search entire graph
-axon find --label important            # By label
+axon find --name "main.go"             # Exact name match
+axon find --ext go                     # By extension (repeatable: --ext go --ext py)
+axon find --query "README*"            # Name wildcard pattern
+axon find --label important            # By label (repeatable, OR logic)
+axon find --data key=value             # Match on a data field
+axon find --global                     # Search entire graph, not just CWD subtree
+axon find --type vcs:branch --count    # Just show the count
+axon find --output json                # Output format: path, uri, json, table
+axon find --show-parent                # Show parent chain to CWD or root
+axon find --show-query                 # Print the generated AQL query
+axon find --limit 20                   # Limit number of results
 ```
 
 ### axon show
@@ -310,13 +320,35 @@ Display detailed node information:
 axon show <node-id>            # Show node details
 ```
 
+### axon context
+
+Generate AI-optimised context for a task description — finds relevant definitions, dependencies, callers, and related symbols, then fits them within a token budget:
+
+```bash
+axon context --task "add caching to Storage interface"
+axon context --task "refactor Query method" --tokens 8000
+axon context --task "fix NewNode" --output json
+axon context --task "explain Indexer" --no-source   # manifest only, no source
+axon context --task "improve performance" --symbols Storage --symbols Query
+echo "add error handling to Flush" | axon context   # task from stdin
+```
+
+### axon info
+
+Show a dashboard of database status, location, statistics, and last index details:
+
+```bash
+axon info
+axon info -o json
+```
+
 ### Other Commands
 
 ```bash
 axon stats                     # Database statistics
-axon labels                    # List all labels
-axon types                     # List all node types
-axon edges                     # List all edge types
+axon labels                    # List all labels with counts
+axon types                     # List all node types with counts
+axon edges                     # List all edge types with counts
 axon gc                        # Run garbage collection
 ```
 
@@ -329,7 +361,7 @@ axon index --watch .                   # Watch current directory
 axon index --watch ./src               # Watch specific subtree
 axon index --watch --watch-quiet .     # Suppress per-change output
 axon index --watch --watch-debounce 300ms .  # Custom debounce duration
-axon index --watch --embed .           # Watch + re-embed on each change
+axon index --watch --embed .            # Watch + re-embed on each change
 ```
 
 On each file change, axon re-indexes the affected directory and prints:
@@ -361,14 +393,34 @@ Packages importing affected packages:
   cmd/axon              imports sqlite, graph
 ```
 
-### Semantic Search
+### axon search
 
-Find code by meaning, not just keywords. Two providers are supported — both run fully locally, no data leaves the machine.
+`axon search` answers natural-language questions about the codebase — no embeddings required:
+
+```bash
+axon search "what is the Indexer interface"
+axon search "who calls NewNode"
+axon search "list structs"
+axon search "what implements Storage"
+axon search "how does event routing work"
+axon search "methods of Storage"
+axon search "compare Node and Edge"
+axon search "where is NewNode defined"
+axon search "find functions that return error"
+
+# Limit results
+axon search --limit 5 "list interfaces"
+
+# Filter by node type
+axon search --type go:func "error recovery"
+```
+
+**Semantic / vector similarity search** (requires embeddings — see below):
 
 ```bash
 # First generate embeddings during indexing
-axon init --embed .                              # uses Ollama by default
-axon init --embed --embed-provider=hugot .       # in-process, no daemon needed
+axon index --embed .                              # uses Ollama by default
+axon index --embed --embed-provider=hugot .       # in-process, no daemon needed
 
 # Then search semantically
 axon search --semantic "handles token budget overflow"
@@ -382,7 +434,7 @@ Requires the [Ollama](https://ollama.ai) daemon running locally.
 
 ```bash
 ollama pull nomic-embed-text
-axon init --embed .
+axon index --embed .
 ```
 
 #### Provider: Hugot (in-process, no daemon)
@@ -392,13 +444,13 @@ No external service needed. Model is downloaded once (~90 MB) and cached.
 
 ```bash
 # Hugot provider — downloads model on first run, then cached at ~/.axon/models/
-axon init --embed --embed-provider=hugot .
+axon index --embed --embed-provider=hugot .
 
 # Custom model directory
-axon init --embed --embed-provider=hugot --embed-model-path=/data/models/MiniLM .
+axon index --embed --embed-provider=hugot --embed-model-path=/data/models/MiniLM .
 
 # Via environment variable
-AXON_EMBED_PROVIDER=hugot axon init --embed .
+AXON_EMBED_PROVIDER=hugot axon index --embed .
 ```
 
 | | Hugot | Ollama |
@@ -439,6 +491,14 @@ Axon uses typed nodes with `domain:name` format:
 - `md:document` - Markdown document
 - `md:section` - Document section
 - `md:heading` - Heading
+
+### Go Code
+
+- `go:package` - Go package
+- `go:func` - Function or method
+- `go:struct` - Struct type
+- `go:interface` - Interface type
+- `go:ref` - Symbol reference (call site, type usage, etc.)
 
 ## Edge Types
 
