@@ -7,6 +7,18 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.5] — 2026-04-10
+
+### Fixed
+
+- **`AGENTS.md`** — Release workflow now explicitly requires `git push origin main`
+  before `gh release create`. `gh release create` tags `origin/main` HEAD on
+  GitHub, not the local HEAD; skipping the push causes release tags to point at
+  the wrong commit and GitHub shows a stale diff. Added inline warning to make
+  this impossible to miss.
+
+---
+
 ## [0.9.4] — 2026-04-10
 
 ### Changed

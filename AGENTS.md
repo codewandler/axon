@@ -408,12 +408,21 @@ When cutting a release **or** applying a git tag (even a standalone `tag` reques
    Verify the entry accurately reflects the commits since the last tag.
    If the entry is missing or incomplete, write it now.
 
-4. **Commit the CHANGELOG update** — use a `chore(release):` commit:
-   ```
-   chore(release): v0.4.0
-   ```
+4. **Push `main` and commit CHANGELOG together** — stage the CHANGELOG
+   update alongside any uncommitted work, then commit and push **before**
+   creating the release:
+   ```bash
+   git add CHANGELOG.md          # plus any other unstaged work
+   git commit -m "chore(release): v0.4.0
 
-5. **Create the GitHub release** (this also pushes the tag via `--tag`):
+   - bullet summary of changes"
+   git push origin main          # MUST push before gh release create
+   ```
+   > ⚠️ `gh release create` tags the current HEAD **on GitHub** (i.e. `origin/main`),
+   > not your local HEAD. If you haven't pushed, the tag will point to the wrong commit
+   > and clicking the release on GitHub will show a stale diff.
+
+5. **Create the GitHub release**:
    ```bash
    gh release create v0.4.0 \
      --title "v0.4.0" \
@@ -422,15 +431,8 @@ When cutting a release **or** applying a git tag (even a standalone `tag` reques
    ```
    - Copy the CHANGELOG entry for this version as `--notes`.
    - Use `--latest` on the most recent release; omit it for backfills.
-   - **Do not** run `git tag` manually — `gh release create` creates the tag on GitHub
-     and `git fetch --tags` can pull it locally if needed. If the tag already exists
-     locally, pass `--tag v0.4.0` explicitly.
-
-   Alternatively, if the tag was already pushed separately:
-   ```bash
-   git push origin v0.4.0          # push tag first if not already pushed
-   gh release create v0.4.0 --title "v0.4.0" --notes "..." --latest
-   ```
+   - `gh release create` creates the tag on GitHub pointing to current
+     `origin/main`. Always push first (step 4).
 
 6. **Verify** the release appears on GitHub:
    ```bash
