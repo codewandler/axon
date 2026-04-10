@@ -7,6 +7,53 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.3.2] — 2026-04-10
+
+### Fixed
+
+- **`SELECT data.*` returned `null` for integer and boolean fields** — the
+  `scanNodePartial` scanner only accepted `string`-typed values from
+  `json_extract`, silently discarding `int64` and `bool` results (e.g.
+  `data.size`, `data.mode`). The type assertion is removed; native SQLite
+  types now pass through unchanged. (`adapters/sqlite/aql.go`)
+
+- **`SELECT file.name` in single-variable pattern queries rendered as `null`**
+  — `nodeFieldRaw` and `nodeFieldValue` did not recognise `"var.field"`
+  selectors. Both now strip the leading variable prefix (`"file.name"` →
+  `"name"`, `"file.data.ext"` → `"data.ext"`) before looking up the value.
+  Regression tests added for both functions. (`cmd/axon/query.go`,
+  `cmd/axon/query_test.go`)
+
+- **`axon find --output json` produced 0 bytes on empty results** — the
+  early-return when no nodes matched fired before the output-format switch.
+  `--output json` now emits `[]`; `--output table` calls `outputTable`;
+  path and uri outputs remain silently empty. (`cmd/axon/find.go`)
+
+- **`axon query --output json` emitted `null` instead of `[]` on empty
+  results** — `json.Encode(nil)` produces `"null"`. All result-type branches
+  in `printQueryResultJSON` now fall back to typed empty slices when the
+  result slice is nil. (`cmd/axon/query.go`)
+
+- **`axon query --help` example `data.ext = 'go'` returned 0 rows** —
+  extensions are stored with a leading dot (`.go`), so the correct literal
+  is `data.ext = '.go'`. (`cmd/axon/query.go`)
+
+- **`GROUP BY` queries used hardcoded `"key"` as the JSON field name** —
+  `SELECT type, COUNT(*) … GROUP BY type` produced `{"key": "fs:file", …}`
+  instead of `{"type": "fs:file", …}`. A new `GroupingColumn` field on
+  `QueryResult` is populated from the `GROUP BY` selector; both JSON and
+  table renderers use it. (`graph/storage.go`, `adapters/sqlite/aql.go`,
+  `cmd/axon/query.go`)
+
+- **`flushBatch` swallowed `SQLITE_BUSY` errors silently and always returned
+  success** — the batch writer now retries up to 3 times with 50 ms / 100 ms
+  exponential backoff on `SQLITE_BUSY`. Permanent failures are propagated to
+  `Flush()` callers via a mutex-protected `lastFlushErr` field, allowing
+  commands like `axon init` to exit non-zero when writes fail.
+  (`adapters/sqlite/sqlite.go`)
+
+---
+
 ## [0.3.1] — 2026-04-10
 
 ### Added
