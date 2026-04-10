@@ -16,7 +16,7 @@ axon index --embed .           # Index + generate embeddings for semantic search
 axon index --watch .           # Watch for changes and re-index automatically
 ```
 
-**What gets indexed**: filesystem (files, dirs), git repos (branches, tags, commits), markdown docs, Go packages.
+**What gets indexed**: filesystem (files, dirs), git repos (branches, tags, commits, conventional commit fields), markdown docs, Go packages (symbols, call graph, embed graph), TODO/FIXME annotations.
 
 **Database location**: by default uses `<cwd>/.axon/graph.db`. Pass `--global` to walk up directories and fall back to `~/.axon/graph.db`.
 
@@ -58,6 +58,8 @@ axon find --global             # Search entire graph (not just CWD subtree)
 axon find --count              # Just show the count
 axon find --show-parent        # Show parent chain to CWD or root
 axon find --output json        # Output format: path, uri, json, table
+axon find --exclude-type vcs:commit             # Exclude a node type (repeatable)
+axon find --exclude-type vcs:commit --exclude-type fs:dir  # Exclude multiple types
 ```
 
 ## Semantic Search
@@ -70,8 +72,12 @@ axon find "what is the Indexer interface"
 axon find "who calls NewNode"
 axon find "what implements Storage"
 axon find "handles token budget overflow"
-axon find "error recovery" --type go:func
-axon find "recent commits about logo" --type vcs:commit --limit 5
+axon find "error recovery"              --type go:func
+axon find "recent commits about logo"   --type vcs:commit --limit 5
+axon find "caching todos"               --type code:todo    # search annotation comments
+axon find "authentication"              --exclude-type vcs:commit  # suppress commit noise
+axon find "logo"                        --min-score 0.55    # stricter threshold (default 0.5)
+axon find "logo"                        --min-score 0       # show all results
 ```
 
 ## Context Generation
@@ -96,6 +102,14 @@ axon info                      # Dashboard: status, location, statistics
 axon info -o json
 ```
 
+## Schema Introspection
+
+```bash
+axon describe                  # All node types + edge types with counts
+axon describe --fields         # Also show JSON field names per node type
+axon describe -o json          # Machine-readable JSON
+```
+
 ## Introspection
 
 ```bash
@@ -109,10 +123,18 @@ axon gc                        # Run garbage collection
 ## Node Types
 
 - `fs:file`, `fs:dir` - Filesystem
-- `vcs:repo`, `vcs:branch`, `vcs:tag`, `vcs:commit`, `vcs:remote` - Git
+- `vcs:repo`, `vcs:branch`, `vcs:tag`, `vcs:remote` - Git
+- `vcs:commit` - Git commit
+  - Display: `sha8 -- subject  by author (YYYY-MM-DD, N files)`
+  - Conventional Commits fields (when message follows spec): `commit_type`, `scope`, `breaking` (bool), `subject`, `refs`
 - `md:document`, `md:section` - Markdown document/section
 - `md:codeblock`, `md:link`, `md:image` - Fenced code, links, images
-- `go:module`, `go:package`, `go:func`, `go:method`, `go:struct`, `go:field`, `go:interface`, `go:const`, `go:var`, `go:ref` - Go code
+- `go:module`, `go:package`, `go:func`, `go:method`, `go:struct`, `go:field`, `go:interface`, `go:const`, `go:var` - Go code
+- `go:ref` - Symbol reference/call site; carries `caller_uri`, `caller_name`, `caller_type` for call-graph queries
+- `code:todo` - TODO/FIXME/HACK/XXX/NOTE annotation comment in any source file
+  - Data: `kind`, `text`, `file`, `line`, `context` (surrounding source line)
+  - Label: lowercase kind (`todo`, `fixme`, `hack`, `xxx`, `note`)
+  - Examples: `axon find --type code:todo --global` · `axon find --type code:todo --label fixme`
 - `project:root` - Project manifest (go.mod, package.json, Cargo.toml, …)
 
 ## Edge Types
@@ -123,7 +145,7 @@ axon gc                        # Run garbage collection
 - `references` - Cross-reference
 - `links_to` - Hyperlink
 - `imports` - Import statement
-- `implements` - Struct implements interface
+- `implements` - Struct implements interface (`go:struct` → `go:interface`)
 - `defines` - Package defines symbol
 - `calls` - Function/method calls another (`go:func`/`go:method` → `go:func`/`go:method`)
 - `embeds` - Struct anonymously embeds another struct (`go:struct` → `go:struct`)
