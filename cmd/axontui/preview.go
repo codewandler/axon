@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -461,21 +460,3 @@ func hasPreviewContent(node *graph.Node) bool {
 	return false
 }
 
-// fileExtension extracts the extension from a node, if it's a file.
-func fileExtension(node *graph.Node) string {
-	if node == nil {
-		return ""
-	}
-	switch data := node.Data.(type) {
-	case types.FileData:
-		return data.Ext
-	case map[string]any:
-		ext, _ := data["ext"].(string)
-		return ext
-	}
-	// Fallback: extract from URI
-	if node.URI != "" {
-		return filepath.Ext(strings.TrimPrefix(node.URI, "file://"))
-	}
-	return ""
-}

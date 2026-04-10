@@ -479,12 +479,12 @@ func (s *Storage) buildDescendantsCTE(e *aql.ExistsExpr, table, cteName string) 
 
 	// Add depth constraints for recursive step
 	if varLenEdge.MinHops != nil {
-		sql.WriteString(fmt.Sprintf(" WHERE path.depth + 1 >= %d", *varLenEdge.MinHops))
+		fmt.Fprintf(&sql, " WHERE path.depth + 1 >= %d", *varLenEdge.MinHops)
 		if varLenEdge.MaxHops != nil {
-			sql.WriteString(fmt.Sprintf(" AND path.depth + 1 <= %d", *varLenEdge.MaxHops))
+			fmt.Fprintf(&sql, " AND path.depth + 1 <= %d", *varLenEdge.MaxHops)
 		}
 	} else if varLenEdge.MaxHops != nil {
-		sql.WriteString(fmt.Sprintf(" WHERE path.depth + 1 <= %d", *varLenEdge.MaxHops))
+		fmt.Fprintf(&sql, " WHERE path.depth + 1 <= %d", *varLenEdge.MaxHops)
 	}
 
 	// Close recursive CTE and select valid depths
@@ -1338,7 +1338,7 @@ func (s *Storage) compileVariableLengthPattern(q *aql.Query, src *aql.PatternSou
 	pattern := src.Patterns[0]
 
 	// Find the variable-length edge
-	var varLenEdgeIdx int = -1
+	var varLenEdgeIdx = -1
 	for i, elem := range pattern.Elements {
 		if edge, ok := elem.(*aql.EdgePattern); ok {
 			if edge.IsVariableLength() {
@@ -1424,9 +1424,9 @@ func (s *Storage) compileUnrolledVariableLength(q *aql.Query, startNode *aql.Nod
 		first = false
 
 		if selectingEndNode {
-			sql.WriteString(fmt.Sprintf("SELECT n_end.*\nFROM edges e0\n"))
+			sql.WriteString("SELECT n_end.*\nFROM edges e0\n")
 		} else {
-			sql.WriteString(fmt.Sprintf("SELECT n_start.*\nFROM edges e0\n"))
+			sql.WriteString("SELECT n_start.*\nFROM edges e0\n")
 		}
 
 		// INDEXED BY hint on first edge
@@ -1498,151 +1498,20 @@ func (s *Storage) compileUnrolledVariableLength(q *aql.Query, startNode *aql.Nod
 	return sql.String(), args, graph.ResultTypeNodes, nil
 }
 
-// compileCTEVariableLength generates a recursive CTE for unbounded or very deep
-// variable-length paths. Uses INDEXED BY hints and pushes start node type into
-// the CTE base case for better performance.
-func (s *Storage) compileCTEVariableLength(q *aql.Query, startNode *aql.NodePattern, edge *aql.EdgePattern, endNode *aql.NodePattern, minHops, maxHops int) (string, []any, graph.ResultType, error) {
-	var args []any
-	var sql strings.Builder
-	hasEdgeType := edge.Type != "" || len(edge.Types) > 0
-
-	// Determine which node to select
-	selectVar := ""
-	if len(q.Select.Columns) > 0 {
-		if sel, ok := q.Select.Columns[0].Expr.(*aql.Selector); ok {
-			if len(sel.Parts) == 1 {
-				selectVar = sel.Parts[0]
-			}
-		}
-	}
-	selectingEndNode := selectVar == endNode.Variable
-	startTypePushed := startNode.Type != "" && hasEdgeType
-	trackStartID := !selectingEndNode || !startTypePushed
-
-	if trackStartID {
-		sql.WriteString("WITH RECURSIVE paths(start_id, node_id, depth) AS (\n")
-	} else {
-		sql.WriteString("WITH RECURSIVE paths(node_id, depth) AS (\n")
-	}
-
-	// Base case
-	if trackStartID {
-		sql.WriteString("  SELECT e.from_id, e.to_id, 1\n")
-	} else {
-		sql.WriteString("  SELECT e.to_id, 1\n")
-	}
-	sql.WriteString("  FROM edges e\n")
-
-	if startTypePushed {
-		sql.WriteString("  INDEXED BY idx_edges_from_type\n")
-		sql.WriteString("  JOIN nodes n_start ON n_start.id = e.from_id AND n_start.type = ?\n")
-		args = append(args, startNode.Type)
-	}
-
-	if len(edge.Types) > 1 {
-		placeholders := make([]string, len(edge.Types))
-		for i := range edge.Types {
-			placeholders[i] = "?"
-			args = append(args, edge.Types[i])
-		}
-		sql.WriteString(fmt.Sprintf("  WHERE e.type IN (%s)\n", strings.Join(placeholders, ", ")))
-	} else if edge.Type != "" {
-		sql.WriteString("  WHERE e.type = ?\n")
-		args = append(args, edge.Type)
-	}
-
-	sql.WriteString("\n  UNION ALL\n\n")
-
-	// Recursive case
-	if trackStartID {
-		sql.WriteString("  SELECT p.start_id, e.to_id, p.depth + 1\n")
-	} else {
-		sql.WriteString("  SELECT e.to_id, p.depth + 1\n")
-	}
-	sql.WriteString("  FROM paths p\n")
-	if hasEdgeType {
-		sql.WriteString("  JOIN edges e INDEXED BY idx_edges_from_type\n")
-		sql.WriteString("    ON e.from_id = p.node_id")
-	} else {
-		sql.WriteString("  JOIN edges e ON e.from_id = p.node_id")
-	}
-
-	var recursiveWhere []string
-	if len(edge.Types) > 1 {
-		placeholders := make([]string, len(edge.Types))
-		for i := range edge.Types {
-			placeholders[i] = "?"
-			args = append(args, edge.Types[i])
-		}
-		recursiveWhere = append(recursiveWhere, fmt.Sprintf("e.type IN (%s)", strings.Join(placeholders, ", ")))
-	} else if edge.Type != "" {
-		sql.WriteString(" AND e.type = ?")
-		args = append(args, edge.Type)
-	}
-	sql.WriteString("\n")
-
-	if maxHops > 0 {
-		recursiveWhere = append(recursiveWhere, fmt.Sprintf("p.depth < %d", maxHops))
-	}
-
-	if len(recursiveWhere) > 0 {
-		sql.WriteString("  WHERE " + strings.Join(recursiveWhere, " AND ") + "\n")
-	}
-
-	sql.WriteString(")\n")
-
-	// Outer query
-	if selectingEndNode && !trackStartID {
-		sql.WriteString("SELECT DISTINCT n1.*\n")
-		sql.WriteString("FROM paths p\n")
-		sql.WriteString("JOIN nodes n1 ON n1.id = p.node_id\n")
-	} else if selectingEndNode {
-		sql.WriteString("SELECT DISTINCT n1.*\n")
-		sql.WriteString("FROM nodes n0\n")
-		sql.WriteString("JOIN paths p ON p.start_id = n0.id\n")
-		sql.WriteString("JOIN nodes n1 ON n1.id = p.node_id\n")
-	} else {
-		sql.WriteString("SELECT DISTINCT n0.*\n")
-		sql.WriteString("FROM nodes n0\n")
-		sql.WriteString("JOIN paths p ON p.start_id = n0.id\n")
-		sql.WriteString("JOIN nodes n1 ON n1.id = p.node_id\n")
-	}
-
-	var whereClauses []string
-	if minHops > 1 || maxHops > 0 {
-		if minHops > 1 {
-			whereClauses = append(whereClauses, fmt.Sprintf("p.depth >= %d", minHops))
-		}
-		if maxHops > 0 {
-			whereClauses = append(whereClauses, fmt.Sprintf("p.depth <= %d", maxHops))
-		}
-	}
-
-	if startNode.Type != "" && !startTypePushed {
-		whereClauses = append(whereClauses, "n0.type = ?")
-		args = append(args, startNode.Type)
-	}
-	if endNode.Type != "" {
-		whereClauses = append(whereClauses, "n1.type = ?")
-		args = append(args, endNode.Type)
-	}
-
-	if len(whereClauses) > 0 {
-		sql.WriteString("WHERE " + strings.Join(whereClauses, " AND ") + "\n")
-	}
-
-	if q.Select.Limit != nil {
-		sql.WriteString("LIMIT ?")
-		args = append(args, *q.Select.Limit)
-	}
-
-	return sql.String(), args, graph.ResultTypeNodes, nil
-}
 
 // detectMultiVarSelect returns true when the SELECT clause references more than
 // one distinct variable name, which would produce duplicate column names in SQL
 // (e.g. SELECT n0.*, n1.* both emit "id", "type", …).
+//
+// SELECT * implicitly references all pattern variables, so it is treated as
+// multi-var whenever there are two or more node/edge aliases.
 func detectMultiVarSelect(stmt *aql.SelectStmt, nodeAliases, edgeAliases map[string]string) bool {
+	for _, col := range stmt.Columns {
+		if _, ok := col.Expr.(*aql.Star); ok {
+			// SELECT * expands all variables — multi-var if more than one exists.
+			return len(nodeAliases)+len(edgeAliases) > 1
+		}
+	}
 	seen := map[string]bool{}
 	for _, col := range stmt.Columns {
 		sel, ok := col.Expr.(*aql.Selector)

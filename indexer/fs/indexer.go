@@ -57,7 +57,6 @@ type discoveredEntry struct {
 	path      string
 	entry     os.DirEntry
 	ignored   bool // If true, entry is ignored but included for deletion detection
-	skipIndex bool // If true, skip indexing (out of bounds)
 }
 
 func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {

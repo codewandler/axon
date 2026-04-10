@@ -648,8 +648,7 @@ func answerImplements(ctx context.Context, storage graph.Storage, q parsedQuesti
 	// This is a heuristic - real implementation would use go/types
 	if len(methodNames) > 0 {
 		// Find structs with the first method, then check others
-		structQuery, _ := aql.Parse(fmt.Sprintf(
-			`SELECT DISTINCT * FROM nodes WHERE type = 'go:struct' ORDER BY name LIMIT 50`))
+		structQuery, _ := aql.Parse(`SELECT DISTINCT * FROM nodes WHERE type = 'go:struct' ORDER BY name LIMIT 50`)
 
 		structResult, err := storage.Query(ctx, structQuery)
 		if err != nil {

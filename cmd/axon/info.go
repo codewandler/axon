@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/codewandler/axon/aql"
 	"github.com/codewandler/axon/types"
@@ -191,8 +190,8 @@ func renderInfoText(data infoData) error {
 	fmt.Println()
 
 	// Counts
-	p.Printf("Nodes:         %d\n", data.Nodes)
-	p.Printf("Edges:         %d\n", data.Edges)
+	p.Printf("Nodes:         %d  (global)\n", data.Nodes)
+	p.Printf("Edges:         %d  (global)\n", data.Edges)
 	if data.OrphanedEdges > 0 {
 		p.Printf("Orphaned edges: %d (run 'axon gc' to clean)\n", data.OrphanedEdges)
 	} else {
@@ -229,7 +228,3 @@ func renderInfoText(data infoData) error {
 	return nil
 }
 
-// formatTimestamp formats a time as ISO-8601
-func formatTimestamp(t time.Time) string {
-	return t.Format(time.RFC3339)
-}

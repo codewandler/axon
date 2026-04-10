@@ -29,7 +29,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -377,6 +376,3 @@ func (i *Indexer) parseComposerJSON(path string) (types.ProjectData, error) {
 	return data, nil
 }
 
-// pomNameRegex extracts artifactId from pom.xml (simple approach).
-var pomNameRegex = regexp.MustCompile(`<artifactId>([^<]+)</artifactId>`)
-var pomVersionRegex = regexp.MustCompile(`<version>([^<]+)</version>`)

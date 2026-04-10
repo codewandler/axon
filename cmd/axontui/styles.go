@@ -32,11 +32,6 @@ var (
 
 // Layout styles
 var (
-	// Outer border
-	borderStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorBorder)
-
 	// Detail panel (top region)
 	detailStyle = lipgloss.NewStyle().
 			Padding(0, 1)
@@ -45,11 +40,6 @@ var (
 	nodeNameStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(colorBright)
-
-	// Node type badge
-	nodeTypeStyle = lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Italic(true)
 
 	// Node ID
 	nodeIDStyle = lipgloss.NewStyle().
@@ -76,10 +66,6 @@ var (
 	sectionHeaderStyle = lipgloss.NewStyle().
 				Foreground(colorSection).
 				Bold(true)
-
-	// Section count
-	sectionCountStyle = lipgloss.NewStyle().
-				Foreground(colorDim)
 
 	// Item in edge list (normal)
 	itemStyle = lipgloss.NewStyle().
@@ -108,12 +94,6 @@ var (
 	breadcrumbActiveStyle = lipgloss.NewStyle().
 				Foreground(colorBright).
 				Bold(true)
-
-	breadcrumbStyle = lipgloss.NewStyle().
-			Foreground(colorMuted)
-
-	breadcrumbSepStyle = lipgloss.NewStyle().
-				Foreground(colorDim)
 
 	// Divider line between sections
 	dividerStyle = lipgloss.NewStyle().

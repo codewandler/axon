@@ -161,12 +161,7 @@ func formatJSON(result *FitResult) string {
 	}
 
 	for _, ex := range result.Excluded {
-		output.Excluded = append(output.Excluded, JSONExclude{
-			File:   ex.File,
-			Tokens: ex.Tokens,
-			Score:  ex.Score,
-			Reason: ex.Reason,
-		})
+		output.Excluded = append(output.Excluded, JSONExclude(ex))
 	}
 
 	// Pretty print JSON

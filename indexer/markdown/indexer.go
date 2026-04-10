@@ -226,8 +226,6 @@ type sectionInfo struct {
 	nodeID       string
 	level        int
 	path         string // e.g., "h1-intro/h2-setup"
-	contentStart int    // Byte offset where section content starts (after heading)
-	contentEnd   int    // Byte offset where section content ends (before next heading or EOF)
 }
 
 // astWalker walks the markdown AST and emits nodes/edges.
@@ -361,13 +359,12 @@ func (w *astWalker) getSectionContentRange(headingIdx int) (start, end int) {
 	end = len(w.content) // Default to end of file
 
 	// Check for first child heading
-	for i := headingIdx + 1; i < len(w.headingPositions); i++ {
-		nextPos := w.headingPositions[i]
+	if headingIdx+1 < len(w.headingPositions) {
+		nextPos := w.headingPositions[headingIdx+1]
 		// Any heading (child or sibling) ends our content
 		if nextPos.startPos < end {
 			end = nextPos.startPos
 		}
-		break // Only need to check the next heading
 	}
 
 	// Check for first code block after our start position

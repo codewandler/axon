@@ -43,14 +43,6 @@ func emoji(nodeType string) string {
 	return "  "
 }
 
-// edgeArrow returns a directional indicator for an edge type.
-func edgeArrow(incoming bool) string {
-	if incoming {
-		return "◀"
-	}
-	return "▶"
-}
-
 // truncate truncates a string to maxLen, appending "..." if needed.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
@@ -60,14 +52,6 @@ func truncate(s string, maxLen int) string {
 		return s[:maxLen]
 	}
 	return s[:maxLen-3] + "..."
-}
-
-// padRight pads a string to the given width with spaces.
-func padRight(s string, width int) string {
-	if len(s) >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-len(s))
 }
 
 // sectionDivider creates a divider line: "── label (count) ──────"

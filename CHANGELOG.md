@@ -7,6 +7,58 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **`SELECT COUNT(*)` in pattern queries no longer requires `GROUP BY`** —
+  the guard that blocked scalar counts in pattern queries (`hasCount &&
+  len(GroupBy) > 0`) has been removed. Pattern queries such as
+  `SELECT COUNT(*) FROM (a)-[:contains]->(b)` now return a single scalar
+  count. (`adapters/sqlite/aql.go`)
+
+- **Star projection in multi-variable pattern queries** — `SELECT *` in a
+  pattern with more than one variable now correctly namespaces each column
+  as `varName.field` (e.g. `repo.id`, `branch.name`) instead of emitting
+  duplicate bare column names. (`adapters/sqlite/aql.go`)
+
+- **Single-variable `SELECT var` pattern queries** — a whole-variable
+  selector (e.g. `SELECT file`) no longer triggers projection mode; nodes
+  are now returned as full objects. (`adapters/sqlite/aql.go`)
+
+- **Scalar count display** — `SELECT COUNT(*)` without `GROUP BY` now
+  renders as a plain number in both table and JSON output instead of being
+  attributed to a spurious `_count` key. (`cmd/axon/query.go`,
+  `adapters/sqlite/aql.go`)
+
+- **Stats output labels node/edge counts as scoped or global** — the
+  `axon stats` display now annotates node and edge counts with
+  `(scoped to CWD)` or `(global)` depending on the `--global` flag.
+  (`cmd/axon/stats.go`)
+
+### Added
+
+- **`axon tree` accepts a node ID prefix** — in addition to filesystem
+  paths, `axon tree` now resolves a short node ID prefix (≥ 4 chars,
+  no path separators) against the graph and roots the tree at the
+  matching node. (`cmd/axon/tree.go`)
+
+### Changed
+
+- **Removed dead code identified by staticcheck** — unused functions
+  (`formatTimestamp`, `fileExtension`, `edgeArrow`, `padRight`,
+  `compileCTEVariableLength`), unused struct fields (`skipIndex`,
+  `contentStart`, `contentEnd`), unused variables (`pomNameRegex`,
+  `pomVersionRegex`), and unused style declarations removed across
+  multiple packages.
+
+- **`strings.Title` replaced with an ASCII-safe `titleCase` helper** —
+  the deprecated `strings.Title` call used for display-header formatting
+  has been replaced with a local helper that capitalises ASCII words
+  without importing `golang.org/x/text`. (`cmd/axon/query.go`)
+
+---
+
 ## [0.4.0] — 2026-04-10
 
 ### Changed
