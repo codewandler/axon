@@ -157,7 +157,18 @@ type IndexOptions struct {
 	Path string
 
 	// Progress is an optional channel for reporting indexing progress.
+	// Events are sent as indexers start, make progress, and complete.
+	// The caller owns the channel; it is never closed by the library.
+	// Mutually exclusive with ShowProgress — if both are set, Progress
+	// takes precedence and ShowProgress is ignored.
 	Progress chan<- progress.Event
+
+	// ShowProgress writes a compact human-readable progress log to
+	// os.Stderr. Intended for programmatic callers that want feedback
+	// without wiring up a full progress channel or a bubbletea UI.
+	//
+	// Default: false (completely silent).
+	ShowProgress bool
 
 	// SkipGC skips garbage collection (orphaned edge cleanup) after indexing.
 	// This can speed up indexing when you know cleanup isn't needed,
@@ -178,6 +189,10 @@ func (a *Axon) IndexWithProgress(ctx context.Context, path string, prog chan<- p
 }
 
 // IndexWithOptions indexes with the provided options.
+//
+// The library never writes to stdout or stderr unless
+// opts.ShowProgress is true, in which case compact progress lines are
+// written to stderr. Use opts.Progress for structured event access.
 func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexResult, error) {
 	startTime := time.Now()
 
@@ -186,6 +201,38 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 	if path == "" {
 		path = a.config.Dir
 	}
+
+	// ShowProgress: wire up a self-contained stderr drainer.
+	// Only activated when the caller has not already supplied a Progress channel
+	// (Progress takes precedence so callers can handle events themselves).
+	var showProgCh chan progress.Event // non-nil only when we own the channel
+	var showProgDone chan struct{}      // closed when drainer goroutine exits
+	if opts.ShowProgress && prog == nil {
+		showProgCh = make(chan progress.Event, 128)
+		showProgDone = make(chan struct{})
+		prog = showProgCh
+		go func() {
+			defer close(showProgDone)
+			for evt := range showProgCh {
+				switch evt.Type {
+				case progress.EventStarted:
+					fmt.Fprintf(os.Stderr, "[axon] %s: starting\n", evt.Indexer)
+				case progress.EventCompleted:
+					fmt.Fprintf(os.Stderr, "[axon] %s: done (%d items)\n", evt.Indexer, evt.Total)
+				case progress.EventError:
+					fmt.Fprintf(os.Stderr, "[axon] %s: error: %v\n", evt.Indexer, evt.Error)
+				}
+			}
+		}()
+	}
+	// Ensure the drainer goroutine exits before IndexWithOptions returns so all
+	// output is flushed. Works for every return path (error or success).
+	defer func() {
+		if showProgCh != nil {
+			close(showProgCh)
+			<-showProgDone // wait for last write to complete
+		}
+	}()
 
 	// Resolve to absolute path
 	absPath, err := filepath.Abs(path)

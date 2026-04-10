@@ -2,6 +2,7 @@ package axon
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,5 +200,104 @@ func TestAxonCustomIgnore(t *testing.T) {
 		if filepath.Base(types.URIToPath(n.URI)) == "file2.txt" {
 			t.Errorf("expected subdir contents to be skipped")
 		}
+	}
+}
+
+// TestAxonIndex_Silent verifies that a plain Index() call produces no output
+// on stdout or stderr. Any accidental fmt.Print / log.Print inside the library
+// would be caught here.
+func TestAxonIndex_Silent(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Redirect both stdout and stderr to pipes so we can capture any output.
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	_, indexErr := ax.Index(ctx, "")
+
+	// Restore before reading so any deferred prints don't land in captures.
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+
+	var bufOut, bufErr strings.Builder
+	if _, err := io.Copy(&bufOut, rOut); err != nil {
+		t.Fatalf("reading stdout pipe: %v", err)
+	}
+	if _, err := io.Copy(&bufErr, rErr); err != nil {
+		t.Fatalf("reading stderr pipe: %v", err)
+	}
+	rOut.Close()
+	rErr.Close()
+
+	if indexErr != nil {
+		t.Fatalf("Index: %v", indexErr)
+	}
+	if got := bufOut.String(); got != "" {
+		t.Errorf("expected no stdout, got: %q", got)
+	}
+	if got := bufErr.String(); got != "" {
+		t.Errorf("expected no stderr, got: %q", got)
+	}
+}
+
+// TestAxonIndex_ShowProgress verifies that ShowProgress: true writes lines to
+// stderr and nothing to stdout.
+func TestAxonIndex_ShowProgress(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout = wOut
+	os.Stderr = wErr
+
+	_, indexErr := ax.IndexWithOptions(ctx, IndexOptions{ShowProgress: true})
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout = oldStdout
+	os.Stderr = oldStderr
+
+	var bufOut, bufErr strings.Builder
+	if _, err := io.Copy(&bufOut, rOut); err != nil {
+		t.Fatalf("reading stdout pipe: %v", err)
+	}
+	if _, err := io.Copy(&bufErr, rErr); err != nil {
+		t.Fatalf("reading stderr pipe: %v", err)
+	}
+	rOut.Close()
+	rErr.Close()
+
+	if indexErr != nil {
+		t.Fatalf("Index: %v", indexErr)
+	}
+	// Nothing on stdout.
+	if got := bufOut.String(); got != "" {
+		t.Errorf("expected no stdout, got: %q", got)
+	}
+	// At least one [axon] line on stderr.
+	if got := bufErr.String(); !strings.Contains(got, "[axon]") {
+		t.Errorf("expected [axon] progress lines on stderr, got: %q", got)
 	}
 }
