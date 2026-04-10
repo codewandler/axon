@@ -386,6 +386,201 @@ Built-in providers:
 
 All providers are in `indexer/embeddings/`. The package is designed to be extractable as a standalone library — no file except `indexer.go` imports axon-internal packages.
 
+## GitHub Issue Workflow
+
+This is the end-to-end autonomous workflow for working on a GitHub issue.
+All steps are performed by the agent without waiting for human input **unless
+an open question is found during design** (see step 4). Every other step
+proceeds automatically.
+
+### 1. Read the issue
+
+```bash
+gh issue view <N>
+```
+
+Capture: problem statement, proposed solution, any acceptance criteria or
+examples given in the issue body. Note the issue number — it will appear in
+commit messages and the PR body.
+
+### 2. Explore the codebase
+
+Before touching any file, read the code:
+
+```bash
+# Orient: project structure and recent history
+git log --oneline -10
+ls <relevant packages>
+
+# Find the right layer to change
+grep -rn "<key type or function>" --include="*.go" .
+
+# Read every file you intend to change
+file_read <path>
+```
+
+Goal: confirm root cause / integration point before designing anything.
+
+### 3. Create a worktree
+
+Always work on a feature branch isolated in `./worktrees/`:
+
+```bash
+git checkout -b feature/<slug>
+git worktree add ./worktrees/<slug> feature/<slug>
+```
+
+Verify the baseline is clean before touching anything:
+
+```bash
+cd ./worktrees/<slug>
+go test ./...          # must pass
+go test -race ./...    # must pass
+```
+
+### 4. Write the DESIGN — pause only here if questions exist
+
+Save to `.agents/plans/DESIGN-<slug>.md`. The design must cover:
+
+- **Problem** — what is broken or missing and why it matters
+- **Proposed solution** — the key API / data shape / behaviour
+- **Architecture** — which layers change and why (e.g. optional interface vs.
+  monolithic interface, where types live, public API signature)
+- **Key decisions** — the non-obvious choices and their rationale
+- **Out of scope** — what is deliberately deferred
+- **Files changed** — a table listing every file that will be touched
+
+> **If the design reveals an open question** (ambiguous requirement, API
+> conflict, missing information) — stop, present the design draft, list the
+> questions, and wait for the user to answer. Otherwise proceed immediately
+> to planning.
+
+### 5. Write the PLAN
+
+Save to `.agents/plans/PLAN-<slug>.md`. Break the design into numbered tasks.
+Each task must include:
+
+- Exact files to create or modify
+- The code to write (snippets, not pseudocode)
+- A verification command (`go build`, `go test -run TestX ./pkg/...`)
+
+Tasks are ordered so each builds on the previous. Estimated 2–5 min each.
+
+### 6. Implement — test-first
+
+For each task:
+
+1. **Write the failing test first.** Run it to confirm it fails for the right reason.
+2. **Write the implementation.** Run the test to confirm it passes.
+3. **Run the full suite** to confirm nothing regressed.
+
+Use `go test -race` at least once per package touched — concurrency bugs
+are invisible without it.
+
+### 7. Self-review
+
+After all tasks complete, review every changed file as if reading someone
+else's PR. Check:
+
+| Category | What to look for |
+|---|---|
+| Spec compliance | Does the code do exactly what the issue asked? |
+| Error handling | All errors wrapped with context, none silently dropped |
+| Concurrency | No shared mutable state accessed from multiple goroutines without synchronisation; run `-race` |
+| Test quality | No tautological assertions; edge cases covered |
+| API cleanliness | No unnecessary double-calls, pointless aliases, or dead code |
+| JSON/wire format | `nil` vs `[]` matters for consumers; test empty cases explicitly |
+| Docs | README and AGENTS.md updated if behaviour changed |
+
+Fix every issue found before opening the PR. If a newly-written test reveals
+a **pre-existing bug** in unrelated code, fix it in a separate commit with a
+clear message explaining the root cause.
+
+### 8. Final pre-flight
+
+```bash
+go build ./...
+go vet ./...
+go test -race ./...
+
+# Sanity-check the feature end-to-end (e.g. smoke-test the CLI)
+./bin/axon <new-command> --help
+./bin/axon <new-command> -o json | head -20
+```
+
+All three commands must exit 0. Do not open the PR until they do.
+
+### 9. Open the PR
+
+```bash
+git add -A
+git commit -m "feat: <summary>\n\n<detail bullets>\n\nRefs: #<N>"
+git push origin feature/<slug>
+
+gh pr create \
+  --title "feat: <summary> (closes #<N>)" \
+  --body  "<markdown body covering: summary, what was added, design notes, test coverage>" \
+  --head  feature/<slug> \
+  --base  main
+```
+
+Always reference the issue number in the title and body so GitHub auto-closes
+it on merge.
+
+### 10. Merge
+
+Use squash-merge to keep main history linear:
+
+```bash
+gh pr merge <N> \
+  --squash \
+  --subject "<single line summary> (closes #<issue>)" \
+  --body    "<brief bullets>"
+
+git checkout main
+git pull origin main
+```
+
+### 11. Update CHANGELOG and release
+
+Follow the **Release & Tagging Workflow** section below. Features and notable
+fixes always get a CHANGELOG entry and a GitHub release. Use semver:
+- Patch for bug-only fixes
+- Minor for new public API or new CLI commands
+
+### 12. Clean up
+
+```bash
+# Remove worktree and feature branch
+git worktree remove ./worktrees/<slug>
+git branch -D feature/<slug>
+```
+
+### 13. Close the loop
+
+```bash
+# Comment on the issue with what shipped
+gh issue comment <N> --body "## Implemented in v<X.Y.Z>\n\n<what was built, key decisions, follow-up links>"
+
+# Commit the plan files to main so they survive as a record
+git add .agents/plans/DESIGN-<slug>.md .agents/plans/PLAN-<slug>.md
+git commit -m "docs: design and plan for <feature> (#<N>)"
+git push origin main
+```
+
+### Summary
+
+```
+Read issue → Explore → Worktree → DESIGN → [pause if questions] → PLAN
+  → Implement (TDD) → Self-review → Fix → Pre-flight → PR → Merge
+  → CHANGELOG → Release → Cleanup → Comment + commit plans
+```
+
+The only mandatory pause is after the DESIGN if it surfaces open questions.
+Everything else runs autonomously.
+
+---
+
 ## Release & Tagging Workflow
 
 When cutting a release **or** applying a git tag (even a standalone `tag` request):
