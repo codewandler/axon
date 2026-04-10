@@ -52,7 +52,7 @@ type Storage struct {
 	closeCh    chan struct{} // Signal to stop the flush loop
 	closeOnce  sync.Once
 	flushReqCh chan chan struct{} // Channel for flush requests (sends completion signal back)
-	pendingOps atomic.Int64      // Count of pending operations in channel
+	pendingOps atomic.Int64       // Count of pending operations in channel
 
 	// Flush error tracking: set by flushBatch when a batch write permanently fails.
 	// Read by Flush() callers after the flush completes.
@@ -308,7 +308,7 @@ func (s *Storage) migrate(ctx context.Context) error {
 					data    BLOB NOT NULL
 				);
 			`,
-			},
+		},
 	}
 
 	// Run pending migrations
@@ -1488,6 +1488,24 @@ func (s *Storage) CountOrphanedEdges(ctx context.Context) (int, error) {
 	return count, err
 }
 
+func (s *Storage) FindOrphanedEdges(ctx context.Context) ([]*graph.Edge, error) {
+	if err := s.Flush(ctx); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, type, from_id, to_id, data, generation, created_at
+		FROM edges
+		WHERE from_id NOT IN (SELECT id FROM nodes)
+		   OR to_id   NOT IN (SELECT id FROM nodes)
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return s.scanEdges(rows)
+}
+
 // URIPrefix helper for building LIKE patterns
 func URIPrefix(uri string) string {
 	if strings.HasSuffix(uri, "/") {
@@ -1698,7 +1716,7 @@ func nodeMatchesFilter(node *graph.Node, filter *graph.NodeFilter) bool {
 	}
 	if len(filter.Labels) > 0 {
 		found := false
-		outer:
+	outer:
 		for _, want := range filter.Labels {
 			for _, have := range node.Labels {
 				if have == want {
