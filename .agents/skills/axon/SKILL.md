@@ -136,6 +136,7 @@ axon gc                        # Run garbage collection
   - Label: lowercase kind (`todo`, `fixme`, `hack`, `xxx`, `note`)
   - Examples: `axon find --type code:todo --global` · `axon find --type code:todo --label fixme`
 - `project:root` - Project manifest (go.mod, package.json, Cargo.toml, …)
+- `project:license` - Software licence detected from LICENSE/LICENCE/COPYING; Data: `spdx_id` (e.g. `MIT`, `Apache-2.0`), `confidence` (`high` or `unknown`), `file`; edge: `project:root -[has]-> project:license`; Example: `axon find --type project:license`
 
 ## Edge Types
 

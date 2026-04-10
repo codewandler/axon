@@ -2,9 +2,10 @@ package types
 
 import "github.com/codewandler/axon/graph"
 
-// Project node type
+// Project node types
 const (
 	TypeProject = "project:root"
+	TypeLicense = "project:license"
 )
 
 // Project language identifiers
@@ -29,6 +30,13 @@ const (
 	LabelProjectPHP    = "project:php"
 )
 
+// LicenseData holds data for a project:license node.
+type LicenseData struct {
+	SPDXID     string `json:"spdx_id"`     // SPDX identifier, e.g. "MIT", "Apache-2.0"; empty if unknown
+	Confidence string `json:"confidence"`  // "high" or "unknown"
+	File       string `json:"file"`        // Absolute path to the licence file
+}
+
 // ProjectData holds data for a project node.
 type ProjectData struct {
 	Language string `json:"language"`            // Language identifier (go, node, rust, python, java, ruby, php)
@@ -42,6 +50,11 @@ func RegisterProjectTypes(r *graph.Registry) {
 	graph.RegisterNodeType[ProjectData](r, graph.NodeSpec{
 		Type:        TypeProject,
 		Description: "A project root detected from manifest files",
+	})
+
+	graph.RegisterNodeType[LicenseData](r, graph.NodeSpec{
+		Type:        TypeLicense,
+		Description: "A software licence detected from a LICENSE/COPYING file",
 	})
 
 	// Project located at directory
@@ -61,6 +74,20 @@ func ProjectPathToURI(path string) string {
 // URIToProjectPath extracts the path from a project+file:// URI.
 func URIToProjectPath(uri string) string {
 	const prefix = "project+file://"
+	if len(uri) > len(prefix) && uri[:len(prefix)] == prefix {
+		return uri[len(prefix):]
+	}
+	return uri
+}
+
+// LicensePathToURI converts a license file path to a license+file:// URI.
+func LicensePathToURI(path string) string {
+	return "license+file://" + path
+}
+
+// URIToLicensePath extracts the path from a license+file:// URI.
+func URIToLicensePath(uri string) string {
+	const prefix = "license+file://"
 	if len(uri) > len(prefix) && uri[:len(prefix)] == prefix {
 		return uri[len(prefix):]
 	}

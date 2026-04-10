@@ -774,6 +774,16 @@ Axon uses typed nodes with `domain:name` format:
 - `project:root` - Project root detected from a manifest file (go.mod, package.json, Cargo.toml, etc.)
   - Data: `type` (language: go, node, rust, python, java, ruby, php), `name`, `version`, `dep_count`
 
+- `project:license` - Software licence detected from a LICENSE / LICENCE / COPYING file
+  - Data: `spdx_id` (SPDX identifier, e.g. `MIT`, `Apache-2.0`; empty string if unrecognised), `confidence` (`high` for a known licence, `unknown` if the file was detected but not identified), `file` (absolute path to the licence file)
+  - Edge: `project:root -[has]-> project:license` (falls back to `fs:dir -[has]-> project:license` when no manifest is present)
+  - URI: `license+file:///abs/path/LICENSE`
+  - Examples:
+    ```bash
+    axon find --type project:license              # list all detected licences
+    axon query "SELECT name, data.spdx_id FROM nodes WHERE type = 'project:license'"
+    ```
+
 ### Annotations
 
 - `code:todo` - TODO/FIXME/HACK/XXX/NOTE annotation comment in any source file
