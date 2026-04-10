@@ -9,9 +9,120 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.6.0] — 2026-04-10
+
 ### Added
 
 - **Hugot embedding provider** — runs ONNX sentence-embedding models fully
+  in-process via the Hugot pure-Go backend (no CGO, no daemon, no data leaves
+  the machine). Model auto-downloaded to `~/.axon/models/` on first use
+  (~90 MB, cached). (`indexer/embeddings/hugot.go`)
+
+- **`EmbedBatch(ctx, []string) ([][]float32, error)` on `Provider` interface**
+  — enables batch embedding; `OllamaProvider` uses Ollama's `/api/embed`
+  batch endpoint, `HugotProvider` calls `RunPipeline([]string)` in one pass.
+  `Embed()` is now a thin wrapper around `EmbedBatch` on all providers.
+
+- **`Close() error` on `Provider` interface** — standardises resource cleanup;
+  `HugotProvider` destroys its Hugot session, others return nil.
+
+- **`--embed-provider` and `--embed-model-path` flags** on `axon index` to
+  select the embedding provider and local model path from the CLI.
+  `AXON_EMBED_PROVIDER`, `AXON_HUGOT_MODEL`, and `AXON_HUGOT_MODEL_PATH`
+  environment variables also supported. (`cmd/axon/index.go`)
+
+- **`cmd/axon/embed.go`** — shared `resolveEmbeddingProvider()` factory used
+  by both `index` and `search` commands; removes the duplicate switch.
+
+- **Embedding benchmarks** — `BenchmarkOllama`, `BenchmarkOllamaBatch`,
+  `BenchmarkHugot`, `BenchmarkHugotBatch` in
+  `indexer/embeddings/bench_test.go`; all opt-in via env vars, CI-safe.
+
+- **`axon index` command** — replaces the separate `init` and `watch` commands
+  with a single `index [path]` command. `--watch`, `--watch-debounce`, and
+  `--watch-quiet` flags added. `init` is kept as an alias for backward
+  compatibility. (`cmd/axon/index.go`)
+
+- **`Axon.DeleteByPath()`** — removes a filesystem path (or entire subtree for
+  directories) from the graph and cleans up orphaned edges. Used internally by
+  the watch loop on `Remove`/`Rename` events. (`axon.go`)
+
+- **`FSInclude` config field** — allow-list of glob patterns; when non-empty
+  only matching files are indexed (directories are always traversed). (`axon.go`)
+
+- **`Registry.ByName()`** — looks up a registered indexer by its `Name()`
+  string. (`indexer/registry.go`)
+
+- **Git commit indexing** — the git indexer now walks the commit log (default
+  cap: 500 per repo) and creates `vcs:commit` nodes with full metadata: SHA,
+  subject, body, author, committer, date, and change stats. Enables queries
+  like “recent commits by author” and “largest commits by diff size”.
+  (`indexer/git/indexer.go`, `types/vcs.go`)
+
+- **`parent_of` edges** — each `vcs:commit` node emits a `parent_of` edge to
+  each of its parent commits, forming the commit DAG in the graph.
+  (`types/edges.go`, `indexer/git/indexer.go`)
+
+- **`modifies` edges** — for single-parent commits, a `modifies` edge is
+  emitted from the commit to each `fs:file` node it touched, enabling
+  “hotspot” queries. (`types/edges.go`, `indexer/git/indexer.go`)
+
+- **Branch/tag → commit `references` edges** — `vcs:branch` and `vcs:tag`
+  nodes now emit a `references` edge to their tip `vcs:commit` node.
+  (`indexer/git/indexer.go`)
+
+- **`git.Config` with `MaxCommits`** — caps commit ingestion per repo (default
+  500). Exposed via `axon.Config.GitConfig`. (`indexer/git/indexer.go`,
+  `axon.go`)
+
+- **AQL constants** — `aql.NodeType.Commit`, `aql.Edge.ParentOf`, and
+  `aql.Edge.Modifies` added to the type-safe fluent builder.
+  (`aql/nodetypes.go`, `aql/edgetypes.go`)
+
+- **`axon index --embed`** — generates embeddings on each re-index in watch
+  mode, scoped to nodes written in that run via a `Generation` filter.
+
+### Changed
+
+- **`indexer/embeddings/` refactored for library extraction** — split into one
+  file per provider (`null.go`, `ollama.go`, `hugot.go`), interface-only
+  `provider.go`, and `doc.go` documenting the package boundary. No file except
+  `indexer.go` imports axon-internal packages.
+
+- **`PostIndex` uses batch embedding** — collects all nodes across all types
+  and calls `EmbedBatch` in chunks of `DefaultBatchSize` (32) instead of one
+  `Embed()` call per node. Benchmarked on i9-10900K + RTX 3090: Ollama
+  23 ms → 12 ms/node; Hugot 114 ms → 21 ms/node.
+
+- **`OllamaProvider`** — accepts configurable `dims int` (was hardcoded 768);
+  switches from `/api/embeddings` (single) to `/api/embed` (batch) endpoint.
+
+- **Per-file targeted watch re-indexing** — the watch loop re-indexes or
+  deletes each changed path individually instead of re-indexing the deepest
+  common ancestor of all pending paths. (`axon.go`)
+
+- **Dotfiles no longer blanket-excluded** — `DefaultFSIgnore` updated with
+  specific entries so that `.agents/` and `.claude/` remain visible.
+  (`axon.go`, `indexer/fs/indexer.go`)
+
+- **`FSExclude` replaces `FSIgnore`** in `axon.Config`; `FSIgnore` kept as a
+  deprecated alias. (`axon.go`, `indexer/fs/indexer.go`)
+
+- **`DefaultFSIgnore` cleaned up** — dot-prefixed entries removed since the
+  blanket hidden-file rule covers them.
+
+### Fixed
+
+- **`context.Canceled` on Ctrl+C** no longer causes cobra to print an error
+  and usage block in `--watch` mode. (`cmd/axon/index.go`)
+
+- **SQLite `SQLITE_BUSY` errors eliminated** — PRAGMAs now set per-connection
+  via DSN `_pragma` parameters; retry backoff improved to 5 attempts with
+  exponential delays. (`adapters/sqlite/sqlite.go`)
+
+ — runs ONNX sentence-embedding models fully
   in-process via the Hugot pure-Go backend (no CGO, no daemon, no data leaves
   the machine). Model auto-downloaded to `~/.axon/models/` on first use
   (~90 MB, cached). (`indexer/embeddings/hugot.go`)
@@ -141,22 +252,6 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ExecContext`. The `database/sql` connection pool could previously hand out
   connections with default `busy_timeout=0`, causing immediate SQLITE_BUSY on any
   lock contention. Retry backoff improved to 5 attempts with exponential delays.
-
-### Added
-
-- **All hidden files/dirs excluded from indexing** — entries starting with `.`
-  are now unconditionally skipped by the FS indexer (hidden directories still get
-  a minimal node for deletion detection). The watcher also skips hidden dirs and
-  filters hidden-path events, saving inotify watches and avoiding wasted re-indexes.
-- **`axon watch --embed`** — generates embeddings on each re-index, scoped to
-  only the nodes written in that run (via a new `Generation` filter on
-  `NodeFilter`), so incremental re-indexes don't re-embed the entire corpus.
-
-### Changed
-
-- `DefaultFSIgnore` cleaned up — dot-prefixed entries (`.git`, `.axon`, `.idea`,
-  `.vscode`, `.DS_Store`, `.venv`, `.virtualenv`, `.tox`, `.pytest_cache`,
-  `.mypy_cache`) removed since the blanket hidden-file rule now covers them.
 
 ## [0.5.0] — 2026-04-10
 
