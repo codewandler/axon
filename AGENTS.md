@@ -394,6 +394,14 @@ All steps are performed by the agent without waiting for human input **unless
 an open question is found during design** (see step 4). Every other step
 proceeds automatically.
 
+> **Git commit authorisation**: the global `CLAUDE.md` rule "never commit
+> without explicit user instruction" is satisfied once and for all when the
+> user asks the agent to work on an issue "according to the workflow" (or
+> equivalent phrasing). That single instruction implicitly authorises every
+> `git commit`, `git push`, and `gh release create` that the workflow
+> prescribes (steps 9, 10, 11, 13). No further per-commit confirmation is
+> needed for the duration of that session.
+
 ### 1. Read the issue
 
 ```bash
@@ -633,7 +641,8 @@ Read issue → Explore → Worktree → DESIGN → [pause if questions] → PLAN
 ```
 
 The only mandatory pause is after the DESIGN if it surfaces open questions.
-Everything else runs autonomously.
+Everything else — including commits, pushes, and releases — runs autonomously
+once the user has invoked this workflow.
 
 ---
 

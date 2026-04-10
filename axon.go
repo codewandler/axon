@@ -30,12 +30,11 @@ import (
 	"github.com/codewandler/axon/types"
 )
 
-const (
-	// eventChannelBuffer is the buffer size for event channels.
-	// This provides backpressure - if subscribers are slow, events will queue
-	// up to this limit before the dispatcher drops them with a warning.
-	eventChannelBuffer = 10000
-)
+// eventChannelBuffer is the buffer size for event channels.
+// If a subscriber is slow, backpressure propagates naturally: the dispatcher
+// blocks, the events channel fills, and the FS indexer slows its walk.
+// It is a var (not const) so tests can override it with a small value.
+var eventChannelBuffer = 10000
 
 // DefaultFSIgnore contains the default patterns to exclude when indexing.
 // Dot-prefixed paths are no longer blanket-excluded; specific entries are
@@ -400,18 +399,13 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 						if len(subscribers) > 1 && event.Node != nil {
 							eventCopy.Node = event.Node.Clone()
 						}
-						// Non-blocking send to subscriber channel
-						// If channel is full, log warning and drop to prevent blocking the dispatcher.
-						// This is intentional backpressure handling - subscribers should be fast.
+						// Blocking send: if the subscriber is slow we block here,
+						// propagating backpressure to the FS indexer via the events
+						// channel. This guarantees no events are ever dropped.
 						select {
 						case info.eventCh <- eventCopy:
-							// Event sent successfully
 						case <-ctx.Done():
 							return
-						default:
-							// Channel full - log warning and skip to prevent blocking
-							log.Printf("axon: dispatcher: subscriber %s channel full, dropping event %v at %s",
-								sub.Name(), eventCopy.Type, eventCopy.Path)
 						}
 					}
 				}

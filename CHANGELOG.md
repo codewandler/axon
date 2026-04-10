@@ -7,6 +7,28 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.16.1] — 2026-04-11
+
+### Fixed
+
+- **Dispatcher event dropping** — when a slow subscriber (e.g. `todo` indexer
+  reading every source file from disk) could not keep up with the FS indexer,
+  its per-subscriber channel filled and subsequent events were silently dropped
+  via a non-blocking `default:` send. This caused `code:todo` nodes — and
+  potentially nodes from any other I/O-bound subscriber — to be missing from
+  the graph when indexing large directories. The dispatcher now uses a blocking
+  send (with `ctx.Done()` escape hatch), propagating backpressure through the
+  events channel to the FS walk. Indexing may take slightly longer on very
+  large trees, but the result is always complete. Closes #20.
+- **`eventChannelBuffer`** changed from `const` to `var` so tests can override
+  it with a small value to exercise the backpressure path.
+- **AGENTS.md** updated: the GitHub Issue Workflow now explicitly states that
+  a user instruction to "work on an issue according to the workflow" authorises
+  all `git commit`, `git push`, and `gh release create` calls the workflow
+  prescribes — no per-commit confirmation required.
+
+---
+
 ## [0.16.0] — 2026-04-11
 
 ### Added

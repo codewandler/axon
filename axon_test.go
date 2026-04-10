@@ -2,14 +2,17 @@ package axon
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/codewandler/axon/graph"
+	"github.com/codewandler/axon/indexer"
 	"github.com/codewandler/axon/types"
 )
 
@@ -576,4 +579,67 @@ func TestAxonWatch_FileDeletion(t *testing.T) {
 	t.Error("file1.txt should have been removed from graph after filesystem deletion")
 	cancel()
 	<-errCh
+}
+
+// slowSubscriber is a test indexer that subscribes to fs:file visited events,
+// simulates slow I/O by sleeping, and counts the number of events received.
+type slowSubscriber struct {
+	delay    time.Duration
+	received atomic.Int64
+}
+
+func (s *slowSubscriber) Name() string        { return "slow-test-subscriber" }
+func (s *slowSubscriber) Schemes() []string    { return nil }
+func (s *slowSubscriber) Handles(_ string) bool { return false }
+func (s *slowSubscriber) Subscriptions() []indexer.Subscription {
+	return []indexer.Subscription{
+		{EventType: indexer.EventEntryVisited, NodeType: types.TypeFile},
+	}
+}
+func (s *slowSubscriber) Index(_ context.Context, _ *indexer.Context) error { return nil }
+func (s *slowSubscriber) HandleEvent(_ context.Context, _ *indexer.Context, _ indexer.Event) error {
+	time.Sleep(s.delay)
+	s.received.Add(1)
+	return nil
+}
+
+// TestDispatcher_NoEventsDroppedWhenSubscriberSlow verifies that no events are
+// dropped when a slow subscriber cannot keep up with the FS indexer.
+// It sets a tiny channel buffer so the subscriber's queue fills quickly,
+// then asserts that every file event was delivered.
+func TestDispatcher_NoEventsDroppedWhenSubscriberSlow(t *testing.T) {
+	// Force a tiny buffer so the subscriber channel fills almost immediately.
+	original := eventChannelBuffer
+	eventChannelBuffer = 5
+	t.Cleanup(func() { eventChannelBuffer = original })
+
+	const fileCount = 20
+	dir := t.TempDir()
+	for i := range fileCount {
+		content := fmt.Sprintf("package p\n// TODO: item %d\nvar _ = %d\n", i, i)
+		if err := os.WriteFile(
+			filepath.Join(dir, fmt.Sprintf("f%02d.go", i)),
+			[]byte(content), 0o644,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ax, err := New(Config{Dir: dir, FSExclude: []string{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Register the slow subscriber after construction so we can inspect its counter.
+	sub := &slowSubscriber{delay: 2 * time.Millisecond}
+	ax.indexers.Register(sub)
+
+	if _, err := ax.Index(context.Background(), ""); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	got := sub.received.Load()
+	if got != fileCount {
+		t.Errorf("slow subscriber received %d/%d events (events were dropped)", got, fileCount)
+	}
 }
