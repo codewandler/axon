@@ -7,6 +7,23 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.1] — 2026-05-13
+
+### Fixed
+
+- **Context leak in `TestWatch_NoOutput`** — `cancel` from `context.WithCancel`
+  was only called on one branch of a `select`, leaving the context open when
+  `Watch` returned early. Added `defer cancel()` to cover all exit paths.
+  Fixes `go vet` error that was failing CI on every push.
+
+### Docs
+
+- **Release workflow in `AGENTS.md`** — `gh release create` is now the
+  canonical release step; a git tag alone is no longer sufficient.
+  Added `--latest` flag guidance and backfill pattern.
+
+---
+
 ## [0.8.0] — 2026-05-13
 
 ### Added
