@@ -159,6 +159,7 @@ type QueryResult struct {
 	Counts          []CountItem      // For GROUP BY queries, in SQLite result order
 	SelectedColumns []string         // Column names in SELECT order; nil means SELECT *
 	Rows            []map[string]any // For ResultTypeRows: multi-variable pattern results
+	GroupingColumn  string           // For ResultTypeCounts GROUP BY: the grouping column name
 }
 
 // Count returns the scalar count value for SELECT COUNT(*) queries.

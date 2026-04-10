@@ -266,6 +266,14 @@ func runFind(cmd *cobra.Command, args []string) error {
 	// Output
 
 	if len(allNodes) == 0 {
+		// For structured output formats emit a valid empty value.
+		// For path/uri/default, silent empty output is acceptable Unix behaviour.
+		switch findOutput {
+		case "json":
+			fmt.Println("[]")
+		case "table":
+			return outputTable(allNodes)
+		}
 		return nil
 	}
 

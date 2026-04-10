@@ -48,7 +48,12 @@ type Storage struct {
 	closeCh    chan struct{} // Signal to stop the flush loop
 	closeOnce  sync.Once
 	flushReqCh chan chan struct{} // Channel for flush requests (sends completion signal back)
-	pendingOps atomic.Int64       // Count of pending operations in channel
+	pendingOps atomic.Int64      // Count of pending operations in channel
+
+	// Flush error tracking: set by flushBatch when a batch write permanently fails.
+	// Read by Flush() callers after the flush completes.
+	flushMu      sync.Mutex
+	lastFlushErr error
 }
 
 var memoryDBCounter uint64
@@ -341,6 +346,7 @@ func (s *Storage) PutNode(ctx context.Context, node *graph.Node) error {
 
 // Flush writes any buffered data to the database.
 // This blocks until all pending writes are flushed.
+// Returns any error that occurred during the flush (e.g. SQLITE_BUSY after retries).
 // If there are no pending writes, this returns immediately.
 func (s *Storage) Flush(ctx context.Context) error {
 	// Fast path: no pending writes, nothing to flush
@@ -355,7 +361,11 @@ func (s *Storage) Flush(ctx context.Context) error {
 		// Request sent, wait for completion
 		select {
 		case <-done:
-			return nil
+			// Read the error that flushBatch stored before closing done.
+			s.flushMu.Lock()
+			err := s.lastFlushErr
+			s.flushMu.Unlock()
+			return err
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-s.closeCh:
@@ -380,11 +390,16 @@ func (s *Storage) flushLoop() {
 	var pendingFlushReqs []chan struct{}
 
 	flushAndSignal := func() {
+		var flushErr error
 		if len(batch) > 0 {
-			s.flushBatch(batch)
+			flushErr = s.flushBatch(batch)
 			s.pendingOps.Add(-int64(len(batch)))
 			batch = batch[:0]
 		}
+		// Store the flush result so Flush() callers can read it after waking up.
+		s.flushMu.Lock()
+		s.lastFlushErr = flushErr
+		s.flushMu.Unlock()
 		// Signal all pending flush requests
 		for _, done := range pendingFlushReqs {
 			close(done)
@@ -440,18 +455,53 @@ func (s *Storage) flushLoop() {
 	}
 }
 
+// isSQLiteBusy reports whether err is a SQLite "database is locked" (SQLITE_BUSY) error.
+// Uses string matching so we don't need to import the modernc sqlite package directly.
+func isSQLiteBusy(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "SQLITE_BUSY")
+}
+
 // flushBatch writes a batch of operations to the database.
-// Errors are logged since this runs asynchronously and cannot return errors to callers.
-func (s *Storage) flushBatch(batch []writeOp) {
+// On SQLITE_BUSY it retries up to 3 times with exponential backoff.
+// Returns any permanent error so the caller (flushLoop) can propagate it to Flush().
+func (s *Storage) flushBatch(batch []writeOp) error {
 	if len(batch) == 0 {
-		return
+		return nil
 	}
 
+	const maxRetries = 3
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 50ms, 100ms
+			time.Sleep(time.Duration(50*attempt) * time.Millisecond)
+		}
+
+		lastErr = s.tryFlushBatch(batch)
+		if lastErr == nil {
+			return nil
+		}
+		if !isSQLiteBusy(lastErr) {
+			break // non-retryable error
+		}
+		log.Printf("sqlite: SQLITE_BUSY on batch write attempt %d/%d, retrying...", attempt+1, maxRetries)
+	}
+
+	log.Printf("sqlite: batch write failed permanently, rolling back %d operations: %v", len(batch), lastErr)
+	return lastErr
+}
+
+// tryFlushBatch executes a single batch write attempt inside a transaction.
+func (s *Storage) tryFlushBatch(batch []writeOp) error {
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		if isSQLiteBusy(err) {
+			return err
+		}
 		log.Printf("sqlite: failed to begin transaction: %v", err)
-		return
+		return err
 	}
 	defer tx.Rollback()
 
@@ -471,7 +521,7 @@ func (s *Storage) flushBatch(batch []writeOp) {
 	`)
 	if err != nil {
 		log.Printf("sqlite: failed to prepare node statement: %v", err)
-		return
+		return err
 	}
 	defer nodeStmt.Close()
 
@@ -484,7 +534,7 @@ func (s *Storage) flushBatch(batch []writeOp) {
 	`)
 	if err != nil {
 		log.Printf("sqlite: failed to prepare edge statement: %v", err)
-		return
+		return err
 	}
 	defer edgeStmt.Close()
 
@@ -556,13 +606,13 @@ func (s *Storage) flushBatch(batch []writeOp) {
 
 	// If any operation failed, rollback (via defer) instead of committing
 	if batchErr != nil {
-		log.Printf("sqlite: batch write failed, rolling back %d operations", len(batch))
-		return
+		return batchErr
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Printf("sqlite: failed to commit batch of %d operations: %v", len(batch), err)
+		return err
 	}
+	return nil
 }
 
 func (s *Storage) GetNode(ctx context.Context, id string) (*graph.Node, error) {

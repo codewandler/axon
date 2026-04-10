@@ -2720,6 +2720,11 @@ func (s *Storage) executeQuery(ctx context.Context, query *aql.Query, sql string
 			return nil, err
 		}
 		result.Counts = counts
+		// Capture the actual grouping column name from the GROUP BY clause so that
+		// renderers can use the real name instead of the hardcoded "key".
+		if query != nil && query.Select != nil && len(query.Select.GroupBy) > 0 {
+			result.GroupingColumn = query.Select.GroupBy[0].String()
+		}
 
 	default:
 		return nil, fmt.Errorf("unknown result type: %v", resultType)
@@ -2957,18 +2962,16 @@ func (s *Storage) scanNodePartial(rows *sql.Rows, cols []string) (*graph.Node, e
 			}
 		default:
 			// Handle json_extract columns: json_extract(data, '$.field')
-			// Extract the field name and store in Data
+			// Store the native value (int64, bool, string, etc.) — do NOT
+			// restrict to strings; integers and booleans must pass through.
 			if strings.HasPrefix(col, "json_extract") {
-				if str, ok := val.(string); ok && str != "" {
-					// Parse the JSON path from column name: json_extract(data, '$.name') -> name
-					if match := jsonExtractRegex.FindStringSubmatch(col); match != nil {
-						fieldName := match[1]
-						if node.Data == nil {
-							node.Data = make(map[string]any)
-						}
-						if dataMap, ok := node.Data.(map[string]any); ok {
-							dataMap[fieldName] = str
-						}
+				if match := jsonExtractRegex.FindStringSubmatch(col); match != nil {
+					fieldName := match[1]
+					if node.Data == nil {
+						node.Data = make(map[string]any)
+					}
+					if dataMap, ok := node.Data.(map[string]any); ok {
+						dataMap[fieldName] = val
 					}
 				}
 			}

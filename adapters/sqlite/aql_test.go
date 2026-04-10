@@ -1988,3 +1988,107 @@ func TestQuery_MultiVariablePatternSelect(t *testing.T) {
 		}
 	})
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug-fix regression tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Task 1: SELECT data.* with integer/boolean fields must return actual values,
+// not nil. Previously the scanner only handled string-typed json_extract results.
+func TestQuery_SelectDataIntegerField(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// data.size is stored as an integer; previous code returned nil for non-strings
+	q := aql.Nodes.Select(aql.Name, aql.DataSize).
+		Where(aql.Type.Eq("fs:file")).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result.Nodes) != 4 {
+		t.Fatalf("expected 4 fs:file nodes, got %d", len(result.Nodes))
+	}
+
+	// Build a map name→node for convenient lookup
+	byName := make(map[string]*graph.Node, len(result.Nodes))
+	for _, n := range result.Nodes {
+		byName[n.Name] = n
+	}
+
+	// test1.go, test2.py, main.go all have integer size values
+	for _, name := range []string{"test1.go", "test2.py", "main.go"} {
+		n, ok := byName[name]
+		if !ok {
+			t.Errorf("node %q not found in results", name)
+			continue
+		}
+		dataMap, ok := n.Data.(map[string]any)
+		if !ok {
+			t.Errorf("%s: Data is not map[string]any: %T", name, n.Data)
+			continue
+		}
+		if dataMap["size"] == nil {
+			t.Errorf("%s: data.size is nil, expected integer value", name)
+		}
+	}
+}
+
+// Task 2: SELECT var.field in a single-variable pattern query:
+// (a) storage layer populates node.Name correctly via scanNodePartial
+// (b) SelectedColumns is set to ["file.name"] so CLI can project it
+// (The nodeFieldRaw CLI fix is tested in cmd/axon/query_test.go)
+func TestPattern_SelectSingleVarField_StorageReturnsNodes(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// SELECT file.name FROM (dir:fs:dir)-[:contains]->(file:fs:file)
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
+		Build()
+
+	q := aql.Select(aql.Var("file").Field("name")).
+		FromPattern(pattern).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result.Nodes) == 0 {
+		t.Fatalf("expected nodes from pattern query, got 0")
+	}
+
+	// SelectedColumns must be ["file.name"] so the CLI projection layer knows what was requested
+	if len(result.SelectedColumns) != 1 || result.SelectedColumns[0] != "file.name" {
+		t.Errorf("expected SelectedColumns=[file.name], got %v", result.SelectedColumns)
+	}
+
+	// storage correctly populates node.Name via scanNodePartial
+	for _, node := range result.Nodes {
+		if node.Name == "" {
+			t.Errorf("expected node.Name populated, got empty: %+v", node)
+		}
+	}
+}
+
+// Task 7: GROUP BY query must set QueryResult.GroupingColumn to the actual
+// grouping column name (e.g. "type"), not the hardcoded "key".
+func TestQuery_GroupBy_GroupingColumnSet(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	q := aql.Nodes.Select(aql.Type, aql.Count()).
+		GroupBy(aql.Type).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if result.Type != graph.ResultTypeCounts {
+		t.Fatalf("expected ResultTypeCounts, got %v", result.Type)
+	}
+	if result.GroupingColumn != "type" {
+		t.Errorf("expected GroupingColumn = \"type\", got %q", result.GroupingColumn)
+	}
+}

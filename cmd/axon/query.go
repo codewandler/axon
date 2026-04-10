@@ -35,7 +35,7 @@ Examples:
   axon query "SELECT name, type FROM nodes WHERE type = 'fs:file'"
 
   # Query with JSON field access
-  axon query "SELECT * FROM nodes WHERE data.ext = 'go'"
+  axon query "SELECT * FROM nodes WHERE data.ext = '.go'"
 
   # Group and count by type
   axon query "SELECT type, COUNT(*) FROM nodes GROUP BY type"
@@ -145,23 +145,39 @@ func printQueryResultJSON(result *graph.QueryResult) error {
 			}
 			data = projected
 		} else {
-			data = result.Nodes
+			// Guard nil slice: json.Encode(nil) produces "null", not "[]"
+			if result.Nodes != nil {
+				data = result.Nodes
+			} else {
+				data = []*graph.Node{}
+			}
 		}
 	case graph.ResultTypeEdges:
-		data = result.Edges
+		if result.Edges != nil {
+			data = result.Edges
+		} else {
+			data = []*graph.Edge{}
+		}
 	case graph.ResultTypeCounts:
-		// Preserve SQLite ORDER BY by rendering as [{key, count}] array
-		type countRow struct {
-			Key   string `json:"key"`
-			Count int    `json:"count"`
+		// Preserve SQLite ORDER BY; use the actual grouping column name when available.
+		groupingKey := result.GroupingColumn
+		if groupingKey == "" {
+			groupingKey = "key"
 		}
-		rows := make([]countRow, len(result.Counts))
+		countRows := make([]map[string]any, len(result.Counts))
 		for i, item := range result.Counts {
-			rows[i] = countRow{Key: item.Name, Count: item.Count}
+			countRows[i] = map[string]any{
+				groupingKey: item.Name,
+				"count":     item.Count,
+			}
 		}
-		data = rows
+		data = countRows
 	case graph.ResultTypeRows:
-		data = result.Rows
+		if result.Rows != nil {
+			data = result.Rows
+		} else {
+			data = []map[string]any{}
+		}
 	}
 
 	enc := json.NewEncoder(os.Stdout)
@@ -200,7 +216,7 @@ func printQueryResultTable(result *graph.QueryResult) error {
 	case graph.ResultTypeEdges:
 		return printEdgesTable(result.Edges)
 	case graph.ResultTypeCounts:
-		return printCountsTable(result.Counts)
+		return printCountsTable(result.Counts, result.GroupingColumn)
 	case graph.ResultTypeRows:
 		return printRowsTable(result.Rows, result.SelectedColumns)
 	default:
@@ -407,7 +423,7 @@ func nodeFieldValue(node *graph.Node, col string) string {
 		}
 		return ""
 	default:
-		// data.field selector
+		// data.field selector (e.g. "data.ext")
 		if strings.HasPrefix(col, "data.") {
 			field := strings.TrimPrefix(col, "data.")
 			if m, ok := node.Data.(map[string]any); ok {
@@ -416,6 +432,10 @@ func nodeFieldValue(node *graph.Node, col string) string {
 					return strings.Trim(string(b), `"`)
 				}
 			}
+		} else if idx := strings.Index(col, "."); idx >= 0 {
+			// var.field selector (e.g. "file.name", "file.data.ext"):
+			// strip the leading variable prefix and recurse.
+			return nodeFieldValue(node, col[idx+1:])
 		}
 		return ""
 	}
@@ -451,12 +471,16 @@ func nodeFieldRaw(node *graph.Node, col string) any {
 		}
 		return nil
 	default:
-		// data.field selector
+		// data.field selector (e.g. "data.ext")
 		if strings.HasPrefix(col, "data.") {
 			field := strings.TrimPrefix(col, "data.")
 			if m, ok := node.Data.(map[string]any); ok {
 				return m[field]
 			}
+		} else if idx := strings.Index(col, "."); idx >= 0 {
+			// var.field selector (e.g. "file.name", "file.data.ext"):
+			// strip the leading variable prefix and recurse.
+			return nodeFieldRaw(node, col[idx+1:])
 		}
 		return nil
 	}
@@ -492,16 +516,24 @@ func printEdgesTable(edges []*graph.Edge) error {
 }
 
 // printCountsTable prints count aggregations as a table.
-func printCountsTable(counts []graph.CountItem) error {
+// groupingCol is the actual grouping column name (e.g. "type"); defaults to "Key" if empty.
+func printCountsTable(counts []graph.CountItem, groupingCol string) error {
 	if len(counts) == 0 {
 		fmt.Println("No results")
 		return nil
 	}
 
+	header := groupingCol
+	if header == "" {
+		header = "Key"
+	} else {
+		header = strings.Title(strings.ReplaceAll(header, ".", " "))
+	}
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	defer w.Flush()
 
-	fmt.Fprintln(w, "Key\tCount")
+	fmt.Fprintf(w, "%s\tCount\n", header)
 	for _, item := range counts {
 		fmt.Fprintf(w, "%s\t%d\n", item.Name, item.Count)
 	}
