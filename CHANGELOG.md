@@ -7,6 +7,32 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.20.0] — 2026-04-11
+
+### Added
+
+- **TTL / `ExpiresAt` for nodes and edges** (#26) — nodes and edges can now carry
+  an expiry timestamp. After the deadline elapses, the record is invisible to all
+  read paths (queries, AQL, semantic search) without any caller change.
+  - `graph.Node.ExpiresAt *time.Time` and `graph.Edge.ExpiresAt *time.Time` fields.
+  - `WithTTL(d time.Duration)` builder on both types; `WithTTL(0)` is a no-op
+    (immortal, the default).
+  - SQLite migrations 11 and 12 add `expires_at INTEGER` column and index to both
+    tables, plus `active_nodes` and `active_edges` views that filter expired rows.
+  - `StalenessManager` interface extended with `DeleteExpired(ctx)` and
+    `CountExpired(ctx)`, returning `(nodesDeleted, edgesDeleted, error)`.
+  - All AQL SELECT paths, pattern queries, and variable-length path queries read
+    through the active views automatically.
+- **`axon write-node` CLI command** — persists a custom node from the shell with
+  `--uri`, `--type`, `--name`, `--data` (JSON), `--label`, and `--ttl` flags.
+  Same URI = upsert; prints the node ID on success.
+- **`axon gc` reports expired records** — `gc` now calls `DeleteExpired` before
+  orphan cleanup and reports counts; `--dry-run` uses `CountExpired` for a
+  non-destructive preview.
+- **Watch-mode background GC** — `Watch` starts a background goroutine that
+  calls `DeleteExpired` on a configurable `WatchOptions.GCInterval` (default 5 min;
+  set to 0 to disable).
+
 ## [0.19.0] — 2026-04-11
 
 ### Added
