@@ -543,3 +543,52 @@ func TestConcurrentWrites(t *testing.T) {
 		t.Errorf("expected %d nodes, got %d", expectedCount, len(nodes))
 	}
 }
+
+func TestEmbedding(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	// Create a node first
+	node := graph.NewNode("go:func").
+		WithURI("file:///test/func").
+		WithKey("testfunc").
+		WithName("TestFunc")
+	if err := s.PutNode(ctx, node); err != nil {
+		t.Fatalf("PutNode: %v", err)
+	}
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	// Store embedding
+	embedding := []float32{0.1, 0.2, 0.3, 0.9}
+	if err := s.PutEmbedding(ctx, node.ID, embedding); err != nil {
+		t.Fatalf("PutEmbedding: %v", err)
+	}
+
+	// Retrieve embedding
+	got, err := s.GetEmbedding(ctx, node.ID)
+	if err != nil {
+		t.Fatalf("GetEmbedding: %v", err)
+	}
+	if len(got) != len(embedding) {
+		t.Fatalf("expected %d dims, got %d", len(embedding), len(got))
+	}
+	for i, v := range embedding {
+		if got[i] != v {
+			t.Errorf("dim %d: expected %f, got %f", i, v, got[i])
+		}
+	}
+
+	// FindSimilar
+	results, err := s.FindSimilar(ctx, embedding, 5, nil)
+	if err != nil {
+		t.Fatalf("FindSimilar: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if results[0].ID != node.ID {
+		t.Errorf("expected top result to be %s, got %s", node.ID, results[0].ID)
+	}
+}

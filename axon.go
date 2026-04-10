@@ -3,14 +3,20 @@ package axon
 import (
 	"context"
 	"fmt"
+	iofs "io/fs"
 	"log"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/codewandler/axon/adapters/sqlite"
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
+	"github.com/codewandler/axon/indexer/embeddings"
 	"github.com/codewandler/axon/indexer/fs"
 	"github.com/codewandler/axon/indexer/git"
 	"github.com/codewandler/axon/indexer/golang"
@@ -60,6 +66,12 @@ type Config struct {
 
 	// FSIgnore contains glob patterns to ignore when indexing filesystem.
 	FSIgnore []string
+
+	// EmbeddingProvider is an optional embedding provider for semantic search.
+	// When set, a PostIndexer will generate and store embeddings for Go symbols
+	// and Markdown sections after each indexing run.
+	// If nil (default), no embeddings are generated.
+	EmbeddingProvider embeddings.Provider
 }
 
 // Axon is the main entry point for the axon library.
@@ -118,6 +130,11 @@ func New(cfg Config) (*Axon, error) {
 	idxRegistry.Register(markdown.New())
 	idxRegistry.Register(project.New())
 	// Note: tagger is now called directly by fs indexer, not via events
+
+	// Register embedding PostIndexer if a provider is configured
+	if cfg.EmbeddingProvider != nil {
+		idxRegistry.Register(embeddings.New(cfg.EmbeddingProvider))
+	}
 
 	return &Axon{
 		graph:    g,
@@ -421,6 +438,159 @@ type IndexResult struct {
 	RootURI      string
 	Generation   string
 	Errors       []error // Errors from individual indexers (non-fatal)
+}
+
+// WatchOptions configures the Watch behavior.
+type WatchOptions struct {
+	IndexOptions
+	Debounce  time.Duration // default: 150ms
+	OnReindex func(path string, result *IndexResult, err error)
+}
+
+// Watch watches the given path for filesystem changes and re-indexes affected
+// subtrees automatically. It performs an initial full index, then blocks until
+// ctx is cancelled, re-indexing on each batch of changes after the debounce
+// window elapses.
+func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error {
+	if opts.Debounce == 0 {
+		opts.Debounce = 150 * time.Millisecond
+	}
+
+	// Resolve to absolute path.
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolving path %q: %w", path, err)
+	}
+
+	// Initial full index.
+	initOpts := opts.IndexOptions
+	initOpts.Path = absPath
+	result, indexErr := a.IndexWithOptions(ctx, initOpts)
+	if opts.OnReindex != nil {
+		opts.OnReindex(absPath, result, indexErr)
+	}
+	if indexErr != nil {
+		return fmt.Errorf("initial index: %w", indexErr)
+	}
+
+	// Create fsnotify watcher.
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("creating watcher: %w", err)
+	}
+	defer watcher.Close()
+
+	// Walk directory tree and register every subdirectory with the watcher.
+	if err := filepath.WalkDir(absPath, func(p string, d iofs.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip inaccessible paths
+		}
+		if d.IsDir() {
+			if watchErr := watcher.Add(p); watchErr != nil {
+				log.Printf("axon: watch: failed to watch %s: %v", p, watchErr)
+			}
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("walking directory for watch: %w", err)
+	}
+
+	// Debounce loop: accumulate changed paths, fire re-index after quiet period.
+	pending := make(map[string]struct{})
+	var debounce <-chan time.Time // nil = no pending timer (blocks in select)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return nil
+			}
+			pending[event.Name] = struct{}{}
+			debounce = time.After(opts.Debounce) // reset/start debounce window
+
+		case watchErr, ok := <-watcher.Errors:
+			if !ok {
+				return nil
+			}
+			log.Printf("axon: watcher error: %v", watchErr)
+
+		case <-debounce:
+			if len(pending) == 0 {
+				debounce = nil
+				continue
+			}
+			reindexRoot := watchCommonAncestorDir(pending, absPath)
+			pending = make(map[string]struct{})
+			debounce = nil
+
+			reindexOpts := opts.IndexOptions
+			reindexOpts.Path = reindexRoot
+			res, rerr := a.IndexWithOptions(ctx, reindexOpts)
+			if opts.OnReindex != nil {
+				opts.OnReindex(reindexRoot, res, rerr)
+			}
+		}
+	}
+}
+
+// watchCommonAncestorDir returns the deepest common ancestor directory of all
+// paths in the set. It falls back to fallback when the set is empty or the
+// common ancestor cannot be determined.
+func watchCommonAncestorDir(paths map[string]struct{}, fallback string) string {
+	if len(paths) == 0 {
+		return fallback
+	}
+
+	// Collect the parent directory of each changed path.
+	// Use filepath.Dir so that both file and directory events resolve
+	// to the containing directory.
+	dirs := make([]string, 0, len(paths))
+	for p := range paths {
+		info, err := os.Stat(p)
+		if err == nil && info.IsDir() {
+			dirs = append(dirs, filepath.Clean(p))
+		} else {
+			dirs = append(dirs, filepath.Dir(p))
+		}
+	}
+
+	common := dirs[0]
+	for _, d := range dirs[1:] {
+		common = watchLongestCommonPathPrefix(common, d)
+	}
+
+	if common == "" || common == "." {
+		return fallback
+	}
+	return common
+}
+
+// watchLongestCommonPathPrefix returns the longest common path prefix shared by
+// two absolute paths, always at a directory boundary.
+func watchLongestCommonPathPrefix(a, b string) string {
+	sep := string(filepath.Separator)
+	aParts := strings.Split(filepath.Clean(a), sep)
+	bParts := strings.Split(filepath.Clean(b), sep)
+
+	var common []string
+	for i := 0; i < len(aParts) && i < len(bParts); i++ {
+		if aParts[i] != bParts[i] {
+			break
+		}
+		common = append(common, aParts[i])
+	}
+
+	if len(common) == 0 {
+		return sep
+	}
+	result := strings.Join(common, sep)
+	if result == "" {
+		return sep
+	}
+	return result
 }
 
 // ErrNoIndexer is returned when no indexer can handle a URI.

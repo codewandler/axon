@@ -3,9 +3,12 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -277,6 +280,17 @@ func (s *Storage) migrate(ctx context.Context) error {
 				CREATE INDEX IF NOT EXISTS idx_edges_from_type ON edges(from_id, type);
 			`,
 		},
+		{
+			version: 10,
+			sql: `
+				-- Vector embeddings for semantic search
+				CREATE TABLE IF NOT EXISTS embeddings (
+					node_id TEXT PRIMARY KEY,
+					dims    INTEGER NOT NULL,
+					data    BLOB NOT NULL
+				);
+			`,
+			},
 	}
 
 	// Run pending migrations
@@ -1507,4 +1521,126 @@ func (s *Storage) GetSchemaVersion(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return version, nil
+}
+
+// PutEmbedding stores a vector embedding for a node.
+func (s *Storage) PutEmbedding(ctx context.Context, nodeID string, embedding []float32) error {
+	// serialize []float32 to []byte (little-endian)
+	buf := make([]byte, len(embedding)*4)
+	for i, f := range embedding {
+		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO embeddings (node_id, dims, data) VALUES (?, ?, ?)`,
+		nodeID, len(embedding), buf)
+	return err
+}
+
+// GetEmbedding retrieves the vector embedding for a node.
+func (s *Storage) GetEmbedding(ctx context.Context, nodeID string) ([]float32, error) {
+	var dims int
+	var data []byte
+	err := s.db.QueryRowContext(ctx,
+		`SELECT dims, data FROM embeddings WHERE node_id = ?`, nodeID).
+		Scan(&dims, &data)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	embedding := make([]float32, dims)
+	for i := range embedding {
+		embedding[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[i*4:]))
+	}
+	return embedding, nil
+}
+
+// FindSimilar loads all embeddings, computes cosine similarity, and returns top-k results.
+func (s *Storage) FindSimilar(ctx context.Context, query []float32, limit int, filter *graph.NodeFilter) ([]*graph.NodeWithScore, error) {
+	// First flush to ensure all nodes are committed
+	if err := s.Flush(ctx); err != nil {
+		return nil, err
+	}
+
+	// Load all embeddings
+	rows, err := s.db.QueryContext(ctx, `SELECT node_id, dims, data FROM embeddings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type candidate struct {
+		nodeID string
+		score  float32
+	}
+	var candidates []candidate
+
+	for rows.Next() {
+		var nodeID string
+		var dims int
+		var data []byte
+		if err := rows.Scan(&nodeID, &dims, &data); err != nil {
+			return nil, err
+		}
+		embedding := make([]float32, dims)
+		for i := range embedding {
+			embedding[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[i*4:]))
+		}
+		score := cosineSimilarity(query, embedding)
+		candidates = append(candidates, candidate{nodeID: nodeID, score: score})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Sort by score descending
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	// Take top limit candidates and fetch nodes
+	if limit > 0 && len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+
+	var results []*graph.NodeWithScore
+	for _, c := range candidates {
+		node, err := s.GetNode(ctx, c.nodeID)
+		if err != nil || node == nil {
+			continue
+		}
+		// Apply filter if provided
+		if filter != nil && !nodeMatchesFilter(node, filter) {
+			continue
+		}
+		results = append(results, &graph.NodeWithScore{Node: node, Score: c.score})
+	}
+
+	return results, nil
+}
+
+// cosineSimilarity computes the cosine similarity between two vectors.
+func cosineSimilarity(a, b []float32) float32 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return float32(dot / (math.Sqrt(normA) * math.Sqrt(normB)))
+}
+
+// nodeMatchesFilter returns true if the node satisfies the given filter.
+func nodeMatchesFilter(node *graph.Node, filter *graph.NodeFilter) bool {
+	if filter.Type != "" && node.Type != filter.Type {
+		return false
+	}
+	return true
 }

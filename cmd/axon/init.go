@@ -10,13 +10,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/codewandler/axon"
 	"github.com/codewandler/axon/adapters/sqlite"
+	"github.com/codewandler/axon/indexer/embeddings"
 	"github.com/codewandler/axon/progress"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
 var (
-	flagNoGC bool
+	flagNoGC  bool
+	flagEmbed bool
 )
 
 var initCmd = &cobra.Command{
@@ -33,6 +35,7 @@ structure that can be queried with other axon commands.`,
 
 func init() {
 	initCmd.Flags().BoolVar(&flagNoGC, "no-gc", false, "Skip garbage collection (orphaned edge cleanup)")
+	initCmd.Flags().BoolVar(&flagEmbed, "embed", false, "Generate embeddings after indexing (requires Ollama with nomic-embed-text or AXON_EMBED_PROVIDER=ollama)")
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -80,10 +83,29 @@ func runInit(cmd *cobra.Command, args []string) error {
 	defer storage.Close()
 
 	// Create axon instance with SQLite storage
-	ax, err := axon.New(axon.Config{
+	axCfg := axon.Config{
 		Dir:     absPath,
 		Storage: storage,
-	})
+	}
+
+	// Optionally enable embedding generation
+	if flagEmbed {
+		providerName := os.Getenv("AXON_EMBED_PROVIDER")
+		if providerName == "" {
+			providerName = "ollama"
+		}
+		switch providerName {
+		case "ollama":
+			baseURL := os.Getenv("AXON_OLLAMA_URL")
+			model := os.Getenv("AXON_OLLAMA_MODEL")
+			axCfg.EmbeddingProvider = embeddings.NewOllama(baseURL, model)
+			fmt.Printf("Embedding provider: %s\n", axCfg.EmbeddingProvider.Name())
+		default:
+			return fmt.Errorf("unknown embedding provider %q (set AXON_EMBED_PROVIDER=ollama)", providerName)
+		}
+	}
+
+	ax, err := axon.New(axCfg)
 	if err != nil {
 		return fmt.Errorf("failed to create axon: %w", err)
 	}

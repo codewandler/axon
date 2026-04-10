@@ -49,6 +49,12 @@ type IndexRunRecord struct {
 	Generation   string
 }
 
+// NodeWithScore is a node with a similarity score for semantic search results.
+type NodeWithScore struct {
+	*Node
+	Score float32
+}
+
 // -----------------------------------------------------------------------------
 // Composable Storage Interfaces
 // -----------------------------------------------------------------------------
@@ -134,6 +140,13 @@ type AQLQuerier interface {
 	Explain(ctx context.Context, query interface{}) (*QueryPlan, error)
 }
 
+// EmbeddingStore provides vector embedding storage and similarity search.
+type EmbeddingStore interface {
+	PutEmbedding(ctx context.Context, nodeID string, embedding []float32) error
+	GetEmbedding(ctx context.Context, nodeID string) ([]float32, error)
+	FindSimilar(ctx context.Context, query []float32, limit int, filter *NodeFilter) ([]*NodeWithScore, error)
+}
+
 // ResultType indicates the type of query result.
 type ResultType int
 
@@ -211,4 +224,5 @@ type Storage interface {
 	Flusher
 	DatabaseInfo
 	AQLQuerier
+	EmbeddingStore
 }

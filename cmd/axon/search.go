@@ -10,7 +10,14 @@ import (
 
 	"github.com/codewandler/axon/aql"
 	"github.com/codewandler/axon/graph"
+	"github.com/codewandler/axon/indexer/embeddings"
 	"github.com/spf13/cobra"
+)
+
+var (
+	flagSearchSemantic bool
+	flagSearchType     string
+	flagSearchLimit    int
 )
 
 var searchCmd = &cobra.Command{
@@ -75,6 +82,9 @@ Examples:
 
 func init() {
 	rootCmd.AddCommand(searchCmd)
+	searchCmd.Flags().BoolVar(&flagSearchSemantic, "semantic", false, "Use vector similarity search (requires embeddings generated with axon init --embed)")
+	searchCmd.Flags().StringVar(&flagSearchType, "type", "", "Filter results by node type (e.g. go:func, go:struct)")
+	searchCmd.Flags().IntVar(&flagSearchLimit, "limit", 10, "Maximum number of results")
 }
 
 // questionType represents the type of question being asked
@@ -102,6 +112,11 @@ type parsedQuestion struct {
 
 func runSearch(cmd *cobra.Command, args []string) error {
 	question := strings.Join(args, " ")
+
+	// Semantic vector search mode
+	if flagSearchSemantic {
+		return runSemanticSearch(question)
+	}
 
 	cmdCtx, err := openDB(false)
 	if err != nil {
@@ -143,6 +158,89 @@ func runSearch(cmd *cobra.Command, args []string) error {
 	default:
 		// Try to be helpful
 		return answerFuzzy(ctx, storage, parsed, question)
+	}
+}
+
+func runSemanticSearch(query string) error {
+	cmdCtx, err := openDB(false)
+	if err != nil {
+		return err
+	}
+	defer cmdCtx.Close()
+
+	ctx := context.Background()
+
+	// Resolve embedding provider from environment
+	provider, err := resolveEmbeddingProvider()
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "Using embedding provider: %s\n", provider.Name())
+
+	// Embed the query
+	embedding, err := provider.Embed(ctx, query)
+	if err != nil {
+		return fmt.Errorf("embedding query: %w", err)
+	}
+
+	// Build optional node filter
+	var filter *graph.NodeFilter
+	if flagSearchType != "" {
+		filter = &graph.NodeFilter{Type: flagSearchType}
+	}
+
+	// Find similar nodes
+	results, err := cmdCtx.Storage.FindSimilar(ctx, embedding, flagSearchLimit, filter)
+	if err != nil {
+		return fmt.Errorf("similarity search: %w", err)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("No results found.")
+		fmt.Println("Tip: Run 'axon init --embed .' to generate embeddings first.")
+		return nil
+	}
+
+	fmt.Printf("## Semantic search: %q\n\n", query)
+	fmt.Printf("Found **%d** results:\n\n", len(results))
+
+	for _, r := range results {
+		pos := extractPositionInfo(r.Data)
+		posStr := ""
+		if pos.File != "" {
+			posStr = fmt.Sprintf(" — `%s:%d`", shortenPath(pos.File), pos.Line)
+		}
+		fmt.Printf("**%.3f** `%s` (%s)%s\n", r.Score, r.Name, r.Type, posStr)
+		doc := extractDoc(r.Data)
+		if doc != "" {
+			// First line only
+			if idx := strings.Index(doc, "\n"); idx != -1 {
+				doc = doc[:idx]
+			}
+			if len(doc) > 100 {
+				doc = doc[:100] + "..."
+			}
+			fmt.Printf("  > %s\n", doc)
+		}
+	}
+
+	return nil
+}
+
+func resolveEmbeddingProvider() (embeddings.Provider, error) {
+	providerName := os.Getenv("AXON_EMBED_PROVIDER")
+	if providerName == "" {
+		providerName = "ollama"
+	}
+
+	switch providerName {
+	case "ollama":
+		baseURL := os.Getenv("AXON_OLLAMA_URL")
+		model := os.Getenv("AXON_OLLAMA_MODEL")
+		return embeddings.NewOllama(baseURL, model), nil
+	default:
+		return nil, fmt.Errorf("unknown embedding provider %q (set AXON_EMBED_PROVIDER=ollama)", providerName)
 	}
 }
 
