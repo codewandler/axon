@@ -1231,7 +1231,7 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 			break
 		}
 	}
-	if hasCount && len(q.Select.GroupBy) > 0 {
+	if hasCount {
 		resultType = graph.ResultTypeCounts
 	} else {
 		// Check if we're selecting edge variables
@@ -1730,6 +1730,30 @@ func (s *Storage) compilePatternSelect(stmt *aql.SelectStmt, nodeAliases map[str
 		// Handle COUNT(*)
 		if _, ok := col.Expr.(*aql.CountCall); ok {
 			sqlBuilder.WriteString("COUNT(*)")
+			continue
+		}
+
+		if _, ok := col.Expr.(*aql.Star); ok {
+			if multiVar {
+				first := true
+				for varName, alias := range nodeAliases {
+					if !first {
+						sqlBuilder.WriteString(", ")
+					}
+					first = false
+					parts := make([]string, len(nodeFields))
+					for j, field := range nodeFields {
+						parts[j] = fmt.Sprintf(`%s.%s AS "%s.%s"`, alias, field, varName, field)
+					}
+					sqlBuilder.WriteString(strings.Join(parts, ", "))
+				}
+			} else {
+				for _, alias := range nodeAliases {
+					sqlBuilder.WriteString(alias)
+					sqlBuilder.WriteString(".*")
+					break
+				}
+			}
 			continue
 		}
 
@@ -2751,9 +2775,11 @@ func extractSelectedColumns(query *aql.Query) []string {
 		case *aql.Selector:
 			if col.Alias != "" {
 				cols = append(cols, col.Alias)
-			} else {
+			} else if len(expr.Parts) > 1 {
 				cols = append(cols, expr.String())
 			}
+			// Single-part selectors (whole-variable references) are not added,
+			// causing the caller to use full-node display mode.
 		case *aql.CountCall:
 			// COUNT(*) is part of ResultTypeCounts path, skip here
 		}
@@ -3142,7 +3168,7 @@ func (s *Storage) executeCountQuery(ctx context.Context, query *aql.Query, sqlQu
 			if err := rows.Scan(&count); err != nil {
 				return nil, err
 			}
-			counts = append(counts, graph.CountItem{Name: "_count", Count: count})
+			counts = append(counts, graph.CountItem{Name: "", Count: count})
 		}
 	}
 

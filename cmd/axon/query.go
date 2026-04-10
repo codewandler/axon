@@ -161,17 +161,22 @@ func printQueryResultJSON(result *graph.QueryResult) error {
 	case graph.ResultTypeCounts:
 		// Preserve SQLite ORDER BY; use the actual grouping column name when available.
 		groupingKey := result.GroupingColumn
-		if groupingKey == "" {
-			groupingKey = "key"
-		}
-		countRows := make([]map[string]any, len(result.Counts))
-		for i, item := range result.Counts {
-			countRows[i] = map[string]any{
-				groupingKey: item.Name,
-				"count":     item.Count,
+		isScalar := groupingKey == "" && len(result.Counts) == 1 && result.Counts[0].Name == ""
+		if isScalar {
+			data = []map[string]any{{"count": result.Counts[0].Count}}
+		} else {
+			if groupingKey == "" {
+				groupingKey = "key"
 			}
+			countRows := make([]map[string]any, len(result.Counts))
+			for i, item := range result.Counts {
+				countRows[i] = map[string]any{
+					groupingKey: item.Name,
+					"count":     item.Count,
+				}
+			}
+			data = countRows
 		}
-		data = countRows
 	case graph.ResultTypeRows:
 		if result.Rows != nil {
 			data = result.Rows
@@ -388,7 +393,7 @@ func colDisplayName(col string) string {
 	case "uri":
 		return "URI"
 	default:
-		return strings.Title(strings.ReplaceAll(strings.ReplaceAll(col, "_", " "), ".", " "))
+		return titleCase(strings.ReplaceAll(strings.ReplaceAll(col, "_", " "), ".", " "))
 	}
 }
 
@@ -523,15 +528,22 @@ func printCountsTable(counts []graph.CountItem, groupingCol string) error {
 		return nil
 	}
 
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	defer w.Flush()
+
+	isScalar := groupingCol == "" && len(counts) == 1 && counts[0].Name == ""
+	if isScalar {
+		fmt.Fprintf(w, "Count\n")
+		fmt.Fprintf(w, "%d\n", counts[0].Count)
+		return nil
+	}
+
 	header := groupingCol
 	if header == "" {
 		header = "Key"
 	} else {
-		header = strings.Title(strings.ReplaceAll(header, ".", " "))
+		header = titleCase(strings.ReplaceAll(strings.ReplaceAll(header, "_", " "), ".", " "))
 	}
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	defer w.Flush()
 
 	fmt.Fprintf(w, "%s\tCount\n", header)
 	for _, item := range counts {
@@ -550,4 +562,17 @@ func truncate(s string, maxLen int) string {
 		return s[:maxLen]
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// titleCase capitalises the first letter of each whitespace-separated word in s.
+// This is an ASCII-safe replacement for the deprecated strings.Title, used
+// exclusively for turning SQL column identifiers into display headers.
+func titleCase(s string) string {
+	words := strings.Fields(s)
+	for i, w := range words {
+		if len(w) > 0 {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
 }

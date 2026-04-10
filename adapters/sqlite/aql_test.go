@@ -370,10 +370,16 @@ func TestQuery_Count(t *testing.T) {
 		t.Fatalf("Query failed: %v", err)
 	}
 
-	// COUNT without GROUP BY doesn't populate Counts map in current implementation
-	// This is a limitation - would need to handle this case specially
-	// For now, this test documents current behavior
-	_ = result
+	if result.Type != graph.ResultTypeCounts {
+		t.Errorf("expected ResultTypeCounts, got %v", result.Type)
+	}
+	if len(result.Counts) != 1 {
+		t.Fatalf("expected 1 count entry, got %d", len(result.Counts))
+	}
+	// 4 files + 2 dirs + 1 repo + 2 branches = 9 nodes in test setup
+	if result.Counts[0].Count != 9 {
+		t.Errorf("expected count 9, got %d", result.Counts[0].Count)
+	}
 }
 
 // Test GROUP BY
@@ -2090,5 +2096,142 @@ func TestQuery_GroupBy_GroupingColumnSet(t *testing.T) {
 	}
 	if result.GroupingColumn != "type" {
 		t.Errorf("expected GroupingColumn = \"type\", got %q", result.GroupingColumn)
+	}
+}
+
+// TestPattern_Count tests SELECT COUNT(*) FROM pattern.
+// Regression test for: COUNT(*) in pattern queries required GROUP BY.
+func TestPattern_Count(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Pattern: (dir:fs:dir)-[:contains]->(file:fs:file)
+	// Matches: src->test1.go, src->test2.py, cmd->main.go = 3 matches
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
+		Build()
+
+	q := aql.Select(aql.Count()).FromPattern(pattern).Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeCounts {
+		t.Errorf("expected ResultTypeCounts, got %v", result.Type)
+	}
+	if len(result.Counts) != 1 {
+		t.Fatalf("expected 1 count entry, got %d", len(result.Counts))
+	}
+	if result.Counts[0].Count != 3 {
+		t.Errorf("expected count 3, got %d", result.Counts[0].Count)
+	}
+}
+
+// TestPattern_SelectSingleVariable tests that SELECT var FROM pattern returns
+// full node objects (not null) with SelectedColumns empty.
+// Regression test for: single-var SELECT caused SelectedColumns to be non-empty,
+// triggering projection mode that tried to look up a column named by the variable.
+func TestPattern_SelectSingleVariable(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Pattern: (any)-[:contains]->(file:fs:file)
+	// Matches: src->test1.go, src->test2.py, cmd->main.go = 3 matches
+	pattern := aql.Pat(aql.AnyNode()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
+		Build()
+
+	// SELECT file FROM pattern
+	q := aql.Select(aql.Var("file")).FromPattern(pattern).Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeNodes {
+		t.Errorf("expected ResultTypeNodes, got %v", result.Type)
+	}
+	if len(result.Nodes) != 3 {
+		t.Errorf("expected 3 nodes, got %d", len(result.Nodes))
+	}
+
+	// SelectedColumns must be empty so the caller uses full-node display mode.
+	if len(result.SelectedColumns) != 0 {
+		t.Errorf("expected empty SelectedColumns, got %v", result.SelectedColumns)
+	}
+
+	// All returned nodes must have non-empty ID, Type, and Name.
+	for _, node := range result.Nodes {
+		if node.ID == "" {
+			t.Errorf("node has empty ID: %+v", node)
+		}
+		if node.Type == "" {
+			t.Errorf("node has empty Type: %+v", node)
+		}
+		if node.Name == "" {
+			t.Errorf("node has empty Name: %+v", node)
+		}
+	}
+}
+
+// TestPattern_SelectStar tests SELECT * FROM pattern with a two-variable pattern.
+// Regression tests for:
+//  1. Star was not handled and returned a compile error.
+//  2. SELECT * with 2+ pattern variables silently expanded only one variable
+//     because detectMultiVarSelect did not inspect *aql.Star columns.
+func TestPattern_SelectStar(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// Pattern: (dir:fs:dir)-[:contains]->(file:fs:file)
+	// Matches: src->test1.go, src->test2.py, cmd->main.go = 3 matches
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
+		Build()
+
+	// SELECT * FROM pattern — two node variables → must return ResultTypeRows
+	q := aql.SelectStar().FromPattern(pattern).Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+
+	// With 2 pattern variables, SELECT * must return ResultTypeRows (not ResultTypeNodes).
+	if result.Type != graph.ResultTypeRows {
+		t.Errorf("expected ResultTypeRows, got %v (Nodes=%d, Rows=%d)",
+			result.Type, len(result.Nodes), len(result.Rows))
+	}
+
+	// src→test1.go, src→test2.py, cmd→main.go = 3 rows
+	if len(result.Rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(result.Rows))
+	}
+
+	// Each row must contain fields from BOTH the dir and file variables.
+	for i, row := range result.Rows {
+		dirType, ok := row["dir.type"]
+		if !ok {
+			t.Errorf("row %d: missing 'dir.type' key", i)
+		} else if dirType != "fs:dir" {
+			t.Errorf("row %d: dir.type = %v, want fs:dir", i, dirType)
+		}
+
+		fileType, ok := row["file.type"]
+		if !ok {
+			t.Errorf("row %d: missing 'file.type' key", i)
+		} else if fileType != "fs:file" {
+			t.Errorf("row %d: file.type = %v, want fs:file", i, fileType)
+		}
+
+		if row["dir.id"] == nil || row["dir.id"] == "" {
+			t.Errorf("row %d: dir.id is empty or nil", i)
+		}
+		if row["file.id"] == nil || row["file.id"] == "" {
+			t.Errorf("row %d: file.id is empty or nil", i)
+		}
+		if row["dir.name"] == nil || row["file.name"] == nil {
+			t.Errorf("row %d: dir.name or file.name is nil", i)
+		}
 	}
 }

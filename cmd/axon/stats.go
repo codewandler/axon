@@ -322,8 +322,13 @@ func renderStatsText(data statsData, verbose bool) error {
 	fmt.Printf("Database:     %s\n", data.Database)
 	fmt.Printf("File size:    %s\n", data.FileSizeHuman)
 	fmt.Println()
-	p.Printf("Nodes:        %d\n", data.Nodes)
-	p.Printf("Edges:        %d\n", data.Edges)
+	if statsGlobal {
+		p.Printf("Nodes:        %d  (global)\n", data.Nodes)
+		p.Printf("Edges:        %d  (global)\n", data.Edges)
+	} else {
+		p.Printf("Nodes:        %d  (scoped to CWD)\n", data.Nodes)
+		p.Printf("Edges:        %d  (scoped to CWD)\n", data.Edges)
+	}
 
 	// Last indexed
 	if data.LastIndexed != nil {
