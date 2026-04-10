@@ -33,7 +33,7 @@ func TestCommitData_Description(t *testing.T) {
 				AuthorDate:   date,
 				FilesChanged: 1,
 			},
-			want: "ee48448e  by timo (2024-12-15, 1 files)",
+			want: "ee48448e  by timo (2024-12-15, 1 file)",
 		},
 		{
 			name: "no author",

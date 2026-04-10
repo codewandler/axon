@@ -123,10 +123,14 @@ func getNodeSummary(n *graph.Node) string {
 	case types.TagData:
 		name = data.Name
 	case types.CommitData:
+		short := data.SHA
+		if len(data.SHA) >= 8 {
+			short = data.SHA[:8]
+		}
 		if data.Message != "" {
-			name = data.SHA[:8] + " -- " + data.Message
+			name = short + " -- " + data.Message
 		} else {
-			name = data.SHA[:8]
+			name = short
 		}
 	case types.DocumentData:
 		name = data.Title
@@ -150,16 +154,18 @@ func getNodeSummary(n *graph.Node) string {
 			name = nm
 		} else if text, ok := data["text"].(string); ok && text != "" {
 			name = text
-		} else if sha, ok := data["sha"].(string); ok && sha != "" {
-			// vcs:commit nodes have sha + message instead of a name field
-			short := sha
-			if len(sha) >= 8 {
-				short = sha[:8]
-			}
-			if msg, ok := data["message"].(string); ok && msg != "" {
-				name = short + " -- " + msg
-			} else {
-				name = short
+		} else if n.Type == types.TypeCommit {
+			// commits have sha + message instead of a name field
+			if sha, ok := data["sha"].(string); ok && sha != "" {
+				short := sha
+				if len(sha) >= 8 {
+					short = sha[:8]
+				}
+				if msg, ok := data["message"].(string); ok && msg != "" {
+					name = short + " -- " + msg
+				} else {
+					name = short
+				}
 			}
 		} else if lang, ok := data["language"].(string); ok {
 			lines := 0
@@ -696,7 +702,11 @@ func printMapData(ctx context.Context, g *graph.Graph, nodeType string, node *gr
 			}
 		}
 		if dateStr := getMapString(data, "author_date"); dateStr != "" {
-			fmt.Printf("  Date:    %s\n", dateStr)
+			if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
+				fmt.Printf("  Date:    %s\n", t.Format("2006-01-02"))
+			} else {
+				fmt.Printf("  Date:    %s\n", dateStr)
+			}
 		}
 		fc := int(getMapFloat(data, "files_changed"))
 		if fc > 0 {

@@ -132,7 +132,11 @@ func (d CommitData) Description() string {
 		meta = append(meta, d.AuthorDate.Format("2006-01-02"))
 	}
 	if d.FilesChanged > 0 {
-		meta = append(meta, fmt.Sprintf("%d files", d.FilesChanged))
+		fileWord := "files"
+		if d.FilesChanged == 1 {
+			fileWord = "file"
+		}
+		meta = append(meta, fmt.Sprintf("%d %s", d.FilesChanged, fileWord))
 	}
 	suffix := ""
 	if len(meta) > 0 {
