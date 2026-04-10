@@ -7,6 +7,32 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Embedding progress in TUI** — `axon index --embed` now shows a live
+  `Vectorizing` row with progress bar, percentage, rate, and ETA while
+  embeddings are being generated; previously the embedding phase ran silently.
+- **Phase section headers** — the live progress display and post-run summary
+  now group rows under `Indexing` and `Vectorizing` headers when both phases
+  are active.
+- **Redesigned post-run summary** — rows are prefixed with ✓ / ✗ icons, the
+  name column is auto-sized, and embedding stats appear in a dedicated
+  `Vectorizing` section.
+- **Visual polish** — deterministic per-indexer spinner offsets (no more
+  visually noisy random frames), smooth bar-width calculation, auto-sized name
+  column, `"items"` label replaced with `"nodes"`.
+
+### Fixed
+
+- **TUI exited before embedding phase started** — the progress UI previously
+  quit as soon as all main indexers completed, before `PostIndexer` work
+  (embeddings, link resolution) began. The quit condition now waits for
+  `coord.Close()`, which is only called after all post-index stages finish.
+
+---
+
 ## [0.7.0] — 2026-05-13
 
 ### Added

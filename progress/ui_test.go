@@ -179,25 +179,33 @@ func TestIndexerStateETA(t *testing.T) {
 
 func TestFormatSummary(t *testing.T) {
 	summaries := []IndexerSummary{
-		{Name: "fs", Status: "completed", Duration: 3*time.Minute + 20*time.Second, Items: 631421, Rate: 3150},
-		{Name: "markdown", Status: "completed", Duration: 1*time.Minute + 25*time.Second, Items: 43477, Rate: 508},
-		{Name: "gc", Status: "completed", Duration: 200 * time.Millisecond, Items: 0},
+		{Name: "fs", Phase: "Indexing", Status: "completed", Duration: 3*time.Minute + 20*time.Second, Items: 631421, Rate: 3150},
+		{Name: "markdown", Phase: "Indexing", Status: "completed", Duration: 1*time.Minute + 25*time.Second, Items: 43477, Rate: 508},
+		{Name: "gc", Phase: "Indexing", Status: "completed", Duration: 200 * time.Millisecond, Items: 0},
+		{Name: "embeddings", Phase: "Vectorizing", Status: "completed", Duration: 30 * time.Second, Items: 1204, Rate: 40},
 	}
 
 	output := FormatSummary(summaries, 3*time.Minute+45*time.Second)
 
-	// Check it contains expected parts
-	if !contains(output, "3m 45s") {
-		t.Error("Summary should contain total duration '3m 45s'")
+	checks := []struct {
+		want string
+		desc string
+	}{
+		{"3m 45s", "total duration"},
+		{"fs", "fs row"},
+		{"631,421", "fs item count"},
+		{"markdown", "markdown row"},
+		{"embeddings", "embeddings row"},
+		{"1,204", "embeddings item count"},
+		{"Indexing", "Indexing phase header"},
+		{"Vectorizing", "Vectorizing phase header"},
+		{"✓", "done icon"},
 	}
-	if !contains(output, "fs") {
-		t.Error("Summary should contain 'fs'")
-	}
-	if !contains(output, "631,421") {
-		t.Error("Summary should contain '631,421'")
-	}
-	if !contains(output, "markdown") {
-		t.Error("Summary should contain 'markdown'")
+
+	for _, c := range checks {
+		if !contains(output, c.want) {
+			t.Errorf("Summary missing %s: want %q in:\n%s", c.desc, c.want, output)
+		}
 	}
 }
 

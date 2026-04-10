@@ -39,6 +39,10 @@ type Event struct {
 
 	// Timestamp is when the event occurred.
 	Timestamp time.Time
+
+	// Phase is the optional display group for this indexer (e.g. "Indexing",
+	// "Vectorizing"). Empty means the coordinator will use "Indexing" as default.
+	Phase string
 }
 
 // NewEvent creates a new progress event with the current timestamp.
@@ -53,6 +57,14 @@ func NewEvent(indexer string, eventType EventType) Event {
 // Started creates a started event.
 func Started(indexer string) Event {
 	return NewEvent(indexer, EventStarted)
+}
+
+// StartedInPhase creates a started event tagged with a phase label.
+// Use this for indexers that belong to a named display group (e.g. "Vectorizing").
+func StartedInPhase(indexer, phase string) Event {
+	e := NewEvent(indexer, EventStarted)
+	e.Phase = phase
+	return e
 }
 
 // Progress creates a progress event.

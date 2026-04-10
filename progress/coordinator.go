@@ -24,6 +24,7 @@ import (
 type IndexerState struct {
 	Name      string
 	Status    string // "running", "completed", "error"
+	Phase     string // display group ("Indexing", "Vectorizing", …); empty = "Indexing"
 	Current   int
 	Total     int
 	Item      string
@@ -116,6 +117,7 @@ func (s *IndexerState) addRateSample(count int, t time.Time) {
 // IndexerSummary contains final statistics for an indexer.
 type IndexerSummary struct {
 	Name     string
+	Phase    string // display group ("Indexing", "Vectorizing", …); empty = "Indexing"
 	Status   string // "completed", "error"
 	Duration time.Duration
 	Items    int
@@ -182,6 +184,20 @@ func (c *Coordinator) Close() {
 	<-c.allDone
 }
 
+// IsClosed returns true after Close() has been called and all queued events
+// have been processed. The TUI uses this to know it is safe to exit —
+// it must NOT exit based on IsRunning() alone because PostIndexers (e.g.
+// embeddings) run after the main indexers complete and their progress events
+// would be missed if the TUI quit too early.
+func (c *Coordinator) IsClosed() bool {
+	select {
+	case <-c.allDone:
+		return true
+	default:
+		return false
+	}
+}
+
 // Errors returns all errors collected from indexers.
 func (c *Coordinator) Errors() []IndexerError {
 	c.errorsMu.Lock()
@@ -216,6 +232,7 @@ func (c *Coordinator) Summary() []IndexerSummary {
 
 		summary := IndexerSummary{
 			Name:     state.Name,
+			Phase:    state.Phase,
 			Status:   state.Status,
 			Duration: state.Elapsed(),
 			Items:    state.Total,
@@ -278,6 +295,9 @@ func (c *Coordinator) processEvent(event Event) {
 	case EventStarted:
 		state.Status = "running"
 		state.StartedAt = event.Timestamp
+		if event.Phase != "" {
+			state.Phase = event.Phase
+		}
 
 	case EventProgress:
 		state.Current = event.Current

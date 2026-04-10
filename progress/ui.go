@@ -2,7 +2,6 @@ package progress
 
 import (
 	"fmt"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -23,7 +22,8 @@ type tickMsg time.Time
 type Model struct {
 	coordinator   *Coordinator
 	spinner       spinner.Model
-	spinnerFrames map[string]string // Per-indexer random spinner frames
+	spinnerFrames map[string]string // Per-indexer deterministic spinner frames
+	tickCount     int               // Incremented each tick; drives deterministic spinner offsets
 	width         int
 	done          bool
 }
@@ -37,6 +37,7 @@ var (
 	itemStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	rateStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	etaStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	phaseStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )
 
 // Spinner frames for random selection
@@ -44,6 +45,14 @@ var spinnerFrames = []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "�
 
 // Number formatter with comma separators
 var numPrinter = message.NewPrinter(language.English)
+
+// normalizePhase returns "Indexing" for the empty phase (main indexers never set a phase).
+func normalizePhase(p string) string {
+	if p == "" {
+		return "Indexing"
+	}
+	return p
+}
 
 // NewModel creates a new progress UI model.
 func NewModel(coord *Coordinator) Model {
@@ -84,15 +93,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tickMsg:
-		// Pick a new random spinner frame for each running indexer
-		for _, state := range m.coordinator.State() {
+		m.tickCount++
+
+		// Update per-indexer spinner frames using a deterministic offset per indexer
+		// (indexer index * 3) so they don't all show the same frame.
+		for idx, state := range m.coordinator.State() {
 			if state.Status == "running" {
-				m.spinnerFrames[state.Name] = spinnerFrames[rand.Intn(len(spinnerFrames))]
+				m.spinnerFrames[state.Name] = spinnerFrames[(m.tickCount+idx*3)%len(spinnerFrames)]
 			}
 		}
 
-		// Check if all indexers are done
-		if !m.coordinator.IsRunning() && len(m.coordinator.State()) > 0 {
+		// Only quit once the coordinator is fully closed (i.e. coord.Close() has
+		// been called and all events drained). Checking IsRunning() alone is NOT
+		// sufficient: PostIndexers such as embeddings run after the main indexers
+		// finish, so there is a window where IsRunning()==false but embeddings
+		// haven't started yet — quitting there would hide the Vectorizing phase.
+		if m.coordinator.IsClosed() && !m.coordinator.IsRunning() && len(m.coordinator.State()) > 0 {
 			m.done = true
 			return m, tea.Quit
 		}
@@ -123,18 +139,44 @@ func (m Model) View() string {
 		return b.String()
 	}
 
-	// Determine max width for progress bar (leave room for text)
+	// Auto-size name column to the longest indexer name + 1 padding
+	nameColWidth := 10
+	for _, s := range states {
+		if len(s.Name) > nameColWidth {
+			nameColWidth = len(s.Name)
+		}
+	}
+	nameColWidth++ // 1 char right-padding
+
+	// Smooth bar width: leave room for name, spinner, pct, rate, ETA, item columns
 	width := m.width
 	if width == 0 {
 		width = 80
 	}
-	barWidth := 20
-	if width > 100 {
-		barWidth = 30
+	fixedCols := nameColWidth + 60
+	barWidth := (width - fixedCols) / 3
+	if barWidth < 10 {
+		barWidth = 10
+	}
+	if barWidth > 40 {
+		barWidth = 40
 	}
 
+	lastPhase := ""
 	for _, state := range states {
-		line := m.renderIndexerLine(state, barWidth, width)
+		phase := normalizePhase(state.Phase)
+
+		// Emit a section header when the phase changes
+		if phase != lastPhase {
+			if lastPhase != "" {
+				b.WriteString("\n") // blank line between phases
+			}
+			b.WriteString(phaseStyle.Render("  "+phase))
+			b.WriteString("\n")
+			lastPhase = phase
+		}
+
+		line := m.renderIndexerLine(state, barWidth, width, nameColWidth)
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
@@ -142,11 +184,11 @@ func (m Model) View() string {
 	return b.String()
 }
 
-func (m Model) renderIndexerLine(state *IndexerState, barWidth, totalWidth int) string {
+func (m Model) renderIndexerLine(state *IndexerState, barWidth, totalWidth, nameColWidth int) string {
 	var b strings.Builder
 
-	// Indexer name (right-aligned to 10 chars for alignment)
-	nameStr := fmt.Sprintf("%10s", state.Name)
+	// Indexer name right-aligned to nameColWidth
+	nameStr := fmt.Sprintf("%*s", nameColWidth, state.Name)
 	b.WriteString(indexerStyle.Render(nameStr))
 	b.WriteString(" ")
 
@@ -202,7 +244,7 @@ func (m Model) renderIndexerLine(state *IndexerState, barWidth, totalWidth int) 
 		} else {
 			// Unknown total - show count + rate + elapsed
 			b.WriteString(formatCount(state.Current))
-			b.WriteString(" items")
+			b.WriteString(" nodes")
 
 			rate := state.Rate()
 			if rate > 0 {
@@ -306,25 +348,64 @@ func formatCount(n int) string {
 	return numPrinter.Sprintf("%d", n)
 }
 
-// FormatSummary formats the final summary for printing after TUI exits.
+// FormatSummary formats the final summary grouped by phase.
+// Phases appear in the order they are first seen across summaries.
+// Each row is prefixed with ✓ (completed) or ✗ (error).
 func FormatSummary(summaries []IndexerSummary, totalDuration time.Duration) string {
 	var b strings.Builder
 
 	b.WriteString(fmt.Sprintf("\nIndexed in %s\n", formatDuration(totalDuration)))
 
+	if len(summaries) == 0 {
+		return b.String()
+	}
+
+	// Auto-size name column to the longest name.
+	nameColWidth := 0
 	for _, s := range summaries {
-		if s.Status == "error" {
-			b.WriteString(fmt.Sprintf("  %10s  error: %v\n", s.Name, s.Error))
-		} else if s.Items > 0 {
-			b.WriteString(fmt.Sprintf("  %10s  %s  (%s, %s)\n",
-				s.Name,
-				formatDuration(s.Duration),
-				formatCount(s.Items),
-				formatRate(s.Rate)))
-		} else {
-			b.WriteString(fmt.Sprintf("  %10s  %s\n",
-				s.Name,
-				formatDuration(s.Duration)))
+		if len(s.Name) > nameColWidth {
+			nameColWidth = len(s.Name)
+		}
+	}
+
+	// Collect phases in order of first appearance and group summaries by phase.
+	seen := make(map[string]bool)
+	var phases []string
+	byPhase := make(map[string][]IndexerSummary)
+	for _, s := range summaries {
+		phase := normalizePhase(s.Phase)
+		if !seen[phase] {
+			seen[phase] = true
+			phases = append(phases, phase)
+		}
+		byPhase[phase] = append(byPhase[phase], s)
+	}
+
+	multiPhase := len(phases) > 1
+
+	for _, phase := range phases {
+		if multiPhase {
+			b.WriteString("\n")
+			b.WriteString(fmt.Sprintf("  %s\n", phase))
+		}
+
+		for _, s := range byPhase[phase] {
+			if s.Status == "error" {
+				b.WriteString(fmt.Sprintf("  %s  %*s  error: %v\n",
+					errorStyle.Render("✗"), nameColWidth, s.Name, s.Error))
+			} else if s.Items > 0 {
+				b.WriteString(fmt.Sprintf("  %s  %*s  %s  (%s, %s)\n",
+					doneStyle.Render("✓"),
+					nameColWidth, s.Name,
+					formatDuration(s.Duration),
+					formatCount(s.Items),
+					formatRate(s.Rate)))
+			} else {
+				b.WriteString(fmt.Sprintf("  %s  %*s  %s\n",
+					doneStyle.Render("✓"),
+					nameColWidth, s.Name,
+					formatDuration(s.Duration)))
+			}
 		}
 	}
 

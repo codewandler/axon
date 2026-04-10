@@ -6,6 +6,7 @@ import (
 
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
+	"github.com/codewandler/axon/progress"
 	"github.com/codewandler/axon/types"
 )
 
@@ -59,6 +60,7 @@ func (i *Indexer) HandleEvent(ctx context.Context, ictx *indexer.Context, event 
 //
 // Nodes are embedded in batches of [Indexer.BatchSize] using [Provider.EmbedBatch],
 // which sends a single request/inference pass per batch instead of one per node.
+// Progress is reported on ictx.Progress under the "Vectorizing" phase.
 func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 	storage := ictx.Graph.Storage()
 
@@ -70,9 +72,9 @@ func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 		return nil // Storage doesn't support embeddings
 	}
 
-	embedTypes := i.Types
-	if len(embedTypes) == 0 {
-		embedTypes = DefaultEmbedTypes
+	embedsTypes := i.Types
+	if len(embedsTypes) == 0 {
+		embedsTypes = DefaultEmbedTypes
 	}
 	batchSize := i.BatchSize
 	if batchSize <= 0 {
@@ -86,7 +88,7 @@ func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 	}
 	var entries []entry
 
-	for _, nodeType := range embedTypes {
+	for _, nodeType := range embedsTypes {
 		nodes, err := storage.FindNodes(ctx, graph.NodeFilter{
 			Type:       nodeType,
 			Generation: ictx.Generation,
@@ -99,7 +101,14 @@ func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 		}
 	}
 
+	if len(entries) == 0 {
+		return nil // nothing to embed — skip progress noise
+	}
+
+	sendProgress(ictx.Progress, progress.StartedInPhase("embeddings", "Vectorizing"))
+
 	// Embed in batches.
+	embedded := 0
 	for start := 0; start < len(entries); start += batchSize {
 		end := min(start+batchSize, len(entries))
 		batch := entries[start:end]
@@ -111,7 +120,10 @@ func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 
 		embeddings, err := i.Provider.EmbedBatch(ctx, texts)
 		if err != nil {
-			// Non-fatal: log and skip this batch rather than aborting the whole run.
+			// Non-fatal: skip this batch rather than aborting the whole run.
+			embedded += len(batch)
+			sendProgress(ictx.Progress, progress.ProgressWithTotal(
+				"embeddings", embedded, len(entries), ""))
 			continue
 		}
 
@@ -123,9 +135,28 @@ func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 				return err
 			}
 		}
+
+		embedded += len(batch)
+
+		// Use the first word of the last entry's text as the display item (node name).
+		lastItem := batch[len(batch)-1].text
+		if idx := strings.Index(lastItem, " "); idx > 0 {
+			lastItem = lastItem[:idx]
+		}
+		sendProgress(ictx.Progress, progress.ProgressWithTotal(
+			"embeddings", embedded, len(entries), lastItem))
 	}
 
+	sendProgress(ictx.Progress, progress.Completed("embeddings", len(entries)))
 	return nil
+}
+
+// sendProgress sends a progress event; no-op if the channel is nil.
+func sendProgress(ch chan<- progress.Event, evt progress.Event) {
+	if ch == nil {
+		return
+	}
+	ch <- evt
 }
 
 // buildNodeText builds a text representation of a node for embedding.
