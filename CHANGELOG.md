@@ -27,6 +27,9 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Unit tests for all `resolveDB` branches (default local, `--global`
   walk-up, explicit `--db-dir`, and `forWrite` creation).
   (`cmd/axon/db_test.go`)
+- Release & Tagging Workflow documented in `AGENTS.md` — covers version
+  selection, CHANGELOG hygiene, commit conventions, and the rule that a
+  tag must never land on an `[Unreleased]` entry. (`AGENTS.md`)
 
 ---
 
