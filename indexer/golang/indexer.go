@@ -7,6 +7,8 @@
 //   - Exported functions and methods
 //   - Exported constants and variables
 //   - Struct fields
+//   - Symbol usage sites (go:ref nodes) with caller context
+//   - Struct embedding relationships
 //
 // Node types emitted:
 //   - go:module - The Go module (root of the module graph)
@@ -18,12 +20,17 @@
 //   - go:field - A struct field
 //   - go:const - A constant
 //   - go:var - A package-level variable
+//   - go:ref - A symbol usage site (references edge → target; caller_uri links back to enclosing func)
 //
 // Edge relationships:
 //   - module -[contains]-> package
 //   - package -[defines]-> struct/interface/func/const/var
 //   - struct/interface -[has]-> field/method
 //   - module -[located_at]-> directory
+//   - struct -[implements]-> interface
+//   - struct -[embeds]-> struct (anonymous field embedding)
+//   - go:func/go:method -[calls]-> go:func/go:method (deduplicated call graph)
+//   - go:ref -[references]-> target symbol
 //
 // The indexer also tags go.mod and go.sum files with labels.
 package golang
@@ -36,6 +43,7 @@ import (
 	gotypes "go/types"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/mod/modfile"
@@ -242,6 +250,12 @@ func (i *Indexer) indexModule(ctx context.Context, ictx *indexer.Context, goModP
 	// Index interface implementations across all packages
 	if err := i.indexImplementations(ctx, ictx, moduleURI, modFile.Module.Mod.Path, pkgs); err != nil {
 		// Log but continue — implementation edges are best-effort
+		_ = err
+	}
+
+	// Index struct embedding relationships across all packages
+	if err := i.indexEmbeds(ctx, ictx, moduleURI, modFile.Module.Mod.Path, pkgs); err != nil {
+		// Log but continue — embed edges are best-effort
 		_ = err
 	}
 
@@ -908,6 +922,82 @@ func (i *Indexer) indexImplementations(ctx context.Context, ictx *indexer.Contex
 	return nil
 }
 
+// indexEmbeds indexes struct embedding relationships for all packages in the module.
+// For each struct with anonymous (embedded) fields, it emits a
+// go:struct -[embeds]-> go:struct edge for every embedded type that is also
+// defined within the same module. Cross-module embeddings (e.g. embedding
+// sync.Mutex) are intentionally skipped because those nodes are not in the graph.
+func (i *Indexer) indexEmbeds(ctx context.Context, ictx *indexer.Context, moduleURI, modulePath string, allPkgs []*packages.Package) error {
+	for _, pkg := range allPkgs {
+		if pkg.Module == nil || pkg.Module.Path != modulePath {
+			continue
+		}
+		if pkg.Types == nil || len(pkg.Errors) > 0 {
+			continue
+		}
+
+		pkgURI := moduleURI + "/pkg/" + pkg.PkgPath
+		scope := pkg.Types.Scope()
+
+		for _, name := range scope.Names() {
+			obj := scope.Lookup(name)
+			typeName, ok := obj.(*gotypes.TypeName)
+			if !ok {
+				continue
+			}
+			named, ok := typeName.Type().(*gotypes.Named)
+			if !ok {
+				continue
+			}
+			structType, ok := named.Underlying().(*gotypes.Struct)
+			if !ok {
+				continue
+			}
+
+			structURI := pkgURI + "/struct/" + name
+			structID := graph.IDFromURI(structURI)
+
+			for j := 0; j < structType.NumFields(); j++ {
+				field := structType.Field(j)
+				if !field.Embedded() {
+					continue
+				}
+
+				// Resolve the embedded type (strip pointer if *T).
+				embeddedType := field.Type()
+				if ptr, ok := embeddedType.(*gotypes.Pointer); ok {
+					embeddedType = ptr.Elem()
+				}
+				embeddedNamed, ok := embeddedType.(*gotypes.Named)
+				if !ok {
+					continue
+				}
+
+				embedPkg := embeddedNamed.Obj().Pkg()
+				embedName := embeddedNamed.Obj().Name()
+				if embedPkg == nil {
+					continue
+				}
+
+				// Only emit edges to structs within the same module.
+				if !strings.HasPrefix(embedPkg.Path(), modulePath) {
+					continue
+				}
+
+				embedPkgURI := moduleURI + "/pkg/" + embedPkg.Path()
+				embedURI := embedPkgURI + "/struct/" + embedName
+				embedID := graph.IDFromURI(embedURI)
+
+				edge := graph.NewEdge(types.EdgeEmbeds, structID, embedID)
+				if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // cleanup removes all Go nodes for a module when go.mod is deleted.
 func (i *Indexer) cleanup(ctx context.Context, ictx *indexer.Context, goModPath string) error {
 	modDir := filepath.Dir(goModPath)
@@ -1037,8 +1127,74 @@ func formatSignature(name string, params, results []string) string {
 	return sig
 }
 
+// funcExtent records the AST span and graph URI of a function or method body.
+type funcExtent struct {
+	start    token.Pos
+	end      token.Pos
+	uri      string // URI of the go:func or go:method node
+	name     string // fd.Name.Name
+	nodeType string // types.TypeGoFunc or types.TypeGoMethod
+}
+
+// buildFuncExtents returns all function/method bodies in pkg as funcExtent values
+// sorted by start position. Only declarations with a body are included (no
+// interface methods, no external declarations).
+func buildFuncExtents(moduleURI string, pkg *packages.Package) []funcExtent {
+	pkgURI := moduleURI + "/pkg/" + pkg.PkgPath
+	var extents []funcExtent
+	for _, file := range pkg.Syntax {
+		ast.Inspect(file, func(n ast.Node) bool {
+			fd, ok := n.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				return true
+			}
+			var uri, nodeType string
+			if fd.Recv != nil && len(fd.Recv.List) > 0 {
+				recvType, _ := extractReceiverType(fd.Recv.List[0].Type)
+				uri = pkgURI + "/method/" + recvType + "." + fd.Name.Name
+				nodeType = types.TypeGoMethod
+			} else {
+				uri = pkgURI + "/func/" + fd.Name.Name
+				nodeType = types.TypeGoFunc
+			}
+			extents = append(extents, funcExtent{
+				start:    fd.Pos(),
+				end:      fd.End(),
+				uri:      uri,
+				name:     fd.Name.Name,
+				nodeType: nodeType,
+			})
+			return true
+		})
+	}
+	sort.Slice(extents, func(i, j int) bool {
+		return extents[i].start < extents[j].start
+	})
+	return extents
+}
+
+// findEnclosingFunc returns the funcExtent whose body contains pos, or nil.
+func findEnclosingFunc(extents []funcExtent, pos token.Pos) *funcExtent {
+	// Binary search: find the last extent with start <= pos.
+	lo, hi := 0, len(extents)-1
+	result := -1
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		if extents[mid].start <= pos {
+			result = mid
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	if result >= 0 && pos < extents[result].end {
+		return &extents[result]
+	}
+	return nil
+}
+
 // indexReferences indexes all symbol usages in a package using go/types info.
-// This enables "Find References" functionality.
+// This enables "Find References" functionality and builds the call graph.
 func (i *Indexer) indexReferences(ctx context.Context, ictx *indexer.Context, moduleURI string, pkg *packages.Package) error {
 	if pkg.TypesInfo == nil || pkg.TypesInfo.Uses == nil {
 		return nil
@@ -1051,6 +1207,14 @@ func (i *Indexer) indexReferences(ctx context.Context, ictx *indexer.Context, mo
 	modulePath := pkg.Module.Path
 
 	fset := pkg.Fset
+
+	// Build sorted function extents so we can determine, for each identifier,
+	// which function/method body it is inside.
+	extents := buildFuncExtents(moduleURI, pkg)
+
+	// callPairs de-duplicates (callerURI, targetURI) pairs so that a function
+	// calling the same target N times produces exactly one calls edge.
+	callPairs := make(map[string]struct{})
 
 	// Process all identifier usages
 	for ident, obj := range pkg.TypesInfo.Uses {
@@ -1093,35 +1257,64 @@ func (i *Indexer) indexReferences(ctx context.Context, ictx *indexer.Context, mo
 			continue
 		}
 
+		// Resolve the enclosing function/method (if any).
+		caller := findEnclosingFunc(extents, ident.Pos())
+
 		// Create reference node — use module-relative filename to avoid double-slash
 		// (pos.Filename is absolute; pkg.Module.Dir is the module root)
 		relFilename := strings.TrimPrefix(pos.Filename, pkg.Module.Dir+string(filepath.Separator))
 		refURI := fmt.Sprintf("%s/ref/%s:%d:%d", moduleURI, relFilename, pos.Line, pos.Column)
 
+		refData := types.RefData{
+			Kind:       kind,
+			Name:       ident.Name,
+			TargetType: targetType,
+			TargetPkg:  objPkgPath,
+			Position: types.Position{
+				File:   pos.Filename,
+				Line:   pos.Line,
+				Column: pos.Column,
+			},
+		}
+		if caller != nil {
+			refData.CallerURI = caller.uri
+			refData.CallerName = caller.name
+			refData.CallerType = caller.nodeType
+		}
+
 		refNode := graph.NewNode(types.TypeGoRef).
 			WithURI(refURI).
 			WithKey(refURI).
 			WithName(ident.Name).
-			WithData(types.RefData{
-				Kind:       kind,
-				Name:       ident.Name,
-				TargetType: targetType,
-				TargetPkg:  objPkgPath,
-				Position: types.Position{
-					File:   pos.Filename,
-					Line:   pos.Line,
-					Column: pos.Column,
-				},
-			})
+			WithData(refData)
 
 		if err := ictx.Emitter.EmitNode(ctx, refNode); err != nil {
 			return err
 		}
 
-		// Create edge from reference to target symbol
+		// Create edge from reference node to target symbol
 		targetID := graph.IDFromURI(targetURI)
 		edge := graph.NewEdge(types.EdgeReferences, refNode.ID, targetID)
 		if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
+			return err
+		}
+
+		// Collect call pairs for the deduplicated call graph.
+		if kind == types.RefKindCall && caller != nil {
+			callPairs[caller.uri+"\x00"+targetURI] = struct{}{}
+		}
+	}
+
+	// Emit one calls edge per unique (caller, callee) pair.
+	for key := range callPairs {
+		idx := strings.IndexByte(key, '\x00')
+		if idx < 0 {
+			continue
+		}
+		callerID := graph.IDFromURI(key[:idx])
+		calleeID := graph.IDFromURI(key[idx+1:])
+		callEdge := graph.NewEdge(types.EdgeCalls, callerID, calleeID)
+		if err := ictx.Emitter.EmitEdge(ctx, callEdge); err != nil {
 			return err
 		}
 	}

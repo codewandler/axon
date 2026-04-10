@@ -82,6 +82,14 @@ const (
 	// Used when a test package tests a source package
 	EdgeTests = "tests"
 
+	// Call relationship: caller → callee (func/method)
+	// Used for function and method call edges in the call graph
+	EdgeCalls = "calls"
+
+	// Embedding relationship: embedding struct → embedded struct
+	// Used when a struct embeds another struct (anonymous field)
+	EdgeEmbeds = "embeds"
+
 	// Commit DAG: parent commit → child commit
 	EdgeParentOf = "parent_of"
 
@@ -155,6 +163,16 @@ func RegisterCommonEdges(r *graph.Registry) {
 	r.RegisterEdgeType(graph.EdgeSpec{
 		Type:        EdgeTests,
 		Description: "Test package tests source package",
+	})
+
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeCalls,
+		Description: "Call relationship (caller calls callee)",
+	})
+
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeEmbeds,
+		Description: "Embedding relationship (struct embeds another struct)",
 	})
 
 	r.RegisterEdgeType(graph.EdgeSpec{

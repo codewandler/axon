@@ -140,6 +140,9 @@ type RefData struct {
 	Name       string   `json:"name"`                  // Name being referenced
 	TargetType string   `json:"target_type,omitempty"` // Type of target (go:func, go:struct, etc.)
 	TargetPkg  string   `json:"target_pkg,omitempty"`  // Package of target symbol
+	CallerURI  string   `json:"caller_uri,omitempty"`  // URI of the enclosing func/method (empty if package-scope)
+	CallerName string   `json:"caller_name,omitempty"` // Short name of the enclosing func/method
+	CallerType string   `json:"caller_type,omitempty"` // Node type of caller: go:func or go:method
 	Position   Position `json:"position"`              // Source position of reference
 }
 
@@ -234,6 +237,22 @@ func RegisterGoTypes(r *graph.Registry) {
 		Description: "Struct implements interface",
 		FromTypes:   []string{TypeGoStruct},
 		ToTypes:     []string{TypeGoInterface},
+	})
+
+	// Function/method calls another function/method
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeCalls,
+		Description: "Function or method calls another function or method",
+		FromTypes:   []string{TypeGoFunc, TypeGoMethod},
+		ToTypes:     []string{TypeGoFunc, TypeGoMethod},
+	})
+
+	// Struct embeds another struct
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeEmbeds,
+		Description: "Struct embeds another struct via anonymous field",
+		FromTypes:   []string{TypeGoStruct},
+		ToTypes:     []string{TypeGoStruct},
 	})
 }
 
