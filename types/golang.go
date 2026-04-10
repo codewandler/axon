@@ -40,13 +40,15 @@ type ModuleData struct {
 
 // PackageData holds data for a Go package node.
 type PackageData struct {
-	Name       string `json:"name"`                // Package name (e.g., "http")
-	ImportPath string `json:"import_path"`         // Full import path
-	Dir        string `json:"dir"`                 // Directory containing package
-	Doc        string `json:"doc,omitempty"`       // Package documentation
-	IsMain     bool   `json:"is_main,omitempty"`   // True if package main
-	IsTest     bool   `json:"is_test,omitempty"`   // True if test package
-	NumFiles   int    `json:"num_files,omitempty"` // Number of Go files
+	Name        string   `json:"name"`                         // Package name (e.g., "http")
+	ImportPath  string   `json:"import_path"`                  // Full import path
+	Dir         string   `json:"dir"`                          // Directory containing package
+	Doc         string   `json:"doc,omitempty"`                // Package documentation
+	IsMain      bool     `json:"is_main,omitempty"`            // True if package main
+	IsTest      bool     `json:"is_test,omitempty"`            // True if test package
+	NumFiles    int      `json:"num_files,omitempty"`          // Number of Go files
+	ImportPaths []string `json:"import_paths,omitempty"`       // direct import paths (intra-module)
+	TestFor     string   `json:"test_for,omitempty"`           // import path this test package tests
 }
 
 // StructData holds data for a Go struct type node.
@@ -224,6 +226,14 @@ func RegisterGoTypes(r *graph.Registry) {
 		Description: "Module is located at a directory",
 		FromTypes:   []string{TypeGoModule},
 		ToTypes:     []string{TypeDir},
+	})
+
+	// Struct implements interface
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeImplements,
+		Description: "Struct implements interface",
+		FromTypes:   []string{TypeGoStruct},
+		ToTypes:     []string{TypeGoInterface},
 	})
 }
 

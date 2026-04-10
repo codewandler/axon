@@ -746,3 +746,392 @@ func TestEndLineCapture(t *testing.T) {
 	t.Logf("Verified EndLine for %d functions, %d structs, %d interfaces, %d methods",
 		len(funcs), len(structs), len(ifaces), len(methods))
 }
+
+// TestImportGraph verifies that import edges are emitted between intra-module packages.
+func TestImportGraph(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// Create go.mod
+	goMod := `module example.com/testmod
+
+go 1.21
+`
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatalf("failed to write go.mod: %v", err)
+	}
+
+	// Create package A
+	aDir := filepath.Join(dir, "pkg", "a")
+	if err := os.MkdirAll(aDir, 0755); err != nil {
+		t.Fatalf("failed to create pkg/a dir: %v", err)
+	}
+	aGo := `package a
+
+// Hello returns a greeting.
+func Hello() string {
+	return "hello"
+}
+`
+	if err := os.WriteFile(filepath.Join(aDir, "a.go"), []byte(aGo), 0644); err != nil {
+		t.Fatalf("failed to write a.go: %v", err)
+	}
+
+	// Create package B that imports package A
+	bDir := filepath.Join(dir, "pkg", "b")
+	if err := os.MkdirAll(bDir, 0755); err != nil {
+		t.Fatalf("failed to create pkg/b dir: %v", err)
+	}
+	bGo := `package b
+
+import "example.com/testmod/pkg/a"
+
+// UseA uses package A.
+func UseA() string {
+	return a.Hello()
+}
+`
+	if err := os.WriteFile(filepath.Join(bDir, "b.go"), []byte(bGo), 0644); err != nil {
+		t.Fatalf("failed to write b.go: %v", err)
+	}
+
+	g := setupGraph(t)
+	idx := New()
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+	ictx := &indexer.Context{
+		Root:       types.GoModulePathToURI(dir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	goModPath := filepath.Join(dir, "go.mod")
+	goModNode := graph.NewNode(types.TypeFile).
+		WithURI(types.PathToURI(goModPath)).
+		WithKey(goModPath).
+		WithName("go.mod")
+	if err := emitter.EmitNode(ctx, goModNode); err != nil {
+		t.Fatalf("failed to emit go.mod node: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(goModPath),
+		Path:     goModPath,
+		Name:     "go.mod",
+		NodeType: types.TypeFile,
+		NodeID:   goModNode.ID,
+		Node:     goModNode,
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent failed: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	// Verify package nodes exist
+	pkgNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeGoPackage}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes for packages failed: %v", err)
+	}
+
+	moduleURI := types.GoModulePathToURI(dir)
+	aPkgURI := moduleURI + "/pkg/example.com/testmod/pkg/a"
+	bPkgURI := moduleURI + "/pkg/example.com/testmod/pkg/b"
+	aID := graph.IDFromURI(aPkgURI)
+	bID := graph.IDFromURI(bPkgURI)
+
+	foundA, foundB := false, false
+	for _, pkg := range pkgNodes {
+		if pkg.ID == aID {
+			foundA = true
+		}
+		if pkg.ID == bID {
+			foundB = true
+		}
+	}
+	if !foundA {
+		t.Error("expected to find go:package node for package A")
+	}
+	if !foundB {
+		t.Error("expected to find go:package node for package B")
+	}
+
+	// Verify imports edge from B to A
+	bEdges, err := g.GetEdgesFrom(ctx, bID)
+	if err != nil {
+		t.Fatalf("GetEdgesFrom B failed: %v", err)
+	}
+	foundImportsEdge := false
+	for _, e := range bEdges {
+		if e.Type == types.EdgeImports && e.To == aID {
+			foundImportsEdge = true
+			break
+		}
+	}
+	if !foundImportsEdge {
+		t.Errorf("expected imports edge from B to A; B edges: %v", bEdges)
+	}
+
+	// Verify no imports edge from A to B (A does not import B)
+	aEdges, err := g.GetEdgesFrom(ctx, aID)
+	if err != nil {
+		t.Fatalf("GetEdgesFrom A failed: %v", err)
+	}
+	for _, e := range aEdges {
+		if e.Type == types.EdgeImports && e.To == bID {
+			t.Error("unexpected imports edge from A to B")
+		}
+	}
+}
+
+// setupAndIndex is a helper to set up a graph, run the indexer on a module dir, and flush.
+func setupAndIndex(t *testing.T, dir string) (*graph.Graph, *indexer.Context) {
+	t.Helper()
+	ctx := context.Background()
+	g := setupGraph(t)
+	idx := New()
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+	ictx := &indexer.Context{
+		Root:       types.GoModulePathToURI(dir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	goModPath := filepath.Join(dir, "go.mod")
+	goModNode := graph.NewNode(types.TypeFile).
+		WithURI(types.PathToURI(goModPath)).
+		WithKey(goModPath).
+		WithName("go.mod")
+	if err := emitter.EmitNode(ctx, goModNode); err != nil {
+		t.Fatalf("failed to emit go.mod node: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(goModPath),
+		Path:     goModPath,
+		Name:     "go.mod",
+		NodeType: types.TypeFile,
+		NodeID:   goModNode.ID,
+		Node:     goModNode,
+	}
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent failed: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+	return g, ictx
+}
+
+// TestImplements verifies that implements edges are emitted for structs that implement interfaces.
+func TestImplements(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	goMod := `module example.com/testmod
+
+go 1.21
+`
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatalf("failed to write go.mod: %v", err)
+	}
+
+	// Create a package with an interface and implementing structs
+	mainGo := `package main
+
+import "errors"
+
+// Doer is an interface with a Do method.
+type Doer interface {
+	Do() error
+}
+
+// Concrete implements Doer with a value receiver.
+type Concrete struct{}
+
+// Do implements Doer.
+func (c Concrete) Do() error {
+	return nil
+}
+
+// PtrImpl implements Doer with a pointer receiver.
+type PtrImpl struct{}
+
+// Do implements Doer via pointer receiver.
+func (p *PtrImpl) Do() error {
+	return errors.New("ptr")
+}
+
+// NoImpl does not implement Doer.
+type NoImpl struct{}
+
+func main() {}
+`
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(mainGo), 0644); err != nil {
+		t.Fatalf("failed to write main.go: %v", err)
+	}
+
+	g, _ := setupAndIndex(t, dir)
+
+	moduleURI := types.GoModulePathToURI(dir)
+	pkgBase := moduleURI + "/pkg/example.com/testmod"
+	concreteURI := pkgBase + "/struct/Concrete"
+	ptrImplURI := pkgBase + "/struct/PtrImpl"
+	noImplURI := pkgBase + "/struct/NoImpl"
+	doerURI := pkgBase + "/interface/Doer"
+
+	concreteID := graph.IDFromURI(concreteURI)
+	ptrImplID := graph.IDFromURI(ptrImplURI)
+	noImplID := graph.IDFromURI(noImplURI)
+	doerID := graph.IDFromURI(doerURI)
+
+	// Helper to check if an implements edge exists
+	hasImplements := func(fromID, toID string) bool {
+		t.Helper()
+		edges, err := g.GetEdgesFrom(ctx, fromID)
+		if err != nil {
+			t.Fatalf("GetEdgesFrom %s failed: %v", fromID, err)
+		}
+		for _, e := range edges {
+			if e.Type == types.EdgeImplements && e.To == toID {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Concrete (value receiver) should implement Doer
+	if !hasImplements(concreteID, doerID) {
+		t.Error("expected implements edge from Concrete to Doer")
+	}
+
+	// PtrImpl (pointer receiver) should implement Doer
+	if !hasImplements(ptrImplID, doerID) {
+		t.Error("expected implements edge from PtrImpl to Doer (via pointer receiver)")
+	}
+
+	// NoImpl should NOT implement Doer
+	if hasImplements(noImplID, doerID) {
+		t.Error("unexpected implements edge from NoImpl to Doer")
+	}
+}
+
+// TestTestLinkage verifies that tests edges are emitted from test packages to source packages.
+func TestTestLinkage(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	goMod := `module example.com/testmod
+
+go 1.21
+`
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0644); err != nil {
+		t.Fatalf("failed to write go.mod: %v", err)
+	}
+
+	// Create mypkg with an exported function
+	mypkgDir := filepath.Join(dir, "mypkg")
+	if err := os.MkdirAll(mypkgDir, 0755); err != nil {
+		t.Fatalf("failed to create mypkg dir: %v", err)
+	}
+	mypkgGo := `package mypkg
+
+// Greet returns a greeting.
+func Greet() string {
+	return "hello"
+}
+`
+	if err := os.WriteFile(filepath.Join(mypkgDir, "mypkg.go"), []byte(mypkgGo), 0644); err != nil {
+		t.Fatalf("failed to write mypkg.go: %v", err)
+	}
+
+	// Create external test file (package mypkg_test)
+	testGo := `package mypkg_test
+
+import (
+	"testing"
+	"example.com/testmod/mypkg"
+)
+
+func TestGreet(t *testing.T) {
+	if mypkg.Greet() == "" {
+		t.Error("expected non-empty greeting")
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(mypkgDir, "mypkg_test.go"), []byte(testGo), 0644); err != nil {
+		t.Fatalf("failed to write mypkg_test.go: %v", err)
+	}
+
+	g, _ := setupAndIndex(t, dir)
+
+	moduleURI := types.GoModulePathToURI(dir)
+	mypkgURI := moduleURI + "/pkg/example.com/testmod/mypkg"
+	testPkgURI := moduleURI + "/pkg/example.com/testmod/mypkg_test"
+	mypkgID := graph.IDFromURI(mypkgURI)
+	testPkgID := graph.IDFromURI(testPkgURI)
+
+	// Both package nodes should exist
+	pkgNodes, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeGoPackage}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes failed: %v", err)
+	}
+
+	foundMypkg, foundTestPkg := false, false
+	for _, pkg := range pkgNodes {
+		if pkg.ID == mypkgID {
+			foundMypkg = true
+		}
+		if pkg.ID == testPkgID {
+			foundTestPkg = true
+		}
+	}
+	if !foundMypkg {
+		t.Error("expected go:package node for mypkg")
+	}
+	if !foundTestPkg {
+		t.Error("expected go:package node for mypkg_test")
+	}
+
+	// tests edge should exist from mypkg_test to mypkg
+	testEdges, err := g.GetEdgesFrom(ctx, testPkgID)
+	if err != nil {
+		t.Fatalf("GetEdgesFrom testPkg failed: %v", err)
+	}
+	foundTestsEdge := false
+	for _, e := range testEdges {
+		if e.Type == types.EdgeTests && e.To == mypkgID {
+			foundTestsEdge = true
+			break
+		}
+	}
+	if !foundTestsEdge {
+		t.Errorf("expected tests edge from mypkg_test to mypkg; edges: %v", testEdges)
+	}
+
+	// Verify IsTest flag on package nodes
+	for _, pkg := range pkgNodes {
+		data, ok := pkg.Data.(map[string]any)
+		if !ok {
+			continue
+		}
+		isTest, _ := data["is_test"].(bool)
+		if pkg.ID == mypkgID && isTest {
+			t.Error("mypkg should have IsTest=false")
+		}
+		if pkg.ID == testPkgID && !isTest {
+			t.Error("mypkg_test should have IsTest=true")
+		}
+	}
+}

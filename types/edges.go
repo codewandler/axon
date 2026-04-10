@@ -73,6 +73,14 @@ const (
 	// Symbol definition: definer → symbol
 	// Used when a file/module defines a symbol
 	EdgeDefines = "defines"
+
+	// Implementation relationship: struct → interface
+	// Used when a struct type implements an interface
+	EdgeImplements = "implements"
+
+	// Test relationship: test package → source package
+	// Used when a test package tests a source package
+	EdgeTests = "tests"
 )
 
 // RegisterCommonEdges registers the common edge types that are used across domains.
@@ -131,5 +139,15 @@ func RegisterCommonEdges(r *graph.Registry) {
 	r.RegisterEdgeType(graph.EdgeSpec{
 		Type:        EdgeDefines,
 		Description: "Symbol definition (definer defines symbol)",
+	})
+
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeImplements,
+		Description: "Struct implements interface",
+	})
+
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeTests,
+		Description: "Test package tests source package",
 	})
 }

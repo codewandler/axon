@@ -198,7 +198,7 @@ func (i *Indexer) indexModule(ctx context.Context, ictx *indexer.Context, goModP
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports |
 			packages.NeedDeps | packages.NeedModule,
 		Dir:   modDir,
-		Tests: false, // Skip test packages for now
+		Tests: true, // Include test packages
 	}
 
 	pkgs, err := packages.Load(cfg, "./...")
@@ -239,6 +239,12 @@ func (i *Indexer) indexModule(ctx context.Context, ictx *indexer.Context, goModP
 		}
 	}
 
+	// Index interface implementations across all packages
+	if err := i.indexImplementations(ctx, ictx, moduleURI, modFile.Module.Mod.Path, pkgs); err != nil {
+		// Log but continue — implementation edges are best-effort
+		_ = err
+	}
+
 	// Report completion
 	if ictx.Progress != nil {
 		ictx.Progress <- progress.Completed(i.Name(), len(pkgs))
@@ -255,6 +261,27 @@ func (i *Indexer) indexPackage(ctx context.Context, ictx *indexer.Context, modul
 		pkgDir = filepath.Dir(pkg.GoFiles[0])
 	}
 
+	// Determine module path for intra-module filtering
+	modulePath := ""
+	if pkg.Module != nil {
+		modulePath = pkg.Module.Path
+	}
+
+	// Collect intra-module import paths
+	var importPaths []string
+	for importedPath, importedPkg := range pkg.Imports {
+		if modulePath != "" && strings.HasPrefix(importedPkg.PkgPath, modulePath) {
+			importPaths = append(importPaths, importedPath)
+		}
+	}
+
+	// Detect test packages (external test packages have _test suffix on PkgPath)
+	isTest := strings.HasSuffix(pkg.PkgPath, "_test")
+	testFor := ""
+	if isTest {
+		testFor = strings.TrimSuffix(pkg.PkgPath, "_test")
+	}
+
 	// Create package node
 	pkgURI := moduleURI + "/pkg/" + pkg.PkgPath
 	pkgNode := graph.NewNode(types.TypeGoPackage).
@@ -262,11 +289,14 @@ func (i *Indexer) indexPackage(ctx context.Context, ictx *indexer.Context, modul
 		WithKey(pkg.PkgPath).
 		WithName(pkg.Name).
 		WithData(types.PackageData{
-			Name:       pkg.Name,
-			ImportPath: pkg.PkgPath,
-			Dir:        pkgDir,
-			IsMain:     pkg.Name == "main",
-			NumFiles:   len(pkg.GoFiles),
+			Name:        pkg.Name,
+			ImportPath:  pkg.PkgPath,
+			Dir:         pkgDir,
+			IsMain:      pkg.Name == "main",
+			IsTest:      isTest,
+			TestFor:     testFor,
+			NumFiles:    len(pkg.GoFiles),
+			ImportPaths: importPaths,
 		})
 
 	if err := ictx.Emitter.EmitNode(ctx, pkgNode); err != nil {
@@ -278,6 +308,25 @@ func (i *Indexer) indexPackage(ctx context.Context, ictx *indexer.Context, modul
 		return err
 	}
 
+	// Emit intra-module import edges
+	for _, importedPkg := range pkg.Imports {
+		if modulePath != "" && strings.HasPrefix(importedPkg.PkgPath, modulePath) {
+			importedPkgURI := moduleURI + "/pkg/" + importedPkg.PkgPath
+			edge := graph.NewEdge(types.EdgeImports, pkgNode.ID, graph.IDFromURI(importedPkgURI))
+			if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Emit tests edge for test packages
+	if isTest && testFor != "" {
+		sourcePkgURI := moduleURI + "/pkg/" + testFor
+		edge := graph.NewEdge(types.EdgeTests, pkgNode.ID, graph.IDFromURI(sourcePkgURI))
+		if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
+			return err
+		}
+	}
 	// Index all declarations in the package's syntax
 	fset := pkg.Fset
 	for _, file := range pkg.Syntax {
@@ -783,6 +832,80 @@ func (i *Indexer) indexFuncDecl(ctx context.Context, ictx *indexer.Context, pkgI
 
 	edge := graph.NewEdge(types.EdgeDefines, pkgID, funcNode.ID)
 	return ictx.Emitter.EmitEdge(ctx, edge)
+}
+
+// indexImplementations indexes interface implementation relationships.
+// For each struct in the module, it checks if it (or its pointer) implements
+// any interface also defined in the module, and emits an EdgeImplements edge.
+func (i *Indexer) indexImplementations(ctx context.Context, ictx *indexer.Context, moduleURI, modulePath string, allPkgs []*packages.Package) error {
+	type ifaceEntry struct {
+		uri   string
+		iface *gotypes.Interface
+	}
+	type structEntry struct {
+		uri   string
+		named *gotypes.Named
+	}
+
+	var ifaces []ifaceEntry
+	var structs []structEntry
+
+	for _, pkg := range allPkgs {
+		if pkg.Module == nil || pkg.Module.Path != modulePath {
+			continue
+		}
+		if pkg.Types == nil {
+			continue
+		}
+		if len(pkg.Errors) > 0 {
+			continue
+		}
+
+		pkgURI := moduleURI + "/pkg/" + pkg.PkgPath
+		scope := pkg.Types.Scope()
+		for _, name := range scope.Names() {
+			obj := scope.Lookup(name)
+			typeName, ok := obj.(*gotypes.TypeName)
+			if !ok {
+				continue
+			}
+			named, ok := typeName.Type().(*gotypes.Named)
+			if !ok {
+				continue
+			}
+			switch u := named.Underlying().(type) {
+			case *gotypes.Interface:
+				ifaces = append(ifaces, ifaceEntry{
+					uri:   pkgURI + "/interface/" + name,
+					iface: u,
+				})
+			case *gotypes.Struct:
+				_ = u
+				structs = append(structs, structEntry{
+					uri:   pkgURI + "/struct/" + name,
+					named: named,
+				})
+			}
+		}
+	}
+
+	// Check each struct against each interface
+	for _, s := range structs {
+		for _, ifc := range ifaces {
+			implements := gotypes.Implements(s.named, ifc.iface) ||
+				gotypes.Implements(gotypes.NewPointer(s.named), ifc.iface)
+			if implements {
+				structID := graph.IDFromURI(s.uri)
+				ifaceID := graph.IDFromURI(ifc.uri)
+				edge := graph.NewEdge(types.EdgeImplements, structID, ifaceID)
+				if err := ictx.Emitter.EmitEdge(ctx, edge); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // cleanup removes all Go nodes for a module when go.mod is deleted.
