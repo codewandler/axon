@@ -492,11 +492,43 @@ else's PR. Check:
 | New node type checklist | If a new node type was added: (1) is `printMapData` in `show.go` updated with a typed case? (2) is `getNodeSummary` updated? Run `axon show <real-node-id>` on an indexed result and read the output — do not accept a raw key=value map dump as "good enough" |
 | API cleanliness | No unnecessary double-calls, pointless aliases, or dead code |
 | JSON/wire format | `nil` vs `[]` matters for consumers; test empty cases explicitly |
-| Docs | README and AGENTS.md updated if behaviour changed |
+| Docs | See Step 7a below — documentation is mandatory, not optional |
 
 Fix every issue found before opening the PR. If a newly-written test reveals
 a **pre-existing bug** in unrelated code, fix it in a separate commit with a
 clear message explaining the root cause.
+
+### 7a. Documentation (mandatory — not optional)
+
+Every feature, flag, node type, edge type, or behaviour change **must** be
+reflected in all three documentation targets before the PR is opened.
+Skipping this step is what creates documentation debt — do not defer it.
+
+#### Checklist
+
+| Changed | What to update |
+|---|---|
+| New CLI flag | `README.md` — the relevant `axon <cmd>` section; `.agents/skills/axon/SKILL.md` — the matching section |
+| New node type | `README.md` — add entry under the correct `## Node Types` subsection with data fields; `SKILL.md` — add to **Node Types** list; add a usage example to the **Finding Nodes** or **Semantic Search** section |
+| New edge type | `README.md` — add to `## Edge Types`; `SKILL.md` — add to **Edge Types** list |
+| Extended data fields on existing node | `README.md` — update that node type's entry with the new fields; `SKILL.md` — update if queried |
+| New indexer | `README.md` — add to the Architecture indexers list |
+| New AQL capability | `README.md` — add example to the AQL section |
+| Changed agent/workflow behaviour | `AGENTS.md` — update the relevant step |
+
+#### How to apply
+
+```bash
+# Always read the current state of both files before editing
+file_read README.md
+file_read .agents/skills/axon/SKILL.md
+
+# Edit both files in the same commit as the feature code
+# The PR description must mention which doc sections were updated
+```
+
+**The PR description must call out which documentation sections were updated.**
+A PR that changes behaviour but has no documentation update is incomplete.
 
 ### 8. Final pre-flight
 

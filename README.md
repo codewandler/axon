@@ -355,6 +355,7 @@ axon find "concurrency and goroutines" --type go:func
 axon find "recent logo commits"        --type vcs:commit --limit 5
 axon find "storage interface design"   --type go:interface --global
 axon find "error handling"             --output json
+axon find "caching todos"              --type code:todo   # search annotation comments
 
 # Flag-only (unchanged)
 axon find --type fs:file               # All files
@@ -369,6 +370,8 @@ axon find --output json                # Output format: path, uri, json, table
 axon find --show-parent                # Show parent chain to CWD or root
 axon find --show-query                 # Print the generated AQL query
 axon find --limit 20                   # Limit number of results
+axon find --exclude-type vcs:commit    # Exclude a node type (repeatable)
+axon find --exclude-type vcs:commit --exclude-type fs:dir  # Exclude multiple types
 ```
 
 ### axon show
@@ -741,6 +744,8 @@ Axon uses typed nodes with `domain:name` format:
 - `vcs:branch` - Branch
 - `vcs:tag` - Tag
 - `vcs:commit` - Commit
+  - Data: `sha`, `message`, `body`, `author_name`, `author_email`, `author_date`, `files_changed`, `insertions`, `deletions`, `parents`
+  - Conventional Commits fields (when the message follows the spec): `commit_type` (feat/fix/chore/…), `scope`, `breaking` (bool), `subject`, `footers`, `refs`
 
 ### Documents
 
@@ -762,11 +767,26 @@ Axon uses typed nodes with `domain:name` format:
 - `go:const` - Constant
 - `go:var` - Package-level variable
 - `go:ref` - Symbol reference (call site, type usage, etc.)
+  - Data: `caller_uri`, `caller_name`, `caller_type` — enclosing function/method for call-graph queries
 
 ### Project
 
 - `project:root` - Project root detected from a manifest file (go.mod, package.json, Cargo.toml, etc.)
   - Data: `type` (language: go, node, rust, python, java, ruby, php), `name`, `version`, `dep_count`
+
+### Annotations
+
+- `code:todo` - TODO/FIXME/HACK/XXX/NOTE annotation comment in any source file
+  - Data: `kind` (TODO/FIXME/HACK/XXX/NOTE), `text` (annotation text), `file` (absolute path), `line` (1-based), `context` (preceding source line for orientation)
+  - Labels: lowercase kind (`todo`, `fixme`, `hack`, `xxx`, `note`)
+  - URI: `file+todo:///abs/path/file.go#L42`
+  - Examples:
+    ```bash
+    axon find --type code:todo --global              # all annotations
+    axon find --type code:todo --label fixme         # only FIXMEs
+    axon find "error handling" --type code:todo      # semantic search over annotation text
+    axon query "SELECT data.kind, COUNT(*) FROM nodes WHERE type = 'code:todo' GROUP BY data.kind"
+    ```
 
 ## Edge Types
 
@@ -782,6 +802,8 @@ Common edge types follow generic semantics:
 - `implements` - Struct implements interface (go:struct → go:interface)
 - `tests` - Test package tests source package (go:package → go:package)
 - `defines` - Package defines symbol (go:package → go:func/struct/etc.)
+- `calls` - Function/method calls another (go:func/go:method → go:func/go:method); deduplicated per call-site
+- `embeds` - Struct anonymously embeds another struct (go:struct → go:struct)
 - `parent_of` - Commit DAG parent-to-child (vcs:commit → vcs:commit)
 - `modifies` - Commit modified a file (vcs:commit → fs:file)
 
@@ -794,11 +816,12 @@ Axon consists of:
 - **AQL Engine** (`aql/`) - Parser, AST, query compiler
 - **Indexers** (`indexer/`) - Pluggable indexers for different data sources
   - `fs` - Filesystem indexer
-  - `git` - Git repository indexer
+  - `git` - Git repository indexer (branches, tags, commits, conventional commit parsing)
   - `markdown` - Markdown document indexer
-  - `golang` - Go source code indexer
+  - `golang` - Go source code indexer (symbols, call graph, embed graph)
   - `project` - Project manifest indexer (go.mod, package.json, …)
   - `tagger` - Rule-based label tagger (applies labels by name/path pattern)
+  - `todo` - Language-agnostic TODO/FIXME/HACK/XXX/NOTE annotation indexer
   - `embeddings` - Embedding providers (Ollama, Hugot, null)
 - **Context Engine** (`context/`) - Token-budget-aware context gathering for AI agents
 - **CLI** (`cmd/axon/`) - Command-line interface

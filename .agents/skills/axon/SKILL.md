@@ -125,6 +125,8 @@ axon gc                        # Run garbage collection
 - `imports` - Import statement
 - `implements` - Struct implements interface
 - `defines` - Package defines symbol
+- `calls` - Function/method calls another (`go:func`/`go:method` → `go:func`/`go:method`)
+- `embeds` - Struct anonymously embeds another struct (`go:struct` → `go:struct`)
 - `depends_on` - Dependency relationship
 - `tests` - Test package tests source package
 - `parent_of` - Commit DAG parent-to-child (vcs:commit → vcs:commit)
