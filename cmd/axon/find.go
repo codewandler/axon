@@ -455,12 +455,14 @@ func runSemanticFind(query string) error {
 	filter.Extensions = findExt
 
 	// Local scope: restrict to nodes whose URI is under the CWD.
+	// Each node type uses a different URI scheme, so we derive the correct
+	// scheme prefix from the requested type rather than always using file://.
 	if !findGlobal {
 		absPath, err := filepath.Abs(cmdCtx.Cwd)
 		if err != nil {
 			return err
 		}
-		filter.URIPrefix = types.PathToURI(absPath)
+		filter.URIPrefix = uriPrefixForScope(absPath, filter.Type)
 	}
 
 	limit := findLimit
@@ -525,6 +527,25 @@ func outputSemanticResults(results []*graph.NodeWithScore, format string) error 
 			fmt.Printf("%.3f  [%s] %s (%s)\n", r.Score, shortID(r.ID), path, r.Type)
 		}
 		return nil
+	}
+}
+
+// uriPrefixForScope returns the URI prefix for local scoping, using the
+// correct scheme for the given node type. Without this, non-filesystem types
+// (vcs:commit → git+file://, go:func → go+file://, md:section → file+md://)
+// would be silently excluded by the file:// prefix used for FS nodes.
+// When type is empty (no --type flag), falls back to file:// which scopes
+// to filesystem nodes; use --global to search all types without restriction.
+func uriPrefixForScope(absPath, nodeType string) string {
+	switch {
+	case strings.HasPrefix(nodeType, "vcs:"):
+		return "git+file://" + absPath
+	case strings.HasPrefix(nodeType, "go:"):
+		return "go+file://" + absPath
+	case strings.HasPrefix(nodeType, "md:"):
+		return "file+md://" + absPath
+	default:
+		return types.PathToURI(absPath) // file://
 	}
 }
 

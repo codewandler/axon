@@ -7,6 +7,18 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.2] — 2026-05-13
+
+### Fixed
+
+- **`axon find` local scope wrong for non-filesystem node types** — the URI
+  prefix used for local scoping was always `file://`, so `--type vcs:commit`,
+  `--type go:func`, and `--type md:section` always returned no results without
+  `--global`. Each type now gets the correct scheme:
+  `vcs:*` → `git+file://`, `go:*` → `go+file://`, `md:*` → `file+md://`.
+
+---
+
 ## [0.8.1] — 2026-05-13
 
 ### Fixed
