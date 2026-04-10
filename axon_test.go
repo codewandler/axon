@@ -168,7 +168,8 @@ func TestAxonCustomIgnore(t *testing.T) {
 	ctx := context.Background()
 	dir := setupTestDir(t)
 
-	// Don't ignore .git, but ignore subdir
+	// Custom ignore list: ignore subdir but not the defaults.
+	// Hidden dirs (.git) are always excluded regardless of FSIgnore.
 	ax, err := New(Config{
 		Dir:      dir,
 		FSIgnore: []string{"subdir"},
@@ -182,9 +183,10 @@ func TestAxonCustomIgnore(t *testing.T) {
 		t.Fatalf("Index failed: %v", err)
 	}
 
-	// Should have file1.txt, config = 2 files (.git not ignored, but subdir is)
-	if result.Files != 2 {
-		t.Errorf("expected 2 files, got %d", result.Files)
+	// Should have file1.txt = 1 file
+	// .git is auto-excluded (hidden dir), subdir is explicitly ignored
+	if result.Files != 1 {
+		t.Errorf("expected 1 file, got %d", result.Files)
 	}
 
 	// subdir should exist as a node (for deletion detection) but contents skipped

@@ -316,6 +316,14 @@ func (i *Indexer) HandleEvent(ctx context.Context, ictx *indexer.Context, event 
 }
 
 func (i *Indexer) shouldIgnore(path, name string) bool {
+	// Skip all hidden files and directories (names starting with '.').
+	// This covers .git, .vscode, .idea, .DS_Store, .env, etc.
+	// The .git directory is still indexed as a minimal node (ignored=true)
+	// for deletion detection, so the git indexer still receives events.
+	if strings.HasPrefix(name, ".") {
+		return true
+	}
+
 	for _, pattern := range i.config.Ignore {
 		// Check if pattern matches the name directly
 		if matched, _ := filepath.Match(pattern, name); matched {

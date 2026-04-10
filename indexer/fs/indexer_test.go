@@ -87,11 +87,20 @@ func TestIndexerBasic(t *testing.T) {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
 
-	// Should have: root dir, file1.txt, subdir, file2.txt, .hidden, secret.txt = 6 nodes
-	if len(nodes) != 6 {
-		t.Errorf("expected 6 nodes, got %d", len(nodes))
+	// Should have: root dir, file1.txt, subdir, file2.txt, .hidden dir = 5 nodes
+	// .hidden is auto-ignored (starts with '.') but still gets a minimal node
+	// for deletion detection. secret.txt inside .hidden is not indexed.
+	if len(nodes) != 5 {
+		t.Errorf("expected 5 nodes, got %d", len(nodes))
 		for _, n := range nodes {
 			t.Logf("  %s: %s", n.Type, n.URI)
+		}
+	}
+
+	// Verify .hidden contents are not indexed
+	for _, n := range nodes {
+		if filepath.Base(types.URIToPath(n.URI)) == "secret.txt" {
+			t.Error("secret.txt inside .hidden should not be indexed")
 		}
 	}
 
@@ -110,8 +119,13 @@ func TestIndexerBasic(t *testing.T) {
 		t.Fatalf("Children failed: %v", err)
 	}
 	// file1.txt, subdir, .hidden = 3 children
+	// (.hidden is auto-ignored but still gets a minimal node with containment edges
+	// for deletion detection)
 	if len(children) != 3 {
 		t.Errorf("expected 3 children, got %d", len(children))
+		for _, n := range children {
+			t.Logf("  %s: %s", n.Type, n.URI)
+		}
 	}
 }
 
@@ -120,8 +134,10 @@ func TestIndexerIgnore(t *testing.T) {
 	dir := setupTestDir(t)
 	g := setupGraph(t)
 
+	// Even without explicit Ignore patterns, hidden dirs are auto-ignored.
+	// Adding explicit patterns still works for non-hidden dirs.
 	idx := New(Config{
-		Ignore: []string{".hidden"},
+		Ignore: []string{"subdir"},
 	})
 	emitter := indexer.NewGraphEmitter(g, "gen-1")
 
@@ -141,21 +157,26 @@ func TestIndexerIgnore(t *testing.T) {
 		t.Fatalf("FindNodes failed: %v", err)
 	}
 
-	// Should have: root dir, file1.txt, subdir, file2.txt, .hidden dir = 5 nodes
-	// (no secret.txt inside .hidden - contents are skipped)
-	// Note: ignored directories are still indexed as nodes (so we can detect deletion),
-	// but their contents are skipped
-	if len(nodes) != 5 {
-		t.Errorf("expected 5 nodes (with .hidden dir but not contents), got %d", len(nodes))
+	// Should have: root dir, file1.txt, .hidden dir, subdir dir = 4 nodes
+	// .hidden: auto-ignored hidden dir (minimal node, contents skipped)
+	// subdir: explicitly ignored dir (minimal node, contents skipped)
+	// file2.txt inside subdir: not indexed
+	// secret.txt inside .hidden: not indexed
+	if len(nodes) != 4 {
+		t.Errorf("expected 4 nodes (root, file1.txt, .hidden dir, subdir dir), got %d", len(nodes))
 		for _, n := range nodes {
 			t.Logf("  %s: %s", n.Type, n.URI)
 		}
 	}
 
-	// Verify .hidden contents are not indexed
+	// Verify ignored directory contents are not indexed
 	for _, n := range nodes {
-		if filepath.Base(types.URIToPath(n.URI)) == "secret.txt" {
+		name := filepath.Base(types.URIToPath(n.URI))
+		if name == "secret.txt" {
 			t.Error("secret.txt inside .hidden should not be indexed")
+		}
+		if name == "file2.txt" {
+			t.Error("file2.txt inside subdir should not be indexed")
 		}
 	}
 }
@@ -179,13 +200,17 @@ func TestIndexerCollecting(t *testing.T) {
 		t.Fatalf("Index failed: %v", err)
 	}
 
-	if len(emitter.Nodes) != 6 {
-		t.Errorf("expected 6 nodes, got %d", len(emitter.Nodes))
+	if len(emitter.Nodes) != 5 {
+		t.Errorf("expected 5 nodes, got %d", len(emitter.Nodes))
+		for _, n := range emitter.Nodes {
+			t.Logf("  %s: %s", n.Type, n.URI)
+		}
 	}
 
 	// Each non-root node should have a contains + contained_by edge (bidirectional)
-	if len(emitter.Edges) != 10 {
-		t.Errorf("expected 10 edges (5 pairs), got %d", len(emitter.Edges))
+	// 4 non-root nodes × 2 edges each = 8 edges
+	if len(emitter.Edges) != 8 {
+		t.Errorf("expected 8 edges (4 pairs), got %d", len(emitter.Edges))
 	}
 }
 

@@ -36,26 +36,18 @@ const (
 )
 
 // DefaultFSIgnore contains the default patterns to ignore when indexing.
+// Note: All hidden files/dirs (names starting with '.') are unconditionally
+// excluded by the FS indexer, so they don't need to be listed here.
 var DefaultFSIgnore = []string{
-	".git",
-	".axon",
-	".idea",   // JetBrains IDE config
-	".vscode", // VS Code config
 	"node_modules",
 	"__pycache__",
-	".DS_Store",
-	"target",      // Rust/Cargo build output
-	"vendor",      // Go vendor, PHP composer
-	".venv",       // Python virtual environments
-	".virtualenv", // Python virtual environments (alt)
-	"venv",        // Python virtual environments (alt)
-	"env",         // Python virtual environments (alt)
-	"dist",        // JS/TS build output
-	"build",       // Generic build output
-	".tox",        // Python tox testing
-	".pytest_cache",
-	".mypy_cache",
-	"site-packages", // Python packages (catches nested ones)
+	"target",         // Rust/Cargo build output
+	"vendor",         // Go vendor, PHP composer
+	"venv",           // Python virtual environments
+	"env",            // Python virtual environments (alt)
+	"dist",           // JS/TS build output
+	"build",          // Generic build output
+	"site-packages",  // Python packages (catches nested ones)
 }
 
 // Config holds configuration for an Axon instance.
@@ -652,6 +644,11 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 			}
 			// Skip events originating from the DB directory.
 			if skipDir(event.Name) {
+				continue
+			}
+			// Skip events from hidden files/dirs (starting with '.').
+			// These are excluded from indexing, so re-indexing would be wasted work.
+			if base := filepath.Base(event.Name); strings.HasPrefix(base, ".") {
 				continue
 			}
 			pending[event.Name] = struct{}{}
