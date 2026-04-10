@@ -7,7 +7,28 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.7.0] — 2026-05-13
+
+### Added
+
+- **Animated neuron logo** — new `assets/logo.svg` featuring a firing neuron
+  with soma, myelin sheaths, nodes of Ranvier, and synaptic boutons; action
+  potential pulse animates along the axon in a 2.8 s SMIL cycle.
+- **`assets/logo.png`** — 2× HiDPI pre-rendered export (1720×480) generated
+  with `rsvg-convert --zoom=2`.
+
+### Fixed
+
+- **Logo background clipping** — both background `<rect>` elements now match
+  the 860×240 SVG canvas; previously they were left at 800 wide after padding
+  was added, leaving a transparent strip on the right edge.
+
+### Docs
+
+- **README** — pre-publish accuracy pass; updated quickstart, CLI reference,
+  and project description.
+- **AGENTS.md** — added *Logo & Assets* section documenting how to edit the
+  SVG and regenerate the PNG.
 
 ---
 
