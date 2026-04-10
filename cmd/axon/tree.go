@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/codewandler/axon"
 	"github.com/codewandler/axon/adapters/sqlite"
@@ -31,9 +32,17 @@ var treeCmd = &cobra.Command{
 	Long: `Display the indexed graph as a tree structure.
 
 If no argument is provided, shows the tree from the current directory.
-You can specify a node ID or a path to start from.
+You can specify a filesystem path or a node ID to start from.
 
-The output includes node IDs that can be used for further queries.`,
+Node IDs are shown in brackets by axon tree --ids and axon find output.
+A prefix of at least 4 characters is sufficient.
+
+Examples:
+  axon tree                    # Current directory subtree
+  axon tree /path/to/dir       # Subtree rooted at directory
+  axon tree nI3NDos            # Subtree rooted at node by ID prefix
+  axon tree --depth 2          # Limit depth
+  axon tree --type fs:file     # Show only matching node types`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runTree,
 }
@@ -52,61 +61,74 @@ func init() {
 func runTree(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	// Determine starting point
-	startPath := "."
-	if len(args) > 0 {
-		startPath = args[0]
-	}
-
-	// Resolve to absolute path
-	absPath, err := filepath.Abs(startPath)
-	if err != nil {
-		return fmt.Errorf("failed to resolve path: %w", err)
-	}
-
-	// Check path exists
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return fmt.Errorf("path does not exist: %w", err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("path is not a directory: %s", absPath)
-	}
-
-	// Resolve database location (read-only, so forWrite=false)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
+
 	dbLoc, err := resolveDB(flagDBDir, flagGlobal, cwd, false)
 	if err != nil {
 		return err
 	}
 
-	// Print database location
 	fmt.Printf("Using database: %s\n", dbLoc.Path)
 
-	// Open SQLite storage
 	storage, err := sqlite.New(dbLoc.Path)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 	defer storage.Close()
 
-	// Create axon instance with existing storage
 	ax, err := axon.New(axon.Config{
-		Dir:     absPath,
+		Dir:     cwd,
 		Storage: storage,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create axon: %w", err)
 	}
 
-	// Find root node
-	uri := types.PathToURI(absPath)
-	rootNode, err := ax.Graph().GetNodeByURI(ctx, uri)
-	if err != nil {
-		return fmt.Errorf("failed to find root node: %w", err)
+	var rootNodeID string
+
+	// If the argument looks like a node ID (no path separators, not starting with '.'),
+	// try to resolve it in the graph first.
+	if len(args) > 0 && !strings.ContainsAny(args[0], "/\\") && !strings.HasPrefix(args[0], ".") {
+		if len(args[0]) >= 4 {
+			nodes, err := findNodesByPrefix(ctx, ax.Graph(), args[0])
+			if err == nil && len(nodes) == 1 {
+				rootNodeID = nodes[0].ID
+			} else if err == nil && len(nodes) > 1 {
+				fmt.Printf("Multiple nodes match '%s':\n", args[0])
+				for _, n := range nodes {
+					fmt.Printf("  %s  %s (%s)\n", n.ID[:7], n.Name, n.Type)
+				}
+				return nil
+			}
+		}
+	}
+
+	// If no node ID was resolved, fall back to path resolution.
+	if rootNodeID == "" {
+		startPath := "."
+		if len(args) > 0 {
+			startPath = args[0]
+		}
+		absPath, err := filepath.Abs(startPath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve path: %w", err)
+		}
+		info, err := os.Stat(absPath)
+		if err != nil {
+			return fmt.Errorf("path does not exist: %w", err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("path is not a directory: %s", absPath)
+		}
+		uri := types.PathToURI(absPath)
+		rootNode, err := ax.Graph().GetNodeByURI(ctx, uri)
+		if err != nil {
+			return fmt.Errorf("failed to find root node for path %s: %w", absPath, err)
+		}
+		rootNodeID = rootNode.ID
 	}
 
 	// Detect TTY for color/emoji support
@@ -116,7 +138,6 @@ func runTree(cmd *cobra.Command, args []string) error {
 	useColor := (isTTY || treeColor) && !treeNoColor
 	useEmoji := (isTTY || treeEmoji) && !treeNoEmoji
 
-	// Render tree
 	opts := render.Options{
 		MaxDepth:   treeDepth,
 		ShowIDs:    treeShowIDs,
@@ -126,7 +147,7 @@ func runTree(cmd *cobra.Command, args []string) error {
 		TypeFilter: treeTypeFilter,
 	}
 
-	output, err := render.Tree(ctx, ax.Graph(), rootNode.ID, opts)
+	output, err := render.Tree(ctx, ax.Graph(), rootNodeID, opts)
 	if err != nil {
 		return fmt.Errorf("failed to render tree: %w", err)
 	}
