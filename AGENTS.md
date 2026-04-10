@@ -503,3 +503,38 @@ All edge types are defined in `types/edges.go`. Use generic edges rather than do
 - **LICENSE** - MIT License
 
 When making changes that affect user-facing behavior (new features, CLI changes, AQL syntax), update README.md accordingly.
+
+## Release & Tagging Workflow
+
+When cutting a release **or** applying a git tag (even a standalone `tag` request):
+
+1. **Determine the new version** — inspect the existing tags (`git tag --sort=-version:refname | head -5`) and choose the next semver:
+   - Patch (`v0.x.Y+1`) for bug fixes and non-breaking changes
+   - Minor (`v0.X+1.0`) for new features or any breaking CLI/API change
+   - Major for stable-API breaks (post-v1)
+
+2. **Identify changes since the last tag** — run:
+   ```bash
+   git log <last-tag>..HEAD --oneline
+   ```
+   Read the commit messages to understand what changed.
+
+3. **Update CHANGELOG.md before tagging** — replace the `[Unreleased]` section
+   header (or create one if absent) with the concrete version and today's date:
+   ```
+   ## [0.4.0] — 2026-04-10
+   ```
+   Verify the entry accurately reflects the commits since the last tag.
+   If the entry is missing or incomplete, write it now.
+
+4. **Commit the CHANGELOG update** — use a `chore(release):` commit:
+   ```
+   chore(release): v0.4.0
+   ```
+
+5. **Apply the tag** on that commit:
+   ```bash
+   git tag v0.4.0
+   ```
+
+> **Never tag a commit that still has `[Unreleased]` in CHANGELOG.md.**
