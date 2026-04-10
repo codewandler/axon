@@ -20,11 +20,15 @@ import (
 
 // commentPattern matches annotation keywords in common single-line comment styles.
 //
+// The pattern requires the comment prefix to be at the start of the line
+// (possibly after leading whitespace) so that "// TODO" embedded inside
+// prose, backtick strings, or string literals is not matched.
+//
 // Supported prefixes: // (Go/JS/TS/Java/C), # (Python/Shell/YAML/Ruby),
 // -- (SQL/Lua), ; (Lisp/Assembly). The optional * handles mid-block /** */ lines.
 // Groups: (1) keyword (TODO|FIXME|HACK|XXX|NOTE), (2) annotation text.
 var commentPattern = regexp.MustCompile(
-	`(?i)(?:\/\/|#|--|;)\s*\*?\s*(TODO|FIXME|HACK|XXX|NOTE)\b[:.]?\s*(.*)`,
+	`(?im)^\s*(?:\/\/|#|--|;)\s*\*?\s*(TODO|FIXME|HACK|XXX|NOTE)\b[:.]?\s*(.*)`,
 )
 
 // maxFileSize is the largest file we will scan. Files over this limit are skipped.

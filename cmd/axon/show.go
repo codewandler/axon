@@ -132,6 +132,14 @@ func getNodeSummary(n *graph.Node) string {
 		} else {
 			name = short
 		}
+	case types.TodoData:
+		name = data.Kind
+		if data.Text != "" {
+			name = data.Kind + ": " + data.Text
+			if len(name) > 60 {
+				name = name[:57] + "..."
+			}
+		}
 	case types.DocumentData:
 		name = data.Title
 	case types.SectionData:
@@ -154,6 +162,18 @@ func getNodeSummary(n *graph.Node) string {
 			name = nm
 		} else if text, ok := data["text"].(string); ok && text != "" {
 			name = text
+		} else if n.Type == types.TypeTodo {
+			// todo nodes have kind + text instead of a name field
+			if kind, ok := data["kind"].(string); ok && kind != "" {
+				if text, ok := data["text"].(string); ok && text != "" {
+					name = kind + ": " + text
+					if len(name) > 60 {
+						name = name[:57] + "..."
+					}
+				} else {
+					name = kind
+				}
+			}
 		} else if n.Type == types.TypeCommit {
 			// commits have sha + message instead of a name field
 			if sha, ok := data["sha"].(string); ok && sha != "" {
@@ -716,6 +736,24 @@ func printMapData(ctx context.Context, g *graph.Graph, nodeType string, node *gr
 		}
 		if parents, ok := data["parents"].([]any); ok && len(parents) > 0 {
 			fmt.Printf("  Parents: %d\n", len(parents))
+		}
+
+	case types.TypeTodo:
+		fmt.Println("\nData:")
+		if kind := getMapString(data, "kind"); kind != "" {
+			fmt.Printf("  Kind:    %s\n", kind)
+		}
+		if text := getMapString(data, "text"); text != "" {
+			fmt.Printf("  Text:    %s\n", text)
+		}
+		if file := getMapString(data, "file"); file != "" {
+			fmt.Printf("  File:    %s\n", file)
+		}
+		if line := int(getMapFloat(data, "line")); line > 0 {
+			fmt.Printf("  Line:    %d\n", line)
+		}
+		if ctx := getMapString(data, "context"); ctx != "" {
+			fmt.Printf("  Context: %s\n", ctx)
 		}
 
 	// Markdown types from JSON
