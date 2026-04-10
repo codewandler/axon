@@ -10,7 +10,6 @@ import (
 
 	"github.com/codewandler/axon/aql"
 	"github.com/codewandler/axon/graph"
-	"github.com/codewandler/axon/indexer/embeddings"
 	"github.com/spf13/cobra"
 )
 
@@ -171,7 +170,7 @@ func runSemanticSearch(query string) error {
 	ctx := context.Background()
 
 	// Resolve embedding provider from environment
-	provider, err := resolveEmbeddingProvider()
+	provider, err := resolveEmbeddingProvider("", "")
 	if err != nil {
 		return err
 	}
@@ -226,22 +225,6 @@ func runSemanticSearch(query string) error {
 	}
 
 	return nil
-}
-
-func resolveEmbeddingProvider() (embeddings.Provider, error) {
-	providerName := os.Getenv("AXON_EMBED_PROVIDER")
-	if providerName == "" {
-		providerName = "ollama"
-	}
-
-	switch providerName {
-	case "ollama":
-		baseURL := os.Getenv("AXON_OLLAMA_URL")
-		model := os.Getenv("AXON_OLLAMA_MODEL")
-		return embeddings.NewOllama(baseURL, model), nil
-	default:
-		return nil, fmt.Errorf("unknown embedding provider %q (set AXON_EMBED_PROVIDER=ollama)", providerName)
-	}
 }
 
 // parseQuestion extracts the question type and subject

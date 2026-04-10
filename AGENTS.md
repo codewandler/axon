@@ -430,8 +430,8 @@ result, _ := storage.Query(ctx, q)
 - Print "Using database: <path>" for transparency
 
 **Available commands**:
-- `init` - Index directories and create graph (with `--embed` for embeddings)
-- `watch` - Watch a directory and keep the graph up to date
+- `init` / `index` - Index a directory and create/update the graph (also `--watch` to keep live)
+- `index --embed` - Generate embeddings for semantic search (use `--embed-provider` to choose provider)
 - `query` - Execute AQL queries (with `--explain`, `--output table|json|count`)
 - `tree` - Display graph as tree (with `--depth`, `--ids`, `--types`)
 - `find` - Search nodes with filters (with `--type`, `--name`, `--ext`, `--global`)
@@ -541,9 +541,26 @@ When making changes that affect user-facing behavior (new features, CLI changes,
 
 `axon.Config.EmbeddingProvider` field (type `embeddings.Provider`) activates the embedding PostIndexer. When set, embeddings are generated for `go:func`, `go:struct`, `go:interface`, and `md:section` nodes after each indexing run.
 
+The `embeddings.Provider` interface:
+
+```go
+type Provider interface {
+    Embed(ctx context.Context, text string) ([]float32, error)
+    EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+    Dimensions() int
+    Name() string
+    Close() error
+}
+```
+
+`Embed` is a convenience wrapper around `EmbedBatch`. The `Indexer.PostIndex` collects all nodes and calls `EmbedBatch` in chunks of `DefaultBatchSize` (32) for efficiency — one request/inference pass per batch instead of one per node.
+
 Built-in providers:
 - `embeddings.NewNull(dims)` — zero vectors for testing
-- `embeddings.NewOllama(baseURL, model)` — Ollama API (`nomic-embed-text`)
+- `embeddings.NewOllama(baseURL, model, dims)` — Ollama `/api/embed` batch endpoint; dims=0 defaults to 768 (nomic-embed-text)
+- `embeddings.NewHugot(modelPath, model)` — in-process ONNX via Hugot pure-Go backend; no daemon, no CGO, model downloaded once to `~/.axon/models/`
+
+All providers are in `indexer/embeddings/`. The package is designed to be extractable as a standalone library — no file except `indexer.go` imports axon-internal packages.
 
 ## Release & Tagging Workflow
 

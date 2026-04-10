@@ -46,7 +46,7 @@ Basic CLI commands:
 
 - `axon init [path]` - Index a directory
 - `axon init --embed [path]` - Index and generate embeddings for semantic search
-- `axon watch [path]` - Watch for changes and keep graph up to date
+- `axon index --watch [path]` - Watch for changes and keep graph up to date
 - `axon query "<aql>"` - Execute AQL queries
 - `axon tree [path]` - Display graph as tree
 - `axon find` - Search nodes with filters
@@ -325,10 +325,11 @@ axon gc                        # Run garbage collection
 Keep the graph up to date as files change:
 
 ```bash
-axon watch .                   # Watch current directory
-axon watch ./src               # Watch specific subtree
-axon watch --quiet .           # Suppress per-change output
-axon watch --debounce 300ms .  # Custom debounce duration
+axon index --watch .                   # Watch current directory
+axon index --watch ./src               # Watch specific subtree
+axon index --watch --watch-quiet .     # Suppress per-change output
+axon index --watch --watch-debounce 300ms .  # Custom debounce duration
+axon index --watch --embed .           # Watch + re-embed on each change
 ```
 
 On each file change, axon re-indexes the affected directory and prints:
@@ -362,11 +363,12 @@ Packages importing affected packages:
 
 ### Semantic Search
 
-Find code by meaning, not just keywords (requires Ollama):
+Find code by meaning, not just keywords. Two providers are supported — both run fully locally, no data leaves the machine.
 
 ```bash
 # First generate embeddings during indexing
-axon init --embed .
+axon init --embed .                              # uses Ollama by default
+axon init --embed --embed-provider=hugot .       # in-process, no daemon needed
 
 # Then search semantically
 axon search --semantic "handles token budget overflow"
@@ -374,16 +376,46 @@ axon search --semantic "error recovery" --type go:func
 axon search --semantic "storage interface" --limit 5
 ```
 
-Setup (requires [Ollama](https://ollama.ai)):
+#### Provider: Ollama (default)
+
+Requires the [Ollama](https://ollama.ai) daemon running locally.
+
 ```bash
 ollama pull nomic-embed-text
-# Then run: axon init --embed .
+axon init --embed .
 ```
 
+#### Provider: Hugot (in-process, no daemon)
+
+Runs ONNX sentence-embedding models fully inside the axon process.
+No external service needed. Model is downloaded once (~90 MB) and cached.
+
+```bash
+# Hugot provider — downloads model on first run, then cached at ~/.axon/models/
+axon init --embed --embed-provider=hugot .
+
+# Custom model directory
+axon init --embed --embed-provider=hugot --embed-model-path=/data/models/MiniLM .
+
+# Via environment variable
+AXON_EMBED_PROVIDER=hugot axon init --embed .
+```
+
+| | Hugot | Ollama |
+|---|---|---|
+| External daemon | ❌ none | ✅ required |
+| CGO / shared libs | ❌ none | ❌ none |
+| First-run setup | ~90 MB model download | `ollama pull <model>` |
+| Throughput — single embed | ~114 ms (CPU, pure Go) | ~23 ms (GPU via HTTP) |
+| Throughput — batched (32 nodes) | ~21 ms/node | ~12 ms/node |
+| Best for | offline / CI / Docker | existing Ollama users |
+
 Environment variables:
-- `AXON_EMBED_PROVIDER` — provider name (`ollama`, default)
+- `AXON_EMBED_PROVIDER` — provider name: `ollama` (default) or `hugot`
 - `AXON_OLLAMA_URL` — Ollama base URL (default: `http://localhost:11434`)
-- `AXON_OLLAMA_MODEL` — model name (default: `nomic-embed-text`)
+- `AXON_OLLAMA_MODEL` — Ollama model name (default: `nomic-embed-text`)
+- `AXON_HUGOT_MODEL` — HuggingFace repo slug (default: `KnightsAnalytics/all-MiniLM-L6-v2`)
+- `AXON_HUGOT_MODEL_PATH` — local model directory (default: `~/.axon/models/<model>`)
 
 ## Node Types
 

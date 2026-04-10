@@ -13,18 +13,19 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/codewandler/axon"
 	"github.com/codewandler/axon/adapters/sqlite"
-	"github.com/codewandler/axon/indexer/embeddings"
 	"github.com/codewandler/axon/progress"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
 var (
-	flagNoGC          bool
-	flagEmbed         bool
-	flagWatch         bool
-	flagWatchDebounce time.Duration
-	flagWatchQuiet    bool
+	flagNoGC           bool
+	flagEmbed          bool
+	flagEmbedProvider  string
+	flagEmbedModelPath string
+	flagWatch          bool
+	flagWatchDebounce  time.Duration
+	flagWatchQuiet     bool
 )
 
 var indexCmd = &cobra.Command{
@@ -42,7 +43,9 @@ structure that can be queried with other axon commands.`,
 
 func init() {
 	indexCmd.Flags().BoolVar(&flagNoGC, "no-gc", false, "Skip garbage collection (orphaned edge cleanup)")
-	indexCmd.Flags().BoolVar(&flagEmbed, "embed", false, "Generate embeddings after indexing (requires Ollama with nomic-embed-text or AXON_EMBED_PROVIDER=ollama)")
+	indexCmd.Flags().BoolVar(&flagEmbed, "embed", false, "Generate embeddings after indexing (use --embed-provider to select provider)")
+	indexCmd.Flags().StringVar(&flagEmbedProvider, "embed-provider", "", "Embedding provider: ollama|hugot (overrides AXON_EMBED_PROVIDER)")
+	indexCmd.Flags().StringVar(&flagEmbedModelPath, "embed-model-path", "", "Local model directory for hugot provider (default: ~/.axon/models/<model>)")
 	indexCmd.Flags().BoolVar(&flagWatch, "watch", false, "watch for changes and re-index automatically (Ctrl+C to stop)")
 	indexCmd.Flags().DurationVar(&flagWatchDebounce, "watch-debounce", 150*time.Millisecond, "debounce window for change events (only with --watch)")
 	indexCmd.Flags().BoolVar(&flagWatchQuiet, "watch-quiet", false, "suppress per-change output (only with --watch)")
@@ -100,19 +103,13 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	// Optionally enable embedding generation
 	if flagEmbed {
-		providerName := os.Getenv("AXON_EMBED_PROVIDER")
-		if providerName == "" {
-			providerName = "ollama"
+		provider, err := resolveEmbeddingProvider(flagEmbedProvider, flagEmbedModelPath)
+		if err != nil {
+			return err
 		}
-		switch providerName {
-		case "ollama":
-			baseURL := os.Getenv("AXON_OLLAMA_URL")
-			model := os.Getenv("AXON_OLLAMA_MODEL")
-			axCfg.EmbeddingProvider = embeddings.NewOllama(baseURL, model)
-			fmt.Printf("Embedding provider: %s\n", axCfg.EmbeddingProvider.Name())
-		default:
-			return fmt.Errorf("unknown embedding provider %q (set AXON_EMBED_PROVIDER=ollama)", providerName)
-		}
+		defer func() { _ = provider.Close() }()
+		axCfg.EmbeddingProvider = provider
+		fmt.Printf("Embedding provider: %s\n", provider.Name())
 	}
 
 	ax, err := axon.New(axCfg)

@@ -11,6 +11,55 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Hugot embedding provider** — runs ONNX sentence-embedding models fully
+  in-process via the Hugot pure-Go backend (no CGO, no daemon, no data leaves
+  the machine). Model auto-downloaded to `~/.axon/models/` on first use
+  (~90 MB, cached). (`indexer/embeddings/hugot.go`)
+
+- **`EmbedBatch(ctx, []string) ([][]float32, error)` on `Provider` interface**
+  — enables batch embedding; `OllamaProvider` uses Ollama's `/api/embed`
+  batch endpoint, `HugotProvider` calls `RunPipeline([]string)` in one pass.
+  `Embed()` is now a thin wrapper around `EmbedBatch` on all providers.
+
+- **`Close() error` on `Provider` interface** — standardises resource cleanup;
+  `HugotProvider` destroys its Hugot session, others return nil.
+
+- **`--embed-provider` and `--embed-model-path` flags** on `axon index` to
+  select the embedding provider and local model path from the CLI.
+  `AXON_EMBED_PROVIDER`, `AXON_HUGOT_MODEL`, and `AXON_HUGOT_MODEL_PATH`
+  environment variables also supported. (`cmd/axon/index.go`)
+
+- **`cmd/axon/embed.go`** — shared `resolveEmbeddingProvider()` factory used
+  by both `index` and `search` commands; removes the duplicate switch.
+
+- **Embedding benchmarks** — `BenchmarkOllama`, `BenchmarkOllamaBatch`,
+  `BenchmarkHugot`, `BenchmarkHugotBatch` in
+  `indexer/embeddings/bench_test.go`; all opt-in via env vars, CI-safe.
+
+### Changed
+
+- **`indexer/embeddings/` refactored for library extraction** — split into one
+  file per provider (`null.go`, `ollama.go`, `hugot.go`), interface-only
+  `provider.go`, and `doc.go` documenting the package boundary. No file except
+  `indexer.go` imports axon-internal packages.
+
+- **`PostIndex` uses batch embedding** — collects all nodes across all types
+  and calls `EmbedBatch` in chunks of `DefaultBatchSize` (32) instead of one
+  `Embed()` call per node. Benchmark results on i9-10900K + RTX 3090:
+  Ollama 23 ms → 12 ms/node batched; Hugot 114 ms → 21 ms/node batched.
+
+- **`OllamaProvider`** — accepts a configurable `dims int` parameter (was
+  hardcoded to 768); switches from `/api/embeddings` (single) to `/api/embed`
+  (batch) endpoint.
+
+- **`axon index --watch` replaces `axon watch`** in documentation — the watch
+  sub-command was merged into `index` in a prior commit; README and AGENTS now
+  reflect the correct flags (`--watch-quiet`, `--watch-debounce`).
+
+---
+
+### Added
+
 - **`axon index` command** — replaces the separate `init` and `watch` commands
   with a single `index [path]` command. `--watch`, `--watch-debounce`, and
   `--watch-quiet` flags added. `init` is kept as an alias for backward
