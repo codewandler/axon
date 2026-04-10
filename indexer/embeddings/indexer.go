@@ -17,6 +17,7 @@ var DefaultEmbedTypes = []string{
 	types.TypeGoInterface,
 	"md:section",
 	"vcs:commit",
+	types.TypeTodo,
 }
 
 // DefaultBatchSize is the number of texts sent to the provider in one
@@ -187,6 +188,10 @@ func buildNodeText(node *graph.Node) string {
 		}
 		if body, ok := m["body"].(string); ok && body != "" {
 			parts = append(parts, body)
+		}
+		// code:todo annotations: surrounding context line adds semantic signal
+		if ctx, ok := m["context"].(string); ok && ctx != "" {
+			parts = append(parts, ctx)
 		}
 	}
 	return strings.Join(parts, " ")

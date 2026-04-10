@@ -2,6 +2,7 @@ package embeddings
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/codewandler/axon/adapters/sqlite"
@@ -58,5 +59,42 @@ func TestPostIndex(t *testing.T) {
 	}
 	if len(embedding) != 384 {
 		t.Errorf("expected 384 dims, got %d", len(embedding))
+	}
+}
+
+func TestDefaultEmbedTypes_IncludesTodo(t *testing.T) {
+	found := false
+	for _, typ := range DefaultEmbedTypes {
+		if typ == types.TypeTodo {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("DefaultEmbedTypes does not include %q; todo nodes will not be embedded", types.TypeTodo)
+	}
+}
+
+func TestBuildNodeText_Todo(t *testing.T) {
+	node := &graph.Node{
+		Type:   types.TypeTodo,
+		Name:   "TODO: implement caching",
+		Labels: []string{"todo"},
+		Data: map[string]interface{}{
+			"kind":    "TODO",
+			"text":    "implement caching",
+			"context": "func processQuery() {",
+		},
+	}
+
+	text := buildNodeText(node)
+
+	// Must contain the name (kind + annotation text)
+	if !strings.Contains(text, "TODO: implement caching") {
+		t.Errorf("text missing node name, got: %q", text)
+	}
+	// Must include the context line for richer semantic signal
+	if !strings.Contains(text, "func processQuery()") {
+		t.Errorf("text missing context line, got: %q", text)
 	}
 }
