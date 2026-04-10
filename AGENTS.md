@@ -518,6 +518,25 @@ All edge types are defined in `types/edges.go`. Use generic edges rather than do
 
 When making changes that affect user-facing behavior (new features, CLI changes, AQL syntax), update README.md accordingly.
 
+## Logo & Assets
+
+Logo source lives in `assets/logo.svg`. The PNG is a pre-rendered 2× (HiDPI) export and must be regenerated whenever the SVG changes.
+
+**Regenerate the PNG after any SVG edit:**
+
+```bash
+rsvg-convert --zoom=2 assets/logo.svg -o assets/logo.png
+```
+
+This produces `assets/logo.png` at exactly 2× the SVG canvas size (e.g. 860×240 SVG → 1720×480 PNG).
+
+**Key layout facts:**
+- SVG canvas: `860×240` — the `viewBox`, `width`, and `height` attributes on the root `<svg>` element all use this value
+- Both background `<rect>` elements (solid fill `#070d1a` and radial-gradient overlay) must match the canvas width; update them whenever the canvas size changes
+- The neuron illustration spans roughly x=18–548; text is centred around x=718
+- Animation cycle: 2.8 s (action potential soma → terminals)
+- `rsvg-convert` renders the static base state of the SVG (SMIL animations are not captured in the PNG)
+
 ### New Go Package Data Fields
 
 `PackageData` in `types/golang.go` has been extended with:
