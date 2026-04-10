@@ -7,6 +7,22 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.12.1] — 2026-04-10
+
+### Fixed
+
+- **TODO regex anchored to line start** — the original pattern matched
+  `// TODO` anywhere in a line, including inside backtick-quoted code in
+  markdown prose (`\`// TODO\``) or string literals. Added `^` anchor with
+  leading-whitespace tolerance so only actual comment-line annotations are
+  indexed. Regression test: `TestIndexer_NoMatchMidLine`.
+- **`axon show` structured display for `code:todo` nodes** — added `TypeTodo`
+  case to `printMapData` (Kind / Text / File / Line / Context) and `TodoData`
+  typed + map-path cases to `getNodeSummary`, matching display quality of all
+  other node types.
+
+---
+
 ## [0.12.0] — 2026-04-10
 
 ### Added
