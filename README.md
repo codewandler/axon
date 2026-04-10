@@ -8,6 +8,36 @@
 
 Axon transforms your filesystem, git repositories, and documents into a queryable knowledge graph—designed from the ground up for AI agents. It provides both persistent agent memory and powerful retrieval capabilities, all running locally on your machine.
 
+## 🤖 For AI Agents
+
+Axon is built to be used directly by AI agents as a persistent knowledge tool. Copy and paste the prompt below into Claude, opencode, Cursor, or any agent to get started:
+
+---
+
+> You have access to **`axon`** — a graph-based knowledge CLI for AI agents that indexes your codebase into a queryable graph.
+>
+> **Step 1 — Install** (requires Go 1.23+):
+> ```bash
+> go install github.com/codewandler/axon/cmd/axon@latest
+> ```
+>
+> **Step 2 — Build your skill.** Read and internalise the following files from this repository:
+> - `README.md` — complete CLI and AQL reference
+> - `.agents/skills/axon/SKILL.md` — compact command cheatsheet
+> - `.agents/skills/axon/references/aql.md` — AQL syntax reference
+> - `.agents/skills/axon/references/aql_go_querybuilder.md` — Go builder API (only if working in Go)
+>
+> **Step 3 — Index the project you're working on:**
+> ```bash
+> axon index .
+> ```
+>
+> You can now query the graph with `axon query`, explore with `axon tree`, search with `axon search`, and generate context for tasks with `axon context`.
+
+---
+
+**opencode users**: the skill at `.agents/skills/axon/` is compatible with opencode and can be installed directly from this repository.
+
 ## Why Axon?
 
 **AI-Native Storage + Retrieval**: Unlike traditional RAG systems that only handle retrieval, Axon provides full storage and context management. AI agents can persist memories, track relationships, and query structured knowledge across sessions.

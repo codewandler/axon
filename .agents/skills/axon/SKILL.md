@@ -10,25 +10,25 @@ compatibility: opencode
 Initialize and index a directory:
 
 ```bash
-axon init .                    # Index current dir, use ~/.axon/graph.db
-axon init --local .            # Use project-local .axon directory
-axon init --no-gc /path        # Skip garbage collection
+axon index .                   # Index current dir, creates .axon/graph.db here
+axon index --no-gc /path       # Skip garbage collection
+axon index --embed .           # Index + generate embeddings for semantic search
+axon index --watch .           # Watch for changes and re-index automatically
 ```
 
-**What gets indexed**: filesystem (files, dirs), git repos (branches, tags, commits), markdown docs.
+**What gets indexed**: filesystem (files, dirs), git repos (branches, tags, commits), markdown docs, Go packages.
 
-**Database location**: Auto-resolves by walking up from CWD looking for `.axon/graph.db`, falls back to `~/.axon/graph.db`.
+**Database location**: by default uses `<cwd>/.axon/graph.db`. Pass `--global` to walk up directories and fall back to `~/.axon/graph.db`.
 
 ## Tree Exploration
 
 Display graph as tree:
 
 ```bash
-axon tree                      # Current directory subtree
-axon tree --depth 2            # Limit depth
-axon tree --ids                # Show node IDs
-axon tree --types              # Show node types
-axon tree --type fs:file       # Filter by type
+axon tree                      # Current directory subtree (depth 3, IDs + types shown by default)
+axon tree --depth 2            # Limit depth (0 = unlimited)
+axon tree --type fs:file       # Filter by node type (glob: 'fs:*')
+axon tree --no-color           # Disable colored output
 ```
 
 ## Query with AQL
@@ -50,24 +50,55 @@ Search with filters:
 
 ```bash
 axon find --type fs:file       # All files
-axon find --name "main.go"     # By name
+axon find --name "main.go"     # Exact name match
 axon find --ext go             # By extension
+axon find --query "README*"    # Name wildcard pattern
+axon find --label important    # By label (repeatable, OR logic)
 axon find --global             # Search entire graph (not just CWD subtree)
+axon find --count              # Just show the count
+axon find --show-parent        # Show parent chain to CWD or root
+axon find --output json        # Output format: path, uri, json, table
+```
+
+## Natural Language Search
+
+```bash
+axon search "what is the Indexer interface"
+axon search "who calls NewNode"
+axon search "what implements Storage"
+axon search --semantic "handles token budget overflow"  # vector search (requires --embed)
+axon search --type go:func "error recovery"
+```
+
+## Context Generation
+
+```bash
+axon context --task "add caching to Storage interface"
+axon context --task "refactor Query method" --tokens 8000
+axon context --task "fix NewNode" --output json
+echo "add error handling to Flush" | axon context
 ```
 
 ## Node Details
 
 ```bash
-axon show <node-id>            # Show node details
+axon show <node-id>            # Show node details (4-char prefix is enough)
+```
+
+## Database Info
+
+```bash
+axon info                      # Dashboard: status, location, statistics
+axon info -o json
 ```
 
 ## Introspection
 
 ```bash
 axon stats                     # Database statistics
-axon labels                    # List all labels
-axon types                     # List all node types
-axon edges                     # List all edge types
+axon labels                    # List all labels with counts
+axon types                     # List all node types with counts
+axon edges                     # List all edge types with counts
 axon gc                        # Run garbage collection
 ```
 
@@ -76,6 +107,7 @@ axon gc                        # Run garbage collection
 - `fs:file`, `fs:dir` - Filesystem
 - `vcs:repo`, `vcs:branch`, `vcs:tag`, `vcs:commit` - Git
 - `md:document`, `md:section`, `md:heading` - Markdown
+- `go:package`, `go:func`, `go:struct`, `go:interface`, `go:ref` - Go code
 
 ## Edge Types
 
@@ -85,3 +117,5 @@ axon gc                        # Run garbage collection
 - `references` - Cross-reference
 - `links_to` - Hyperlink
 - `imports` - Import statement
+- `implements` - Struct implements interface
+- `defines` - Package defines symbol
