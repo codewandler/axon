@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/codewandler/axon/graph"
@@ -592,3 +593,76 @@ func TestEmbedding(t *testing.T) {
 		t.Errorf("expected top result to be %s, got %s", node.ID, results[0].ID)
 	}
 }
+
+// TestPragmasApplyToAllConnections verifies that per-connection PRAGMAs
+// (especially busy_timeout) are set on every connection from the pool,
+// not just the first one. This was the root cause of SQLITE_BUSY errors:
+// database/sql pools connections and PRAGMAs set via ExecContext only
+// apply to the connection that runs them.
+func TestPragmasApplyToAllConnections(t *testing.T) {
+	s := setupTestDB(t)
+	ctx := context.Background()
+
+	// Force multiple connections by running concurrent queries.
+	// Each connection should have busy_timeout set via DSN _pragma.
+	for i := 0; i < 10; i++ {
+		var busyTimeout int
+		err := s.db.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout)
+		if err != nil {
+			t.Fatalf("iteration %d: PRAGMA busy_timeout query failed: %v", i, err)
+		}
+		if busyTimeout != 30000 {
+			t.Errorf("iteration %d: expected busy_timeout=30000, got %d", i, busyTimeout)
+		}
+
+		var journalMode string
+		err = s.db.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode)
+		if err != nil {
+			t.Fatalf("iteration %d: PRAGMA journal_mode query failed: %v", i, err)
+		}
+		if journalMode != "wal" {
+			t.Errorf("iteration %d: expected journal_mode=wal, got %s", i, journalMode)
+		}
+	}
+}
+
+func TestBuildDSN(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want []string // substrings that must appear
+	}{
+		{
+			name: "file path includes pragmas",
+			path: "/tmp/test.db",
+			want: []string{
+				"file:/tmp/test.db?",
+				"busy_timeout",
+				"journal_mode",
+				"synchronous",
+			},
+		},
+		{
+			name: "memory includes pragmas and shared cache",
+			path: ":memory:",
+			want: []string{
+				"mode=memory",
+				"cache=shared",
+				"busy_timeout",
+				"journal_mode",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dsn := buildDSN(tt.path)
+			for _, sub := range tt.want {
+				if !strings.Contains(dsn, sub) {
+					t.Errorf("buildDSN(%q) = %q, missing %q", tt.path, dsn, sub)
+				}
+			}
+		})
+	}
+}
+

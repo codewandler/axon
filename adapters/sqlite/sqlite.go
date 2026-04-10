@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -61,18 +62,42 @@ type Storage struct {
 
 var memoryDBCounter uint64
 
+// perConnectionPragmas are applied on every new connection via the DSN
+// _pragma parameter. This is critical because database/sql uses a connection
+// pool and PRAGMAs are per-connection settings — setting them in init() only
+// affects one connection while other pooled connections use SQLite defaults.
+var perConnectionPragmas = []string{
+	"busy_timeout(30000)",
+	"journal_mode(WAL)",
+	"synchronous(NORMAL)",
+	"cache_size(10000)",
+	"temp_store(MEMORY)",
+}
+
+// buildDSN constructs a modernc.org/sqlite DSN with per-connection PRAGMAs.
+func buildDSN(path string) string {
+	if path == ":memory:" {
+		id := atomic.AddUint64(&memoryDBCounter, 1)
+		base := fmt.Sprintf("file:memdb%d?mode=memory&cache=shared", id)
+		for _, p := range perConnectionPragmas {
+			base += "&_pragma=" + url.QueryEscape(p)
+		}
+		return base
+	}
+
+	// For file-based databases, build a URI DSN so we can append query params.
+	qs := url.Values{}
+	for _, p := range perConnectionPragmas {
+		qs.Add("_pragma", p)
+	}
+	return "file:" + path + "?" + qs.Encode()
+}
+
 // New creates a new SQLite storage at the given path.
 // The database file will be created if it doesn't exist.
 // For in-memory databases, use ":memory:" as the path.
 func New(path string) (*Storage, error) {
-	// For in-memory databases, use shared cache mode so all connections
-	// see the same database. Without this, each connection gets its own
-	// empty database. We use a unique name per instance to isolate tests.
-	dsn := path
-	if path == ":memory:" {
-		id := atomic.AddUint64(&memoryDBCounter, 1)
-		dsn = fmt.Sprintf("file:memdb%d?mode=memory&cache=shared", id)
-	}
+	dsn := buildDSN(path)
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -121,17 +146,10 @@ func (s *Storage) init() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Enable WAL mode and performance settings
-	_, err := s.db.ExecContext(ctx, `
-		PRAGMA journal_mode=WAL;
-		PRAGMA synchronous=NORMAL;
-		PRAGMA cache_size=10000;
-		PRAGMA temp_store=MEMORY;
-		PRAGMA busy_timeout=30000;
-	`)
-	if err != nil {
-		return fmt.Errorf("setting pragmas: %w", err)
-	}
+	// PRAGMAs (busy_timeout, journal_mode, synchronous, etc.) are set
+	// per-connection via DSN _pragma parameters in buildDSN().
+	// This ensures every connection from the database/sql pool gets
+	// the same settings, not just the first one.
 
 	// Run migrations
 	if err := s.migrate(ctx); err != nil {
@@ -476,20 +494,23 @@ func isSQLiteBusy(err error) bool {
 }
 
 // flushBatch writes a batch of operations to the database.
-// On SQLITE_BUSY it retries up to 3 times with exponential backoff.
+// On SQLITE_BUSY it retries up to 5 times with exponential backoff.
+// With busy_timeout=30s set per-connection via DSN, SQLITE_BUSY should be
+// rare (only when another process holds a lock >30s). The retries here are
+// a defense-in-depth measure.
 // Returns any permanent error so the caller (flushLoop) can propagate it to Flush().
 func (s *Storage) flushBatch(batch []writeOp) error {
 	if len(batch) == 0 {
 		return nil
 	}
 
-	const maxRetries = 3
+	const maxRetries = 5
 	var lastErr error
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff: 50ms, 100ms
-			time.Sleep(time.Duration(50*attempt) * time.Millisecond)
+			// Exponential backoff: 100ms, 200ms, 400ms, 800ms
+			time.Sleep(time.Duration(100*(1<<(attempt-1))) * time.Millisecond)
 		}
 
 		lastErr = s.tryFlushBatch(batch)
@@ -981,6 +1002,11 @@ func (s *Storage) buildNodeFilterArgs(query *string, filter graph.NodeFilter) []
 			args = append(args, id)
 		}
 		*query += ` AND id IN (` + strings.Join(placeholders, ", ") + `)`
+	}
+
+	if filter.Generation != "" {
+		*query += ` AND generation = ?`
+		args = append(args, filter.Generation)
 	}
 
 	// Root filter: only nodes with no incoming containment edges
