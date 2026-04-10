@@ -25,6 +25,7 @@ import (
 	"github.com/codewandler/axon/indexer/golang"
 	"github.com/codewandler/axon/indexer/markdown"
 	"github.com/codewandler/axon/indexer/project"
+	todo "github.com/codewandler/axon/indexer/todo"
 	"github.com/codewandler/axon/progress"
 	"github.com/codewandler/axon/types"
 )
@@ -134,6 +135,7 @@ func New(cfg Config) (*Axon, error) {
 	types.RegisterMarkdownTypes(registry)
 	types.RegisterGoTypes(registry)
 	types.RegisterProjectTypes(registry)
+	types.RegisterTodoTypes(registry)
 
 	// Create graph
 	g := graph.New(cfg.Storage, registry)
@@ -155,6 +157,7 @@ func New(cfg Config) (*Axon, error) {
 	idxRegistry.Register(golang.New())
 	idxRegistry.Register(markdown.New())
 	idxRegistry.Register(project.New())
+	idxRegistry.Register(todo.New())
 	// Note: tagger is now called directly by fs indexer, not via events
 
 	// Register embedding PostIndexer if a provider is configured
