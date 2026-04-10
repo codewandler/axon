@@ -7,6 +7,32 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.14.0] — 2026-04-11
+
+### Added
+
+- **Call graph edges** — the Go indexer now emits deduplicated
+  `go:func/go:method -[calls]-> go:func/go:method` edges. A function
+  that calls the same target N times produces exactly one edge, keeping
+  the call graph compact. Closes #13.
+- **Caller context on `go:ref` nodes** — every `go:ref` node now carries
+  three new JSON fields:
+  - `caller_uri` — URI of the `go:func` or `go:method` that contains the usage
+  - `caller_name` — short name of the caller
+  - `caller_type` — `go:func` or `go:method` (empty for package-scope usages)
+  The enclosing function is found via a binary search over a sorted slice of
+  function AST extents built once per package.
+- **`embeds` edges for struct embedding** — a new `indexEmbeds` pass (analogous
+  to `indexImplementations`) emits `go:struct -[embeds]-> go:struct` for every
+  anonymous (embedded) field whose type is defined within the same module.
+  Both value embeds (`Base`) and pointer embeds (`*Base`) are handled.
+  Cross-module embeddings (e.g. `sync.Mutex`) are intentionally skipped.
+- **`EdgeCalls` and `EdgeEmbeds`** constants added to `types/edges.go` and
+  registered in `RegisterCommonEdges`; re-registered in `RegisterGoTypes` with
+  Go-specific `FromTypes`/`ToTypes` constraints for schema introspection.
+
+---
+
 ## [0.13.0] — 2026-04-10
 
 ### Added
