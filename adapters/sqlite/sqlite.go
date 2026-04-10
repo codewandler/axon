@@ -1023,6 +1023,16 @@ func (s *Storage) buildNodeFilterArgs(query *string, filter graph.NodeFilter) []
 		)`
 	}
 
+	// ExcludeTypes: node type must not be any of the listed values (OR logic)
+	if len(filter.ExcludeTypes) > 0 {
+		placeholders := make([]string, len(filter.ExcludeTypes))
+		for i, t := range filter.ExcludeTypes {
+			placeholders[i] = "?"
+			args = append(args, t)
+		}
+		*query += ` AND type NOT IN (` + strings.Join(placeholders, ", ") + `)`
+	}
+
 	return args
 }
 
@@ -1677,6 +1687,11 @@ func cosineSimilarity(a, b []float32) float32 {
 func nodeMatchesFilter(node *graph.Node, filter *graph.NodeFilter) bool {
 	if filter.Type != "" && node.Type != filter.Type {
 		return false
+	}
+	for _, excluded := range filter.ExcludeTypes {
+		if node.Type == excluded {
+			return false
+		}
 	}
 	if filter.URIPrefix != "" && !strings.HasPrefix(node.URI, filter.URIPrefix) {
 		return false

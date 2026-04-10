@@ -666,3 +666,99 @@ func TestBuildDSN(t *testing.T) {
 	}
 }
 
+
+func TestFindNodes_ExcludeTypes(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	_ = s.PutNode(ctx, graph.NewNode("fs:file").WithURI("file:///a.go"))
+	_ = s.PutNode(ctx, graph.NewNode("fs:dir").WithURI("file:///dir"))
+	_ = s.PutNode(ctx, graph.NewNode("vcs:commit").WithURI("git+file:///repo/commit/abc"))
+	_ = s.PutNode(ctx, graph.NewNode("vcs:commit").WithURI("git+file:///repo/commit/def"))
+	_ = s.PutNode(ctx, graph.NewNode("go:func").WithURI("go+file:///a.go#Foo"))
+
+	// Single type excluded
+	nodes, err := s.FindNodes(ctx, graph.NodeFilter{
+		ExcludeTypes: []string{"vcs:commit"},
+	}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes: %v", err)
+	}
+	for _, n := range nodes {
+		if n.Type == "vcs:commit" {
+			t.Errorf("excluded type vcs:commit appeared in results: %s", n.URI)
+		}
+	}
+	if len(nodes) != 3 {
+		t.Errorf("expected 3 nodes after excluding vcs:commit, got %d", len(nodes))
+	}
+
+	// Multiple types excluded
+	nodes, err = s.FindNodes(ctx, graph.NodeFilter{
+		ExcludeTypes: []string{"vcs:commit", "fs:dir"},
+	}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes multi-exclude: %v", err)
+	}
+	for _, n := range nodes {
+		if n.Type == "vcs:commit" || n.Type == "fs:dir" {
+			t.Errorf("excluded type %q appeared in results", n.Type)
+		}
+	}
+	if len(nodes) != 2 {
+		t.Errorf("expected 2 nodes, got %d", len(nodes))
+	}
+
+	// ExcludeTypes conflicts with Type → zero results
+	nodes, err = s.FindNodes(ctx, graph.NodeFilter{
+		Type:         "fs:file",
+		ExcludeTypes: []string{"fs:file"},
+	}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes conflict: %v", err)
+	}
+	if len(nodes) != 0 {
+		t.Errorf("expected 0 nodes when included type is also excluded, got %d", len(nodes))
+	}
+}
+
+func TestFindSimilar_ExcludeTypes(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	commit := graph.NewNode("vcs:commit").WithURI("git+file:///repo/commit/abc").WithKey("abc")
+	goFunc := graph.NewNode("go:func").WithURI("go+file:///main.go#Foo").WithKey("Foo")
+
+	_ = s.PutNode(ctx, commit)
+	_ = s.PutNode(ctx, goFunc)
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	embedding := []float32{0.1, 0.9, 0.1, 0.1}
+	_ = s.PutEmbedding(ctx, commit.ID, embedding)
+	_ = s.PutEmbedding(ctx, goFunc.ID, embedding)
+
+	// Without filter: both returned
+	results, err := s.FindSimilar(ctx, embedding, 10, nil)
+	if err != nil {
+		t.Fatalf("FindSimilar no filter: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results without filter, got %d", len(results))
+	}
+
+	// With ExcludeTypes: commit suppressed
+	results, err = s.FindSimilar(ctx, embedding, 10, &graph.NodeFilter{
+		ExcludeTypes: []string{"vcs:commit"},
+	})
+	if err != nil {
+		t.Fatalf("FindSimilar with ExcludeTypes: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result after excluding vcs:commit, got %d", len(results))
+	}
+	if results[0].Type == "vcs:commit" {
+		t.Errorf("excluded vcs:commit appeared in similarity results")
+	}
+}

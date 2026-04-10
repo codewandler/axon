@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	findType       []string
-	findName       string
+	findType        []string
+	findExcludeType []string
+	findName        string
 	findQuery      string
 	findData       []string
 	findLabels     []string
@@ -70,6 +71,7 @@ Examples:
 
 func init() {
 	findCmd.Flags().StringArrayVarP(&findType, "type", "t", nil, "Node type pattern (glob: 'fs:*', 'md:*'). Can be repeated.")
+	findCmd.Flags().StringArrayVar(&findExcludeType, "exclude-type", nil, "Exclude node type from results (e.g. vcs:commit). Can be repeated.")
 	findCmd.Flags().StringVar(&findName, "name", "", "Exact name match")
 	findCmd.Flags().StringVarP(&findQuery, "query", "q", "", "Name pattern with wildcards ('README*', '*test*')")
 	findCmd.Flags().StringArrayVar(&findData, "data", nil, "Match on data field (key=value). Can be repeated.")
@@ -205,6 +207,20 @@ func runFind(cmd *cobra.Command, args []string) error {
 			conditions = append(conditions, extConditions[0])
 		} else {
 			conditions = append(conditions, aql.Or(extConditions...))
+		}
+	}
+
+	// ExcludeTypes: NOT (type = a OR type = b ...)
+	if len(findExcludeType) > 0 {
+		var excl []aql.Expression
+		for _, t := range findExcludeType {
+			excl = append(excl, aql.Type.Eq(t))
+		}
+		if len(excl) == 1 {
+			conditions = append(conditions, aql.Not(excl[0]))
+		} else {
+			// Wrap in Paren so NOT applies to the whole OR: NOT (a OR b)
+			conditions = append(conditions, aql.Not(aql.Paren(aql.Or(excl...))))
 		}
 	}
 
@@ -452,6 +468,7 @@ func runSemanticFind(query string) error {
 	}
 	filter.Labels = findLabels
 	filter.Extensions = findExt
+	filter.ExcludeTypes = findExcludeType
 
 	// Local scope: restrict to nodes whose URI is under the CWD.
 	// Only applied when --type is set, so we can pick the correct URI scheme.
