@@ -7,6 +7,29 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.13.0] — 2026-04-10
+
+### Added
+
+- **Semantic commit parser** (`indexer/git/commitparser`) — new sub-package that
+  parses [Conventional Commits](https://www.conventionalcommits.org/) v1.0
+  messages into structured fields. Non-conforming messages fall back gracefully
+  (empty `commit_type`, full first line as `subject`). Closes #8.
+- **`CommitData` structured fields** — six new JSON fields on every `vcs:commit`
+  node populated by the parser:
+  - `commit_type` — e.g. `feat`, `fix`, `chore` (empty for non-CC commits)
+  - `scope` — optional scope in parentheses, e.g. `aql`, `cli`
+  - `breaking` — `true` when `!` suffix or `BREAKING CHANGE` footer present
+  - `subject` — description after the type/scope prefix (equals `message` for non-CC)
+  - `footers` — all git trailer key/value pairs (`map[string][]string`)
+  - `refs` — deduplicated ticket/issue references from the `Refs:` footer
+- **AQL use cases unlocked** — queries like
+  `WHERE data.commit_type = 'fix' AND data.scope = 'aql'`,
+  `WHERE data.breaking = true`,
+  and `WHERE data.refs CONTAINS 'DEV-399'` now work out of the box.
+
+---
+
 ## [0.12.1] — 2026-04-10
 
 ### Fixed

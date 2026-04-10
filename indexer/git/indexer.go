@@ -12,6 +12,7 @@ import (
 
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
+	"github.com/codewandler/axon/indexer/git/commitparser"
 	"github.com/codewandler/axon/progress"
 	"github.com/codewandler/axon/types"
 )
@@ -300,12 +301,15 @@ func (i *Indexer) indexCommits(ctx context.Context, ictx *indexer.Context, repo 
 		sha := commit.Hash.String()
 		commitURI := types.CommitToURI(repoPath, sha)
 
-		// Split message into subject + body
-		msg := strings.TrimSpace(commit.Message)
-		subject, body := msg, ""
-		if idx := strings.Index(msg, "\n"); idx != -1 {
-			subject = msg[:idx]
-			body = strings.TrimSpace(msg[idx+1:])
+		// Parse the full commit message into structured fields.
+		parsed := commitparser.Parse(commit.Message)
+
+		// Raw first line (kept for backward compatibility with existing nodes).
+		// For conventional commits this is the full "type(scope): subject" line.
+		// For non-conventional commits it equals parsed.Subject.
+		rawFirstLine := strings.TrimSpace(commit.Message)
+		if idx := strings.Index(rawFirstLine, "\n"); idx != -1 {
+			rawFirstLine = rawFirstLine[:idx]
 		}
 
 		// Parent SHAs
@@ -333,11 +337,11 @@ func (i *Indexer) indexCommits(ctx context.Context, ictx *indexer.Context, repo 
 		commitNode := graph.NewNode(types.TypeCommit).
 			WithURI(commitURI).
 			WithKey(sha).
-			WithName(commitName(sha, subject)).
+			WithName(commitName(sha, rawFirstLine)).
 			WithData(types.CommitData{
 				SHA:            sha,
-				Message:        subject,
-				Body:           body,
+				Message:        rawFirstLine,
+				Body:           parsed.Body,
 				AuthorName:     commit.Author.Name,
 				AuthorEmail:    commit.Author.Email,
 				AuthorDate:     commit.Author.When,
@@ -348,6 +352,12 @@ func (i *Indexer) indexCommits(ctx context.Context, ictx *indexer.Context, repo 
 				FilesChanged:   filesChanged,
 				Insertions:     insertions,
 				Deletions:      deletions,
+				CommitType:     parsed.CommitType,
+				Scope:          parsed.Scope,
+				Breaking:       parsed.Breaking,
+				Subject:        parsed.Subject,
+				Footers:        parsed.Footers,
+				Refs:           parsed.Refs,
 			})
 
 		if err := ictx.Emitter.EmitNode(ctx, commitNode); err != nil {

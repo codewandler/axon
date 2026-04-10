@@ -715,3 +715,177 @@ func TestCommitName(t *testing.T) {
 		})
 	}
 }
+
+// setupTestRepoWithCC creates a repo with a single conventional commit message
+// that includes a scope, body, Refs footer, and a second plain commit.
+func setupTestRepoWithCC(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	worktree, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+
+	author := &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()}
+
+	// First commit: plain (non-CC)
+	if err := os.WriteFile(filepath.Join(dir, "readme.md"), []byte("hello"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := worktree.Add("readme.md"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := worktree.Commit("Initial commit", &gogit.CommitOptions{Author: author}); err != nil {
+		t.Fatalf("Commit (initial): %v", err)
+	}
+
+	// Second commit: full conventional commit with Refs footer
+	if err := os.WriteFile(filepath.Join(dir, "parser.go"), []byte("package main"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := worktree.Add("parser.go"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	ccMsg := "feat(parser): add semantic commit parsing\n\nThis enables structured AQL queries on commit data.\n\nRefs: #8, DEV-100"
+	if _, err := worktree.Commit(ccMsg, &gogit.CommitOptions{Author: author}); err != nil {
+		t.Fatalf("Commit (CC): %v", err)
+	}
+
+	return dir
+}
+
+func TestIndexerConventionalCommit(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestRepoWithCC(t)
+	g := setupGraph(t)
+
+	idx := New()
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+	ictx := &indexer.Context{
+		Root:       types.RepoPathToURI(dir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	gitDir := filepath.Join(dir, ".git")
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(gitDir),
+		Path:     gitDir,
+		Name:     ".git",
+		NodeType: types.TypeDir,
+		NodeID:   "test-git-dir-id",
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	commits, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeCommit}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes: %v", err)
+	}
+	if len(commits) != 2 {
+		t.Fatalf("expected 2 commits, got %d", len(commits))
+	}
+
+	// Find the CC commit (it's the most recent, so first in git log order).
+	var ccCommit *graph.Node
+	for i := range commits {
+		data, ok := commits[i].Data.(types.CommitData)
+		if !ok {
+			// SQLite may deserialise as map; convert via JSON.
+			continue
+		}
+		if data.CommitType == "feat" {
+			ccCommit = commits[i]
+			break
+		}
+	}
+	if ccCommit == nil {
+		// Try the map path (nodes loaded from SQLite come back as map[string]any).
+		for i := range commits {
+			if m, ok := commits[i].Data.(map[string]any); ok {
+				if ct, _ := m["commit_type"].(string); ct == "feat" {
+					ccCommit = commits[i]
+					break
+				}
+			}
+		}
+	}
+	if ccCommit == nil {
+		t.Fatal("could not find the conventional commit node (commit_type=feat)")
+	}
+
+	// Validate via the typed or map path.
+	switch d := ccCommit.Data.(type) {
+	case types.CommitData:
+		if d.CommitType != "feat" {
+			t.Errorf("CommitType = %q, want \"feat\"", d.CommitType)
+		}
+		if d.Scope != "parser" {
+			t.Errorf("Scope = %q, want \"parser\"", d.Scope)
+		}
+		if d.Breaking {
+			t.Error("Breaking should be false")
+		}
+		if d.Subject != "add semantic commit parsing" {
+			t.Errorf("Subject = %q, want \"add semantic commit parsing\"", d.Subject)
+		}
+		if len(d.Refs) != 2 {
+			t.Errorf("Refs = %v, want [\"#8\" \"DEV-100\"]", d.Refs)
+		} else {
+			if d.Refs[0] != "#8" {
+				t.Errorf("Refs[0] = %q, want \"#8\"", d.Refs[0])
+			}
+			if d.Refs[1] != "DEV-100" {
+				t.Errorf("Refs[1] = %q, want \"DEV-100\"", d.Refs[1])
+			}
+		}
+	case map[string]any:
+		if ct, _ := d["commit_type"].(string); ct != "feat" {
+			t.Errorf("commit_type = %q, want \"feat\"", ct)
+		}
+		if sc, _ := d["scope"].(string); sc != "parser" {
+			t.Errorf("scope = %q, want \"parser\"", sc)
+		}
+		if subj, _ := d["subject"].(string); subj != "add semantic commit parsing" {
+			t.Errorf("subject = %q, want \"add semantic commit parsing\"", subj)
+		}
+		// Refs comes back as []any from JSON.
+		if refs, ok := d["refs"].([]any); ok {
+			if len(refs) != 2 {
+				t.Errorf("refs = %v, want 2 elements", refs)
+			}
+		} else {
+			t.Errorf("refs field missing or wrong type in map: %T %v", d["refs"], d["refs"])
+		}
+	default:
+		t.Fatalf("unexpected data type %T", ccCommit.Data)
+	}
+
+	// Verify the non-CC commit has empty CommitType.
+	for i := range commits {
+		switch d := commits[i].Data.(type) {
+		case types.CommitData:
+			if d.Message == "Initial commit" && d.CommitType != "" {
+				t.Errorf("non-CC commit should have empty CommitType, got %q", d.CommitType)
+			}
+		case map[string]any:
+			if msg, _ := d["message"].(string); msg == "Initial commit" {
+				if ct, _ := d["commit_type"].(string); ct != "" {
+					t.Errorf("non-CC commit should have empty commit_type, got %q", ct)
+				}
+			}
+		}
+	}
+}

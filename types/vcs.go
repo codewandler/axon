@@ -48,7 +48,7 @@ type TagData struct {
 // CommitData holds data for a commit node.
 type CommitData struct {
 	SHA            string    `json:"sha"`
-	Message        string    `json:"message"`        // First line only (subject)
+	Message        string    `json:"message"`        // First line only (raw subject)
 	Body           string    `json:"body,omitempty"` // Full body after subject
 	AuthorName     string    `json:"author_name"`
 	AuthorEmail    string    `json:"author_email"`
@@ -60,6 +60,23 @@ type CommitData struct {
 	FilesChanged   int       `json:"files_changed"`
 	Insertions     int       `json:"insertions"`
 	Deletions      int       `json:"deletions"`
+
+	// Conventional Commits structured fields (populated by the commit parser).
+	// CommitType is the conventional commit type (e.g. "feat", "fix").
+	// Empty for non-conventional commits.
+	CommitType string `json:"commit_type,omitempty"`
+	// Scope is the optional scope in parentheses (e.g. "aql", "cli").
+	Scope string `json:"scope,omitempty"`
+	// Breaking is true when the commit includes a breaking-change marker.
+	Breaking bool `json:"breaking,omitempty"`
+	// Subject is the description part of the first line (after type/scope).
+	// For non-conventional commits this equals Message.
+	Subject string `json:"subject,omitempty"`
+	// Footers contains all git trailer key/value pairs from the commit footer.
+	Footers map[string][]string `json:"footers,omitempty"`
+	// Refs contains deduplicated ticket/issue references extracted from the
+	// "Refs:" footer (e.g. ["#8", "DEV-100"]).
+	Refs []string `json:"refs,omitempty"`
 }
 
 // CommitToURI returns the URI for a commit node.
