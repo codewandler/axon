@@ -7,6 +7,47 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.10.1] — 2026-04-10
+
+### Added
+
+- **`CommitData.Description()`** — new public method on the library type
+  (`types/vcs.go`). Returns a human-readable one-liner for a commit:
+  `sha8 -- subject  by author (YYYY-MM-DD, N files)`. All parts are omitted
+  gracefully when the underlying field is empty/zero. Any library consumer
+  can call this directly; no reimplementation needed. Closes #7.
+- **`cmd/axon/find_test.go`** and **`types/vcs_test.go`** — new test files
+  covering `CommitData.Description()`, `commitDisplay`, `nodeDisplay`, and
+  `getNodeSummary` commit paths (16 test cases total).
+
+### Changed
+
+- **`vcs:commit` node `Name`** field is now `sha8 -- subject` (stored in the
+  graph). Benefits all output formats automatically: table view, tree view,
+  embedding quality, and edge listings.
+- **`axon find`** output for commit nodes now shows
+  `sha8 -- subject  by author (YYYY-MM-DD, N files)` instead of the raw 40-char
+  SHA. Works for both regular find and semantic search (`--embed`).
+- **`axon show`** commit detail view now shows structured fields — Subject,
+  Body, Author (with email), Date, Files changed (+/- lines), Parent count.
+- **Edge listings** in `axon show` now show `sha8 -- subject (vcs:commit)`
+  instead of just `(vcs:commit)`.
+- **Agent plan documents** for issue #7 added to `.agents/plans/`.
+
+### Fixed
+
+- **Singular/plural**: `CommitData.Description()` now correctly outputs
+  `"1 file"` instead of `"1 files"` for single-file commits.
+- **SHA guard**: `getNodeSummary` typed `CommitData` case now guards
+  `len(SHA) >= 8` consistently with every other caller in the codebase.
+- **Date format consistency**: `printMapData` TypeCommit path now parses the
+  stored RFC3339 date and formats it as `YYYY-MM-DD`, matching the typed path.
+- **Type safety**: the `sha` branch in `getNodeSummary` map handler is now
+  gated behind `n.Type == types.TypeCommit`; future node types with a `sha`
+  field are unaffected.
+
+---
+
 ## [0.10.0] — 2026-04-10
 
 ### Added
