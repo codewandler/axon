@@ -9,6 +9,7 @@ import (
 
 	"github.com/codewandler/axon"
 	"github.com/codewandler/axon/adapters/sqlite"
+	"github.com/codewandler/axon/indexer/embeddings"
 )
 
 const (
@@ -171,6 +172,8 @@ type CommandContext struct {
 	DBLoc *DBLocation
 	// Storage is the SQLite storage instance.
 	Storage *sqlite.Storage
+	// EmbeddingProvider is an optional embedding provider for semantic search.
+	EmbeddingProvider embeddings.Provider
 	// ax is the Axon instance (optional, created lazily).
 	ax *axon.Axon
 }
@@ -180,10 +183,14 @@ func (c *CommandContext) Axon() (*axon.Axon, error) {
 	if c.ax != nil {
 		return c.ax, nil
 	}
-	ax, err := axon.New(axon.Config{
+	cfg := axon.Config{
 		Dir:     c.Cwd,
 		Storage: c.Storage,
-	})
+	}
+	if c.EmbeddingProvider != nil {
+		cfg.EmbeddingProvider = c.EmbeddingProvider
+	}
+	ax, err := axon.New(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create axon instance: %w", err)
 	}

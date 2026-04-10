@@ -1315,6 +1315,11 @@ func (s *Storage) buildNodeFilterArgsWithPrefix(query *string, filter graph.Node
 		*query += ` AND (` + strings.Join(extConditions, " OR ") + `)`
 	}
 
+	if filter.Generation != "" {
+		*query += fmt.Sprintf(` AND %s.generation = ?`, prefix)
+		args = append(args, filter.Generation)
+	}
+
 	return args
 }
 

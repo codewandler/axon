@@ -45,7 +45,9 @@ func (i *Indexer) HandleEvent(ctx context.Context, ictx *indexer.Context, event 
 	return nil
 }
 
-// PostIndex implements the PostIndexer interface.
+// PostIndex implements the PostIndexer interface. It embeds only the nodes that
+// were written during the current indexing run (filtered by ictx.Generation),
+// so re-index triggered by a file watcher does not re-embed the entire corpus.
 func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 	storage := ictx.Graph.Storage()
 
@@ -63,7 +65,10 @@ func (i *Indexer) PostIndex(ctx context.Context, ictx *indexer.Context) error {
 	}
 
 	for _, nodeType := range embedTypes {
-		nodes, err := storage.FindNodes(ctx, graph.NodeFilter{Type: nodeType}, graph.QueryOptions{})
+		nodes, err := storage.FindNodes(ctx, graph.NodeFilter{
+			Type:       nodeType,
+			Generation: ictx.Generation, // only nodes written in this run
+		}, graph.QueryOptions{})
 		if err != nil {
 			return err
 		}

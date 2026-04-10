@@ -7,6 +7,32 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **SQLite SQLITE_BUSY errors eliminated** — PRAGMAs (including `busy_timeout=30s`)
+  are now set per-connection via DSN `_pragma` parameters instead of a one-shot
+  `ExecContext`. The `database/sql` connection pool could previously hand out
+  connections with default `busy_timeout=0`, causing immediate SQLITE_BUSY on any
+  lock contention. Retry backoff improved to 5 attempts with exponential delays.
+
+### Added
+
+- **All hidden files/dirs excluded from indexing** — entries starting with `.`
+  are now unconditionally skipped by the FS indexer (hidden directories still get
+  a minimal node for deletion detection). The watcher also skips hidden dirs and
+  filters hidden-path events, saving inotify watches and avoiding wasted re-indexes.
+- **`axon watch --embed`** — generates embeddings on each re-index, scoped to
+  only the nodes written in that run (via a new `Generation` filter on
+  `NodeFilter`), so incremental re-indexes don't re-embed the entire corpus.
+
+### Changed
+
+- `DefaultFSIgnore` cleaned up — dot-prefixed entries (`.git`, `.axon`, `.idea`,
+  `.vscode`, `.DS_Store`, `.venv`, `.virtualenv`, `.tox`, `.pytest_cache`,
+  `.mypy_cache`) removed since the blanket hidden-file rule now covers them.
+
 ## [0.5.0] — 2026-04-10
 
 ### Added

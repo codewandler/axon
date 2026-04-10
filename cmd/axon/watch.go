@@ -24,12 +24,16 @@ Press Ctrl+C to stop watching.`,
 	RunE: runWatch,
 }
 
-var flagWatchDebounce time.Duration
-var flagWatchQuiet bool
+var (
+	flagWatchDebounce time.Duration
+	flagWatchQuiet    bool
+	flagWatchEmbed    bool
+)
 
 func init() {
 	watchCmd.Flags().DurationVar(&flagWatchDebounce, "debounce", 150*time.Millisecond, "debounce duration for change events")
 	watchCmd.Flags().BoolVar(&flagWatchQuiet, "quiet", false, "suppress per-change output")
+	watchCmd.Flags().BoolVar(&flagWatchEmbed, "embed", false, "Generate embeddings on each re-index (requires Ollama with nomic-embed-text)")
 }
 
 func runWatch(cmd *cobra.Command, args []string) error {
@@ -48,6 +52,18 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer cmdCtx.Close()
+
+	// Optionally enable embedding generation
+	if flagWatchEmbed {
+		provider, err := resolveEmbeddingProvider()
+		if err != nil {
+			return err
+		}
+		cmdCtx.EmbeddingProvider = provider
+		if !flagWatchQuiet {
+			fmt.Fprintf(os.Stderr, "Embedding provider: %s\n", provider.Name())
+		}
+	}
 
 	ax, err := cmdCtx.Axon()
 	if err != nil {

@@ -15,6 +15,8 @@ type NodeFilter struct {
 	Labels      []string // Filter by labels (OR logic - node must have at least one)
 	Extensions  []string // Filter by file extension without dot (OR logic, e.g., "go", "py")
 	NodeIDs     []string // Filter to specific node IDs (OR logic)
+	Generation  string   // Filter by exact generation ID (empty = any). Pass indexer.Context.Generation
+	             // to scope a query to only nodes written in the current indexing run.
 	Root        bool     // Only nodes with no incoming containment edges (top-level roots)
 }
 
