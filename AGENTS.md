@@ -242,6 +242,7 @@ aql.FromPattern(aql.Pat(aql.N("dir").OfType(aql.NodeType.Dir).Build()).
 - `show` - Display node details
 - `search` - **Deprecated** — use `axon find "<query>"` instead
 - `impact` - Show blast radius of changing a symbol
+- `path` - Find shortest paths between two nodes (`--max-depth`, `--max-paths`, `--edge-type`, `-o json`)
 - `describe` - Show graph schema: node types, edge types, fields, and connection patterns (`-o json`, `--fields`)
 - `stats`, `labels`, `types`, `edges`, `gc` - Introspection and maintenance
 
