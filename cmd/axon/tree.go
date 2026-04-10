@@ -74,7 +74,11 @@ func runTree(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve database location (read-only, so forWrite=false)
-	dbLoc, err := resolveDB(flagDBDir, flagLocal, absPath, false)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	dbLoc, err := resolveDB(flagDBDir, flagGlobal, cwd, false)
 	if err != nil {
 		return err
 	}

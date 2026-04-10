@@ -60,7 +60,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve database location
-	dbLoc, err := resolveDB(flagDBDir, flagLocal, absPath, true)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+	dbLoc, err := resolveDB(flagDBDir, flagGlobal, cwd, true)
 	if err != nil {
 		return fmt.Errorf("failed to resolve database location: %w", err)
 	}

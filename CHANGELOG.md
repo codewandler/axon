@@ -7,6 +7,29 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Default DB lookup is now CWD-local; `--global` replaces `--local`** — the
+  old default walked up the directory tree and fell back to `~/.axon`;
+  this was surprising in nested projects. The new default resolves the
+  database strictly from `<CWD>/.axon`, returning an error if it is absent.
+  Pass `--global` to restore the walk-up behaviour (walk up, then fall back
+  to `~/.axon`). The old `--local` flag is removed. `axon init` and
+  `axon tree` now base resolution on the current working directory rather
+  than the path argument. Error messages updated to reflect the new
+  behaviour. (`cmd/axon/main.go`, `cmd/axon/db.go`, `cmd/axon/init.go`,
+  `cmd/axon/tree.go`)
+
+### Added
+
+- Unit tests for all `resolveDB` branches (default local, `--global`
+  walk-up, explicit `--db-dir`, and `forWrite` creation).
+  (`cmd/axon/db_test.go`)
+
+---
+
 ## [0.3.2] — 2026-04-10
 
 ### Fixed

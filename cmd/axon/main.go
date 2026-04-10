@@ -11,8 +11,8 @@ var version = "dev"
 
 // Global flags
 var (
-	flagDBDir string
-	flagLocal bool
+	flagDBDir  string
+	flagGlobal bool
 )
 
 var rootCmd = &cobra.Command{
@@ -32,8 +32,8 @@ func main() {
 
 func init() {
 	// Global persistent flags
-	rootCmd.PersistentFlags().StringVar(&flagDBDir, "db-dir", "", "directory containing the database (default: auto-lookup)")
-	rootCmd.PersistentFlags().BoolVar(&flagLocal, "local", false, "use local .axon directory in target path")
+	rootCmd.PersistentFlags().StringVar(&flagDBDir, "db-dir", "", "explicit directory containing the database")
+	rootCmd.PersistentFlags().BoolVar(&flagGlobal, "global", false, "search parent directories for a database, falling back to ~/.axon (opposite of default local-only behaviour)")
 
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(treeCmd)

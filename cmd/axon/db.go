@@ -17,7 +17,7 @@ const (
 )
 
 // ErrNoDatabase is returned when no database can be found.
-var ErrNoDatabase = errors.New("no database found. Run 'axon init' first")
+var ErrNoDatabase = errors.New("no database found in current directory. Run 'axon init' first, or use --global to search parent directories")
 
 // DBLocation contains information about a resolved database location.
 type DBLocation struct {
@@ -73,20 +73,19 @@ func findDB(startPath string) (*DBLocation, error) {
 	return nil, ErrNoDatabase
 }
 
-// resolveDB resolves the database location based on flags and auto-lookup.
+// resolveDB resolves the database location based on flags.
 //
 // Parameters:
 //   - dbDir: explicit --db-dir flag value (empty = not set)
-//   - local: --local flag (use <startPath>/.axon)
-//   - startPath: path to start lookup from (usually target path for init, CWD for read commands)
-//   - forWrite: if true and no DB found, returns global path and creates dir; if false, returns error
+//   - global: --global flag; walk up the directory tree then fall back to ~/.axon
+//   - startPath: directory to start lookup from (CWD for most commands)
+//   - forWrite: if true, create the directory when it doesn't exist
 //
 // Precedence:
 //  1. --db-dir flag (explicit directory)
-//  2. --local flag (startPath/.axon)
-//  3. Auto-lookup (walk up from startPath, then global)
-//  4. If forWrite and not found: create global
-func resolveDB(dbDir string, local bool, startPath string, forWrite bool) (*DBLocation, error) {
+//  2. --global flag (walk up from startPath, then ~/.axon fallback)
+//  3. Default: use startPath/.axon directly — no traversal
+func resolveDB(dbDir string, global bool, startPath string, forWrite bool) (*DBLocation, error) {
 	// 1. Explicit --db-dir flag
 	if dbDir != "" {
 		absDir, err := filepath.Abs(dbDir)
@@ -95,7 +94,6 @@ func resolveDB(dbDir string, local bool, startPath string, forWrite bool) (*DBLo
 		}
 		dbPath := filepath.Join(absDir, axonDBFile)
 
-		// For write operations, ensure directory exists
 		if forWrite {
 			if err := os.MkdirAll(absDir, 0755); err != nil {
 				return nil, err
@@ -109,72 +107,57 @@ func resolveDB(dbDir string, local bool, startPath string, forWrite bool) (*DBLo
 		}, nil
 	}
 
-	// 2. --local flag
-	if local {
-		absPath, err := filepath.Abs(startPath)
-		if err != nil {
-			return nil, err
-		}
-		localDir := filepath.Join(absPath, axonDir)
-		dbPath := filepath.Join(localDir, axonDBFile)
-
-		// For write operations, ensure directory exists
-		created := false
-		if forWrite {
-			if _, err := os.Stat(localDir); os.IsNotExist(err) {
-				if err := os.MkdirAll(localDir, 0755); err != nil {
-					return nil, err
-				}
-				created = true
-			}
-		}
-
-		return &DBLocation{
-			Path:     dbPath,
-			Dir:      localDir,
-			IsGlobal: false,
-			Created:  created,
-		}, nil
-	}
-
-	// 3. Auto-lookup
 	absPath, err := filepath.Abs(startPath)
 	if err != nil {
 		return nil, err
 	}
 
-	loc, err := findDB(absPath)
-	if err == nil {
-		return loc, nil
-	}
-
-	// 4. Not found - for write operations, use global
-	if forWrite {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return nil, err
+	// 2. --global: walk up the directory tree, then fall back to ~/.axon
+	if global {
+		loc, err := findDB(absPath)
+		if err == nil {
+			return loc, nil
 		}
 
-		globalDir := filepath.Join(homeDir, axonDir)
-		dbPath := filepath.Join(globalDir, axonDBFile)
+		if forWrite {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return nil, err
+			}
+			globalDir := filepath.Join(homeDir, axonDir)
+			dbPath := filepath.Join(globalDir, axonDBFile)
+			created := false
+			if _, err := os.Stat(globalDir); os.IsNotExist(err) {
+				if err := os.MkdirAll(globalDir, 0755); err != nil {
+					return nil, err
+				}
+				created = true
+			}
+			return &DBLocation{Path: dbPath, Dir: globalDir, IsGlobal: true, Created: created}, nil
+		}
 
+		return nil, ErrNoDatabase
+	}
+
+	// 3. Default: use startPath/.axon directly — no traversal
+	localDir := filepath.Join(absPath, axonDir)
+	dbPath := filepath.Join(localDir, axonDBFile)
+
+	if forWrite {
 		created := false
-		if _, err := os.Stat(globalDir); os.IsNotExist(err) {
-			if err := os.MkdirAll(globalDir, 0755); err != nil {
+		if _, err := os.Stat(localDir); os.IsNotExist(err) {
+			if err := os.MkdirAll(localDir, 0755); err != nil {
 				return nil, err
 			}
 			created = true
 		}
-
-		return &DBLocation{
-			Path:     dbPath,
-			Dir:      globalDir,
-			IsGlobal: true,
-			Created:  created,
-		}, nil
+		return &DBLocation{Path: dbPath, Dir: localDir, IsGlobal: false, Created: created}, nil
 	}
 
-	return nil, ErrNoDatabase
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, ErrNoDatabase
+	}
+	return &DBLocation{Path: dbPath, Dir: localDir, IsGlobal: false}, nil
 }
 
 // CommandContext holds common resources for CLI commands.
@@ -237,7 +220,7 @@ func openDB(forWrite bool) (*CommandContext, error) {
 		return nil, fmt.Errorf("failed to get current directory: %w", err)
 	}
 
-	dbLoc, err := resolveDB(flagDBDir, flagLocal, cwd, forWrite)
+	dbLoc, err := resolveDB(flagDBDir, flagGlobal, cwd, forWrite)
 	if err != nil {
 		return nil, err
 	}
