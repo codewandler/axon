@@ -1303,6 +1303,56 @@ func TestPattern_GroupBy(t *testing.T) {
 	}
 }
 
+// TestPattern_GroupBy_MultiCol tests SELECT with 2+ non-COUNT columns + COUNT(*)
+// in a pattern query. Regression test for issue #24: scan crash when SELECT
+// had 3+ columns ("expected 3 destination arguments in Scan, not 2").
+func TestPattern_GroupBy_MultiCol(t *testing.T) {
+	s, ctx := setupAQLTest(t)
+
+	// SELECT dir.name, dir.type, COUNT(*)
+	// FROM (dir:fs:dir)-[:contains]->(file:fs:file)
+	// GROUP BY dir.id ORDER BY COUNT(*) DESC
+	pattern := aql.Pat(aql.N("dir").OfTypeStr("fs:dir").Build()).
+		To(aql.Edge.Contains.ToEdgePattern(), aql.N("file").OfTypeStr("fs:file").Build()).
+		Build()
+
+	q := aql.Select(aql.Col("dir", "name"), aql.Col("dir", "type"), aql.Count()).
+		FromPattern(pattern).
+		GroupByCol("dir.id").
+		OrderByCount(true).
+		Build()
+
+	result, err := s.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Pattern GROUP BY multi-col query failed: %v", err)
+	}
+
+	if result.Type != graph.ResultTypeRows {
+		t.Errorf("expected ResultTypeRows, got %v", result.Type)
+	}
+
+	if len(result.Rows) != 2 {
+		t.Errorf("expected 2 rows (src, cmd), got %d: %v", len(result.Rows), result.Rows)
+	}
+
+	// Find src row and verify all three fields are present
+	var srcRow map[string]any
+	for _, row := range result.Rows {
+		if name, _ := row["dir.name"].(string); name == "src" {
+			srcRow = row
+		}
+	}
+	if srcRow == nil {
+		t.Fatal("expected a row with dir.name = 'src'")
+	}
+	if srcRow["dir.type"] != "fs:dir" {
+		t.Errorf("expected dir.type = fs:dir, got %v", srcRow["dir.type"])
+	}
+	if count, ok := srcRow["COUNT(*)"].(int64); !ok || count != 2 {
+		t.Errorf("expected COUNT(*) = 2 for src, got %v (%T)", srcRow["COUNT(*)"], srcRow["COUNT(*)"])
+	}
+}
+
 // Test Explain for pattern query
 func TestPattern_Explain(t *testing.T) {
 	s, ctx := setupAQLTest(t)
