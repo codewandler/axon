@@ -7,6 +7,21 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **AQL pattern queries with `COUNT(*)` and 3+ SELECT columns** — selecting two
+  or more non-aggregate columns alongside `COUNT(*)` in a pattern query (e.g.
+  `SELECT a.name, a.type, COUNT(*) FROM (a)-[:calls]->(b) GROUP BY a.id`)
+  crashed with `sql: expected 3 destination arguments in Scan, not 2`. The
+  compiler now routes these queries through `ResultTypeRows` (dynamic column
+  scanning) instead of `ResultTypeCounts` (hardcoded 2-column scan). Column
+  aliases (`var.field`) are also generated automatically so output keys are
+  unambiguous. Closes #24.
+
+---
+
 ## [0.18.0] — 2026-04-11
 
 ### Added
