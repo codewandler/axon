@@ -50,6 +50,7 @@ func init() {
 	rootCmd.AddCommand(parseCmd)
 	rootCmd.AddCommand(describeCmd)
 	rootCmd.AddCommand(impactCmd)
+	rootCmd.AddCommand(pathCmd)
 
 	rootCmd.Version = version
 }

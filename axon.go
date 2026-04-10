@@ -616,6 +616,11 @@ type Querier interface {
 	// Search performs semantic vector similarity search.
 	// Returns ErrNoEmbeddingProvider if no embedding provider is configured.
 	Search(ctx context.Context, queries []string, opts SearchOptions) ([]*SemanticSearchResult, error)
+
+	// FindPath finds the shortest paths between two nodes identified by their
+	// node IDs. Returns an empty slice (no error) when no path exists within
+	// the configured depth limit.
+	FindPath(ctx context.Context, fromID, toID string, opts PathOptions) ([]*Path, error)
 }
 
 // compile-time check: *Axon must satisfy Querier.
@@ -667,6 +672,38 @@ func (a *Axon) Search(ctx context.Context, queries []string, opts SearchOptions)
 		results = filtered
 	}
 	return results, nil
+}
+
+// FindPath finds the shortest paths between two nodes in the knowledge graph.
+//
+// fromID and toID are node IDs (as returned by Find, Search, or GetNodeByURI).
+// Paths are discovered by bidirectional BFS: both outgoing and incoming edges
+// are followed so that structural and semantic relationships are bridged.
+//
+// The search is bounded by opts.MaxDepth edges (default 6) and returns at most
+// opts.MaxPaths results (default 3), ordered by ascending length.
+//
+// Returns an empty slice (no error) when no connecting path exists within the
+// depth limit. Returns an error only when the origin node cannot be loaded or
+// the storage layer fails.
+func (a *Axon) FindPath(ctx context.Context, fromID, toID string, opts PathOptions) ([]*Path, error) {
+	if opts.MaxDepth <= 0 {
+		opts.MaxDepth = 6
+	}
+	if opts.MaxPaths <= 0 {
+		opts.MaxPaths = 3
+	}
+
+	// Build an O(1) edge-type filter set; nil means "accept all types".
+	var edgeTypes map[string]bool
+	if len(opts.EdgeTypes) > 0 {
+		edgeTypes = make(map[string]bool, len(opts.EdgeTypes))
+		for _, t := range opts.EdgeTypes {
+			edgeTypes[t] = true
+		}
+	}
+
+	return findPaths(ctx, a.storage, fromID, toID, opts.MaxDepth, opts.MaxPaths, edgeTypes)
 }
 
 // WriteNode writes a node to the graph, flushes it to storage, and
