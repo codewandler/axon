@@ -1232,7 +1232,21 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 		}
 	}
 	if hasCount {
-		resultType = graph.ResultTypeCounts
+		// Count non-aggregate columns in the SELECT. executeCountQuery can only
+		// scan exactly two columns (key + count). If two or more non-COUNT(*)
+		// columns are selected (producing 3+ SQL columns), use ResultTypeRows so
+		// executeRowsQuery handles all columns dynamically. Fixes issue #24.
+		nonCountCols := 0
+		for _, col := range q.Select.Columns {
+			if _, ok := col.Expr.(*aql.CountCall); !ok {
+				nonCountCols++
+			}
+		}
+		if nonCountCols > 1 {
+			resultType = graph.ResultTypeRows
+		} else {
+			resultType = graph.ResultTypeCounts
+		}
 	} else {
 		// Check if we're selecting edge variables
 		for _, col := range q.Select.Columns {
@@ -1253,6 +1267,12 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 	multiVar := detectMultiVarSelect(q.Select, nodeAliases, edgeAliases)
 	if multiVar && resultType == graph.ResultTypeNodes {
 		resultType = graph.ResultTypeRows
+	}
+	// Ensure qualified "var.field" column aliases for all ResultTypeRows paths
+	// (including the multi-col COUNT case above) so that executeRowsQuery
+	// returns informative, unambiguous column names.
+	if resultType == graph.ResultTypeRows {
+		multiVar = true
 	}
 
 	// Build SELECT clause
