@@ -22,6 +22,25 @@
 - 📡 **Watch mode** — live re-indexing on file changes with `axon index --watch`
 - 🔒 **Local-first** — everything stored in a single SQLite file; no cloud, no data transmission
 
+---
+
+## Contents
+
+- [For AI Agents](#-for-ai-agents)
+- [Installation](#installation)
+- [Quickstart](#quickstart)
+- [AQL: Axon Query Language](#aql-axon-query-language)
+- [CLI Reference](#cli-reference)
+- [Go Library](#go-library)
+- [Node Types](#node-types)
+- [Edge Types](#edge-types)
+- [Architecture](#architecture)
+- [Use Cases](#use-cases)
+- [License](#license)
+- [Contributing](#contributing)
+
+---
+
 ## 🤖 For AI Agents
 
 Axon is built to be used directly by AI agents as a persistent knowledge tool. Copy and paste the prompt below into Claude, opencode, Cursor, or any agent to get started:
@@ -563,6 +582,90 @@ func main() {
 }
 ```
 
+### Writing Nodes
+
+Use `WriteNode` to persist a custom node, flush it to storage, and automatically
+embed it (if an `EmbeddingProvider` is configured) — all in one call:
+
+```go
+node := graph.NewNode("memory:decision").
+    WithName("Use PostgreSQL for user data").
+    WithURI("memory:decision:db-choice").       // same URI = upsert
+    WithData(map[string]any{"reason": "JSONB support and familiarity"}).
+    WithLabels("architecture", "reviewed")
+
+if err := ax.WriteNode(ctx, node); err != nil {
+    log.Fatal(err)
+}
+
+// Node is immediately queryable and searchable:
+nodes, _ := ax.Find(ctx, graph.NodeFilter{Type: "memory:decision"}, graph.QueryOptions{})
+got, _   := ax.GetNodeByURI(ctx, "memory:decision:db-choice")
+```
+
+For bulk writes where you want to control the flush boundary yourself, use
+`PutNode` + `Flush`:
+
+```go
+for _, n := range batch {
+    _ = ax.PutNode(ctx, n)
+}
+_ = ax.Flush(ctx)
+```
+
+### Semantic Search
+
+Pass an `EmbeddingProvider` in `Config` to enable semantic search. `WriteNode`
+will automatically embed custom nodes so they appear in search results immediately:
+
+```go
+import "github.com/codewandler/axon/indexer/embeddings"
+
+ax, _ := axon.New(axon.Config{
+    Dir:               ".",
+    EmbeddingProvider: embeddings.NewOllama("", "", 0),
+})
+ax.Index(ctx, ".")
+
+// Search with options— MinScore trims noise without a manual post-filter loop.
+results, err := ax.Search(ctx, []string{"authentication logic"}, axon.SearchOptions{
+    Limit:    10,
+    MinScore: 0.5,
+})
+
+// Scope to a type (applies the correct URI scheme automatically).
+results, err = ax.Search(ctx, []string{"token budget"}, axon.SearchOptions{
+    Limit:  5,
+    Filter: &graph.NodeFilter{
+        Type:      "go:func",
+        URIPrefix: types.URIPrefixForType("go:func"), // infers CWD
+    },
+})
+```
+
+### URI Prefix Scoping
+
+`types.URIPrefixForType` maps a node type to the correct URI scheme for local
+scoping. Each indexer uses a different scheme, so the prefix must match:
+
+```go
+import "github.com/codewandler/axon/types"
+
+// Explicit directory
+prefix := types.URIPrefixForType("go:func", "/home/user/myrepo")
+// go+file:///home/user/myrepo
+
+// Infer from current working directory
+prefix = types.URIPrefixForType("vcs:commit")
+// git+file:///current/working/dir
+
+// Scheme mapping:
+// go:*   → go+file://
+// vcs:*  → git+file://
+// md:*   → file+md://
+// fs:*, * → file://
+```
+
 ### The `Querier` Interface
 
 `*Axon` satisfies `axon.Querier`, so you can depend on the interface in your
@@ -591,22 +694,7 @@ printNodeTypes(ctx, ax)
 | `QueryString(ctx, string)` | Parse an AQL string and execute it in one call |
 | `Explain(ctx, *aql.Query)` | Return the execution plan without running the query |
 | `Find(ctx, NodeFilter, QueryOptions)` | Structural node filter search |
-| `Search(ctx, queries, limit, filter)` | Semantic similarity search (requires embedding provider) |
-
-### Semantic Search
-
-Pass an embedding provider in `Config` to enable semantic search:
-
-```go
-import "github.com/codewandler/axon/indexer/embeddings"
-
-ax, _ := axon.New(axon.Config{
-    Dir:               ".",
-    EmbeddingProvider: embeddings.NewOllama("", "", 0),
-})
-ax.Index(ctx, ".")
-results, err := ax.Search(ctx, []string{"authentication logic"}, 10, nil)
-```
+| `Search(ctx, queries, SearchOptions)` | Semantic similarity search (requires embedding provider) |
 
 ### Watch Mode
 
