@@ -45,10 +45,14 @@ axon query "SELECT * FROM nodes WHERE type = 'fs:file' AND data.ext = 'go'"
 Basic CLI commands:
 
 - `axon init [path]` - Index a directory
+- `axon init --embed [path]` - Index and generate embeddings for semantic search
+- `axon watch [path]` - Watch for changes and keep graph up to date
 - `axon query "<aql>"` - Execute AQL queries
 - `axon tree [path]` - Display graph as tree
 - `axon find` - Search nodes with filters
 - `axon show <node-id>` - Show node details
+- `axon impact <symbol>` - Show blast radius of changing a symbol
+- `axon search --semantic "<query>"` - Semantic vector similarity search
 - `axon stats` - Database statistics
 
 ## AQL: Axon Query Language
@@ -246,12 +250,14 @@ Index a directory and create the graph:
 axon init .                    # Index current dir
 axon init --local .            # Use project-local .axon
 axon init --no-gc /path/to/dir # Skip garbage collection
+axon init --embed .            # Index + generate embeddings for semantic search
 ```
 
 **What gets indexed**:
 - Filesystem structure (files, directories)
 - Git repositories (repos, branches, tags, commits)
 - Markdown documents (structure, sections, links)
+- Go modules and packages (structs, interfaces, funcs, imports, implementations)
 
 ### axon query
 
@@ -314,6 +320,71 @@ axon edges                     # List all edge types
 axon gc                        # Run garbage collection
 ```
 
+### Watch Mode
+
+Keep the graph up to date as files change:
+
+```bash
+axon watch .                   # Watch current directory
+axon watch ./src               # Watch specific subtree
+axon watch --quiet .           # Suppress per-change output
+axon watch --debounce 300ms .  # Custom debounce duration
+```
+
+On each file change, axon re-indexes the affected directory and prints:
+```
+↻  Re-indexed ./pkg/util — 12 files, 3 dirs (done)
+```
+
+### Impact Analysis
+
+Understand the blast radius of changing a symbol:
+
+```bash
+axon impact Storage            # Show what depends on Storage
+axon impact NewNode            # Show callers and importers
+axon impact IndexResult        # Find all usages
+```
+
+Output:
+```
+Impact analysis: Storage (go:interface)
+
+Direct references (17):
+  adapters/sqlite               12 refs  [call, field, type]
+  cmd/axon                       2 refs  [call]
+  context                        3 refs  [type]
+
+Packages importing affected packages:
+  axon                  imports adapters/sqlite
+  cmd/axon              imports sqlite, graph
+```
+
+### Semantic Search
+
+Find code by meaning, not just keywords (requires Ollama):
+
+```bash
+# First generate embeddings during indexing
+axon init --embed .
+
+# Then search semantically
+axon search --semantic "handles token budget overflow"
+axon search --semantic "error recovery" --type go:func
+axon search --semantic "storage interface" --limit 5
+```
+
+Setup (requires [Ollama](https://ollama.ai)):
+```bash
+ollama pull nomic-embed-text
+# Then run: axon init --embed .
+```
+
+Environment variables:
+- `AXON_EMBED_PROVIDER` — provider name (`ollama`, default)
+- `AXON_OLLAMA_URL` — Ollama base URL (default: `http://localhost:11434`)
+- `AXON_OLLAMA_MODEL` — model name (default: `nomic-embed-text`)
+
 ## Node Types
 
 Axon uses typed nodes with `domain:name` format:
@@ -347,7 +418,10 @@ Common edge types follow generic semantics:
 - `references` - Soft cross-reference
 - `links_to` - Explicit hyperlink
 - `depends_on` - Dependency relationship
-- `imports` - Import statement
+- `imports` - Import statement (go:package → go:package)
+- `implements` - Struct implements interface (go:struct → go:interface)
+- `tests` - Test package tests source package (go:package → go:package)
+- `defines` - Package defines symbol (go:package → go:func/struct/etc.)
 
 ## Architecture
 

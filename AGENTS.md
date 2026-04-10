@@ -430,11 +430,14 @@ result, _ := storage.Query(ctx, q)
 - Print "Using database: <path>" for transparency
 
 **Available commands**:
-- `init` - Index directories and create graph
+- `init` - Index directories and create graph (with `--embed` for embeddings)
+- `watch` - Watch a directory and keep the graph up to date
 - `query` - Execute AQL queries (with `--explain`, `--output table|json|count`)
 - `tree` - Display graph as tree (with `--depth`, `--ids`, `--types`)
 - `find` - Search nodes with filters (with `--type`, `--name`, `--ext`, `--global`)
 - `show` - Display node details
+- `search` - Natural language search (with `--semantic` for vector similarity search)
+- `impact` - Show blast radius of changing a symbol
 - `stats`, `labels`, `types`, `edges`, `gc` - Introspection and maintenance
 
 ### Key Patterns
@@ -456,7 +459,17 @@ result, _ := storage.Query(ctx, q)
 All edge types are defined in `types/edges.go`. Use generic edges rather than domain-specific ones.
 
 | Edge | Inverse | Semantics | Example |
-|------|---------|-----------|---------|
+|------|---------|-----------|-------------------------------|
+| `contains` | `contained_by` | Structural containment | dir → file |
+| `has` | `belongs_to` | Logical ownership | repo → branch, doc → section |
+| `located_at` | - | Physical location | repo → dir |
+| `links_to` | - | Explicit hyperlink | section → file |
+| `references` | - | Soft cross-reference | go:ref → go:func |
+| `depends_on` | - | Dependency | module → module |
+| `imports` | - | Package import graph | go:package → go:package |
+| `implements` | - | Struct implements interface | go:struct → go:interface |
+| `tests` | - | Test package tests source | go:package(_test) → go:package |
+| `defines` | - | Symbol definition | go:package → go:func/struct/etc. |
 | `contains` | `contained_by` | Structural containment | dir → file |
 | `has` | `belongs_to` | Logical ownership | repo → branch, doc → section |
 | `located_at` | - | Physical location | repo → dir |
@@ -503,6 +516,34 @@ All edge types are defined in `types/edges.go`. Use generic edges rather than do
 - **LICENSE** - MIT License
 
 When making changes that affect user-facing behavior (new features, CLI changes, AQL syntax), update README.md accordingly.
+
+### New Go Package Data Fields
+
+`PackageData` in `types/golang.go` has been extended with:
+- `ImportPaths []string` — intra-module import paths (populated by import graph)
+- `IsTest bool` — true for `_test` suffix packages
+- `TestFor string` — import path of the package being tested
+
+### Watch Mode Architecture
+
+`Axon.Watch(ctx, path, WatchOptions)` in `axon.go`:
+- Performs an initial index run, then starts an `fsnotify` watcher on the directory tree
+- Debounces file events (default 150ms), finds the common ancestor of all changed paths
+- Calls `IndexWithOptions()` on that subtree and invokes `opts.OnReindex` callback
+- Loop terminates when `ctx` is cancelled
+
+### Embedding Support
+
+`graph.Storage` now includes `EmbeddingStore` interface:
+- `PutEmbedding(ctx, nodeID, []float32)` — store a vector for a node
+- `GetEmbedding(ctx, nodeID)` — retrieve a stored vector
+- `FindSimilar(ctx, query, limit, filter)` — cosine similarity scan
+
+`axon.Config.EmbeddingProvider` field (type `embeddings.Provider`) activates the embedding PostIndexer. When set, embeddings are generated for `go:func`, `go:struct`, `go:interface`, and `md:section` nodes after each indexing run.
+
+Built-in providers:
+- `embeddings.NewNull(dims)` — zero vectors for testing
+- `embeddings.NewOllama(baseURL, model)` — Ollama API (`nomic-embed-text`)
 
 ## Release & Tagging Workflow
 

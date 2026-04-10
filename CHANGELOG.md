@@ -9,6 +9,56 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Import graph edges** — Go packages now emit `imports` edges between
+  `go:package` nodes for every intra-module import. `PackageData` gains an
+  `import_paths` field listing direct intra-module import paths.
+  (`indexer/golang/indexer.go`, `types/golang.go`)
+
+- **Interface implementation edges** — the Go indexer now uses `go/types` to
+  detect which structs satisfy which interfaces (value or pointer receiver) and
+  emits `implements` edges (`go:struct → go:interface`). New `EdgeImplements`
+  constant added to `types/edges.go`.
+  (`indexer/golang/indexer.go`, `types/edges.go`, `types/golang.go`)
+
+- **Test-to-source linkage** — test packages (`_test` suffix) are now indexed
+  with `is_test: true` and a `tests` edge pointing to their source package.
+  `PackageData` gains `is_test` and `test_for` fields.
+  (`indexer/golang/indexer.go`, `types/edges.go`, `types/golang.go`)
+
+- **`axon watch` command** — watches a directory with `fsnotify`, debounces
+  file events, and re-indexes the affected subtree on each batch of changes.
+  Flags: `--debounce` (default 150 ms), `--quiet`. `Axon.Watch()` and
+  `WatchOptions` added to the library API.
+  (`axon.go`, `cmd/axon/watch.go`)
+
+- **Embedding storage** — `graph.Storage` now includes an `EmbeddingStore`
+  interface (`PutEmbedding`, `GetEmbedding`, `FindSimilar`). The SQLite adapter
+  implements it via an `embeddings` table with little-endian float32 blobs and
+  in-process cosine similarity. `NodeWithScore` type added to `graph/`.
+  (`graph/storage.go`, `adapters/sqlite/sqlite.go`)
+
+- **`indexer/embeddings` package** — `Provider` interface with `NullProvider`
+  (testing) and `OllamaProvider` (`nomic-embed-text`) implementations. A
+  `PostIndexer` generates embeddings for `go:func`, `go:struct`,
+  `go:interface`, and `md:section` nodes after each index run.
+  (`indexer/embeddings/`)
+
+- **`axon init --embed`** — new flag to activate the embedding PostIndexer
+  during indexing. Provider is configured via `AXON_EMBED_PROVIDER`,
+  `AXON_OLLAMA_URL`, and `AXON_OLLAMA_MODEL` env vars.
+  (`cmd/axon/init.go`, `axon.go`)
+
+- **`axon search --semantic`** — new flag to run vector similarity search
+  against stored embeddings. Supports `--type` filter and `--limit`.
+  (`cmd/axon/search.go`)
+
+- **`axon impact` command** — blast-radius analysis: finds direct `go:ref`
+  references to a named symbol, groups them by package, and reports which
+  packages import those packages via the import graph.
+  (`cmd/axon/impact.go`)
+
 ### Fixed
 
 - **`SELECT COUNT(*)` in pattern queries no longer requires `GROUP BY`** —
