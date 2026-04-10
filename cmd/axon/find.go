@@ -455,9 +455,11 @@ func runSemanticFind(query string) error {
 	filter.Extensions = findExt
 
 	// Local scope: restrict to nodes whose URI is under the CWD.
-	// Each node type uses a different URI scheme, so we derive the correct
-	// scheme prefix from the requested type rather than always using file://.
-	if !findGlobal {
+	// Only applied when --type is set, so we can pick the correct URI scheme.
+	// Without --type, all embedded node types use different schemes (git+file://,
+	// go+file://, file+md://) so a single prefix would exclude most results;
+	// the local DB file already provides repo-level scoping in that case.
+	if !findGlobal && filter.Type != "" {
 		absPath, err := filepath.Abs(cmdCtx.Cwd)
 		if err != nil {
 			return err

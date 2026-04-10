@@ -7,6 +7,19 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.3] — 2026-05-13
+
+### Fixed
+
+- **`axon find "<query>"` (no `--type`) always returned no results** — the
+  URI prefix scope defaulted to `file://`, which matches filesystem nodes
+  only. Since no filesystem node types (`fs:file`, `fs:dir`) have embeddings,
+  every untyped semantic query silently returned nothing. When `--type` is
+  omitted, URI prefix scoping is now skipped entirely; the local DB file
+  already provides repo-level isolation.
+
+---
+
 ## [0.8.2] — 2026-05-13
 
 ### Fixed
