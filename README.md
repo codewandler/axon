@@ -1,12 +1,18 @@
-# Axon
-
 <p align="center">
   <img src="assets/logo.svg" alt="axon — AI-native graph database" width="800"/>
 </p>
 
-**AI-native graph database and indexing system for local knowledge management**
+<p align="center"><strong>AI-native graph database and indexing system — built for agents, runs locally.</strong></p>
 
-Axon transforms your filesystem, git repositories, and documents into a queryable knowledge graph—designed from the ground up for AI agents. It provides both persistent agent memory and powerful retrieval capabilities, all running locally on your machine.
+<br/>
+
+- 🗄️ **Graph storage** — typed nodes and edges with JSON data fields, labels, and full relationship tracking across sessions
+- 🔍 **AQL** — Axon Query Language: SQL-style table queries, Cypher-inspired pattern matching, and variable-length path traversal, all in one unified syntax
+- 📁 **Universal indexing** — filesystem, Git repositories, Markdown documents, and Go source code out of the box
+- 🧠 **Context generation** — `axon context` finds the most relevant code for a task and fits it into an AI token budget automatically
+- 🔎 **Semantic search** — vector similarity search via Ollama or Hugot, fully local with no external APIs
+- 📡 **Watch mode** — live re-indexing on file changes with `axon index --watch`
+- 🔒 **Local-first** — everything stored in a single SQLite file; no cloud, no data transmission
 
 ## 🤖 For AI Agents
 
@@ -37,18 +43,6 @@ Axon is built to be used directly by AI agents as a persistent knowledge tool. C
 ---
 
 **opencode users**: the skill at `.agents/skills/axon/` is compatible with opencode and can be installed directly from this repository.
-
-## Why Axon?
-
-**AI-Native Storage + Retrieval**: Unlike traditional RAG systems that only handle retrieval, Axon provides full storage and context management. AI agents can persist memories, track relationships, and query structured knowledge across sessions.
-
-**Local-First Privacy**: All data stays on your machine. No external APIs, no data transmission. Your knowledge graph is stored in a single SQLite database file that you control.
-
-**Universal Indexing**: Transforms unstructured data (files, git history, markdown) into structured, context-rich nodes and edges. Everything becomes queryable with type safety and relationship awareness.
-
-**Performance at Scale**: Built on SQLite with tree-based access patterns and efficient JSON field extraction. Fast queries even with millions of nodes.
-
-**Graph Query Language**: AQL (Axon Query Language) provides SQL-like table queries, Cypher-inspired pattern matching, and variable-length path traversal—all in one unified syntax.
 
 ## Installation
 
