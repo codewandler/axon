@@ -7,6 +7,21 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.16.0] — 2026-04-11
+
+### Added
+
+- **Licence detection** — new `project:license` node type. A lightweight
+  `LicenseIndexer` reads the first 1 KB of `LICENSE`, `LICENCE`, `COPYING` and
+  their `.md`/`.txt` variants, identifies the SPDX identifier from a 9-entry
+  header-fragment table (MIT, Apache-2.0, GPL-2/3, LGPL-2.1, BSD-2/3, ISC,
+  MPL-2.0), and emits a structured node storing only `spdx_id`, `confidence`
+  (`high` or `unknown`), and the file path — never the licence text. The node
+  is connected via a `has` edge to the nearest `project:root` node, falling
+  back to the enclosing `fs:dir`. Closes #21.
+
+---
+
 ## [0.15.0] — 2026-04-11
 
 ### Added
