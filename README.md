@@ -392,6 +392,19 @@ axon context --task "improve performance" --symbols Storage --symbols Query
 echo "add error handling to Flush" | axon context   # task from stdin
 ```
 
+### axon describe
+
+Show the schema of the graph — all node types with counts, edge types with
+from/to connection patterns, and (with `--fields`) the JSON data field names
+stored on each node type. Useful for discovering what types and fields exist
+before writing AQL queries or using `axon find --type`.
+
+```bash
+axon describe              # schema overview (text)
+axon describe -o json      # machine-readable JSON
+axon describe --fields     # include data field names per node type
+```
+
 ### axon info
 
 Show a dashboard of database status, location, statistics, and last index details:
