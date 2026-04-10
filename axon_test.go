@@ -267,6 +267,7 @@ func TestAxonWatch_Silent(t *testing.T) {
 
 	// Cancel immediately after the initial index so Watch returns quickly.
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- ax.Watch(ctx, dir, WatchOptions{
