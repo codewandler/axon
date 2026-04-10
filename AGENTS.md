@@ -528,6 +528,11 @@ All three commands must exit 0. Do not open the PR until they do.
 If `axon show` prints a generic `key: value` map with no formatting, a `printMapData`
 case is missing in `cmd/axon/show.go`. Fix it before opening the PR.
 
+**If a new node type should be semantically searchable**, verify it is in
+`indexer/embeddings/indexer.go` `DefaultEmbedTypes`. If it is missing, add it
+and extend `buildNodeText` to extract any type-specific text fields that provide
+semantic signal beyond the node `Name`.
+
 ### 9. Open the PR
 
 ```bash
