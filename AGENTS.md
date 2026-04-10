@@ -484,10 +484,12 @@ else's PR. Check:
 
 | Category | What to look for |
 |---|---|
-| Spec compliance | Does the code do exactly what the issue asked? |
+| Spec compliance | Does the code do exactly what the issue asked? Cross-check every bullet in the issue body — not just the happy path |
 | Error handling | All errors wrapped with context, none silently dropped |
 | Concurrency | No shared mutable state accessed from multiple goroutines without synchronisation; run `-race` |
 | Test quality | No tautological assertions; edge cases covered |
+| Adversarial inputs | For any parser, regex, or pattern matcher: write at least one test for a **false-positive** input (something that looks like a match but shouldn't be) and one for a **false-negative** (a valid input that uses an unusual but legal form) |
+| New node type checklist | If a new node type was added: (1) is `printMapData` in `show.go` updated with a typed case? (2) is `getNodeSummary` updated? Run `axon show <real-node-id>` on an indexed result and read the output — do not accept a raw key=value map dump as "good enough" |
 | API cleanliness | No unnecessary double-calls, pointless aliases, or dead code |
 | JSON/wire format | `nil` vs `[]` matters for consumers; test empty cases explicitly |
 | Docs | README and AGENTS.md updated if behaviour changed |
@@ -503,12 +505,28 @@ go build ./...
 go vet ./...
 go test -race ./...
 
-# Sanity-check the feature end-to-end (e.g. smoke-test the CLI)
+# Sanity-check the feature end-to-end — read the output, don't just check exit codes
 ./bin/axon <new-command> --help
 ./bin/axon <new-command> -o json | head -20
 ```
 
 All three commands must exit 0. Do not open the PR until they do.
+
+**If a new node type was introduced**, also run:
+
+```bash
+# Re-index so the new type is actually populated
+./bin/axon index .
+
+# Confirm nodes appear and names look right (not raw URIs or hashes)
+./bin/axon find --type <new-type> --limit 5
+
+# Inspect a real result — verify show output is structured, not a raw map dump
+./bin/axon show <node-id-from-above>
+```
+
+If `axon show` prints a generic `key: value` map with no formatting, a `printMapData`
+case is missing in `cmd/axon/show.go`. Fix it before opening the PR.
 
 ### 9. Open the PR
 
