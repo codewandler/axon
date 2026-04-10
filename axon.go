@@ -157,6 +157,7 @@ func New(cfg Config) (*Axon, error) {
 	idxRegistry.Register(golang.New())
 	idxRegistry.Register(markdown.New())
 	idxRegistry.Register(project.New())
+	idxRegistry.Register(project.NewLicenseIndexer())
 	idxRegistry.Register(todo.New())
 	// Note: tagger is now called directly by fs indexer, not via events
 

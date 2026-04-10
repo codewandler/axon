@@ -132,6 +132,12 @@ func getNodeSummary(n *graph.Node) string {
 		} else {
 			name = short
 		}
+	case types.LicenseData:
+		if data.SPDXID != "" {
+			name = data.SPDXID
+		} else {
+			name = "unknown"
+		}
 	case types.TodoData:
 		name = data.Kind
 		if data.Text != "" {
@@ -737,6 +743,16 @@ func printMapData(ctx context.Context, g *graph.Graph, nodeType string, node *gr
 		if parents, ok := data["parents"].([]any); ok && len(parents) > 0 {
 			fmt.Printf("  Parents: %d\n", len(parents))
 		}
+
+	case types.TypeLicense:
+		fmt.Println("\nData:")
+		spdxID := getMapString(data, "spdx_id")
+		if spdxID == "" {
+			spdxID = "(unknown)"
+		}
+		fmt.Printf("  SPDX ID:    %s\n", spdxID)
+		fmt.Printf("  Confidence: %s\n", getMapString(data, "confidence"))
+		fmt.Printf("  File:       %s\n", getMapString(data, "file"))
 
 	case types.TypeTodo:
 		fmt.Println("\nData:")
