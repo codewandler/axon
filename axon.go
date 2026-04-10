@@ -383,13 +383,17 @@ func (a *Axon) IndexWithOptions(ctx context.Context, opts IndexOptions) (*IndexR
 				}
 				// Find subscribers for this event and route to their channels
 				subscribers := a.indexers.SubscribersFor(event)
-				for i, sub := range subscribers {
+				for _, sub := range subscribers {
 					if info, ok := subscriberMap[sub.Name()]; ok {
-						// Clone the event's node for each subscriber to prevent data races
-						// when multiple subscribers modify the node concurrently.
-						// Only clone for 2nd+ subscriber to avoid unnecessary allocations.
+						// When multiple subscribers share the same event, each must get
+						// its own deep copy of the node. Without cloning, subscriber
+						// goroutine N can start mutating the node (e.g. appending labels)
+						// while the dispatcher is still reading it to clone for subscriber
+						// N+1, causing a data race. All clones are made here, synchronously
+						// in the dispatcher goroutine, before any subscriber goroutine
+						// receives the event.
 						eventCopy := event
-						if i > 0 && event.Node != nil {
+						if len(subscribers) > 1 && event.Node != nil {
 							eventCopy.Node = event.Node.Clone()
 						}
 						// Non-blocking send to subscriber channel

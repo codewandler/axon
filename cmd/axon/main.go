@@ -48,6 +48,7 @@ func init() {
 	rootCmd.AddCommand(statsCmd)
 	rootCmd.AddCommand(infoCmd)
 	rootCmd.AddCommand(parseCmd)
+	rootCmd.AddCommand(describeCmd)
 	rootCmd.AddCommand(impactCmd)
 
 	rootCmd.Version = version
