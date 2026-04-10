@@ -7,6 +7,28 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.11.0] — 2026-04-10
+
+### Added
+
+- **`NodeFilter.ExcludeTypes []string`** — new field on `graph.NodeFilter` to
+  suppress unwanted node types from any search or find operation. OR semantics:
+  a node is excluded if its type matches any listed value. Works across all
+  filter-aware operations: `FindNodes`, `CountNodes`, `FindSimilar`,
+  `SemanticSearch`, and `Search`. Closes #4.
+- **`axon find --exclude-type`** — new repeatable CLI flag exposing
+  `ExcludeTypes` in both the AQL (structural) and semantic search paths.
+  Example: `axon find "event sourcing" --exclude-type vcs:commit`.
+
+### Fixed
+
+- **AQL operator precedence** in multi-value type exclusion: the generated
+  query is now `NOT (type = 'a' OR type = 'b')` rather than
+  `NOT type = 'a' OR type = 'b'`, which would have silently allowed the
+  second excluded type through.
+
+---
+
 ## [0.10.1] — 2026-04-10
 
 ### Added
