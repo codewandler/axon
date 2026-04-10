@@ -7,6 +7,32 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.10.0] — 2026-04-10
+
+### Added
+
+- **`Axon.Describe(ctx, includeFields)`** — new public method for schema
+  introspection. Returns all node types with counts, all edge types with
+  from/to connection patterns, and (when `includeFields=true`) the JSON data
+  field names stored on each node type. Backed by the new `graph.Describer`
+  optional interface implemented by the SQLite adapter.
+- **`axon describe`** — new CLI command exposing schema introspection.
+  Flags: `--output/-o` (`text`|`json`), `--fields/-f` (include field names),
+  `--global/-g` (accepted for flag-set consistency; describe is always global).
+  Closes #3.
+
+### Fixed
+
+- **Data race in event fan-out dispatcher** (`axon.go`). When an indexing run
+  had multiple subscribers, the dispatcher sent the original node pointer to
+  subscriber 0 and cloned it for subscribers 1+. Subscriber 0's goroutine
+  could begin mutating `node.Labels` before the dispatcher finished cloning
+  for subscriber 1, producing a write/read race detected by `-race`. Fixed by
+  cloning for all subscribers whenever fan-out > 1; all copies are made
+  synchronously in the dispatcher before any goroutine receives the event.
+
+---
+
 ## [0.9.6] — 2026-04-10
 
 ### Changed
