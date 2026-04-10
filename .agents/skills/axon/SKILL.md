@@ -109,9 +109,11 @@ axon gc                        # Run garbage collection
 ## Node Types
 
 - `fs:file`, `fs:dir` - Filesystem
-- `vcs:repo`, `vcs:branch`, `vcs:tag`, `vcs:commit` - Git
-- `md:document`, `md:section`, `md:heading` - Markdown
-- `go:package`, `go:func`, `go:struct`, `go:interface`, `go:ref` - Go code
+- `vcs:repo`, `vcs:branch`, `vcs:tag`, `vcs:commit`, `vcs:remote` - Git
+- `md:document`, `md:section` - Markdown document/section
+- `md:codeblock`, `md:link`, `md:image` - Fenced code, links, images
+- `go:module`, `go:package`, `go:func`, `go:method`, `go:struct`, `go:field`, `go:interface`, `go:const`, `go:var`, `go:ref` - Go code
+- `project:root` - Project manifest (go.mod, package.json, Cargo.toml, …)
 
 ## Edge Types
 
@@ -123,3 +125,7 @@ axon gc                        # Run garbage collection
 - `imports` - Import statement
 - `implements` - Struct implements interface
 - `defines` - Package defines symbol
+- `depends_on` - Dependency relationship
+- `tests` - Test package tests source package
+- `parent_of` - Commit DAG parent-to-child (vcs:commit → vcs:commit)
+- `modifies` - Commit modified a file (vcs:commit → fs:file)
