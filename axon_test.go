@@ -169,7 +169,10 @@ func TestAxonCustomIgnore(t *testing.T) {
 	dir := setupTestDir(t)
 
 	// Custom ignore list: ignore subdir but not the defaults.
-	// Hidden dirs (.git) are always excluded regardless of FSIgnore.
+	// With the new behaviour, dot-prefixed paths are no longer blanket-excluded;
+	// .git is only excluded when it appears in the ignore/exclude list.
+	// Here we set a custom FSIgnore that contains only "subdir", so .git is NOT
+	// excluded and .git/config will be indexed as a regular file.
 	ax, err := New(Config{
 		Dir:      dir,
 		FSIgnore: []string{"subdir"},
@@ -183,10 +186,11 @@ func TestAxonCustomIgnore(t *testing.T) {
 		t.Fatalf("Index failed: %v", err)
 	}
 
-	// Should have file1.txt = 1 file
-	// .git is auto-excluded (hidden dir), subdir is explicitly ignored
-	if result.Files != 1 {
-		t.Errorf("expected 1 file, got %d", result.Files)
+	// Should have file1.txt + .git/config = 2 files
+	// subdir is explicitly ignored so file2.txt is skipped.
+	// .git is NOT auto-excluded when a custom FSIgnore is set (no defaults applied).
+	if result.Files != 2 {
+		t.Errorf("expected 2 files, got %d", result.Files)
 	}
 
 	// subdir should exist as a node (for deletion detection) but contents skipped
@@ -358,4 +362,217 @@ func TestAxonIndex_ShowProgress(t *testing.T) {
 	if got := bufErr.String(); !strings.Contains(got, "[axon]") {
 		t.Errorf("expected [axon] lines on stderr, got: %q", got)
 	}
+}
+
+func TestAxonDeleteByPath(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := ax.Index(ctx, ""); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	filePath := filepath.Join(dir, "file1.txt")
+	fileURI := types.PathToURI(filePath)
+
+	// Verify the file node exists before deletion.
+	if _, err := ax.Graph().GetNodeByURI(ctx, fileURI); err != nil {
+		t.Fatalf("file1.txt not found before DeleteByPath: %v", err)
+	}
+
+	// Delete it from the graph.
+	if err := ax.DeleteByPath(ctx, filePath); err != nil {
+		t.Fatalf("DeleteByPath: %v", err)
+	}
+
+	// Node must be gone.
+	if _, err := ax.Graph().GetNodeByURI(ctx, fileURI); err == nil {
+		t.Error("file1.txt should have been removed by DeleteByPath")
+	}
+}
+
+func TestAxonDeleteByPath_Directory(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := ax.Index(ctx, ""); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	subdirPath := filepath.Join(dir, "subdir")
+	file2Path := filepath.Join(dir, "subdir", "file2.txt")
+
+	// Both subdir and its child must exist.
+	if _, err := ax.Graph().GetNodeByURI(ctx, types.PathToURI(subdirPath)); err != nil {
+		t.Fatalf("subdir not found before DeleteByPath: %v", err)
+	}
+	if _, err := ax.Graph().GetNodeByURI(ctx, types.PathToURI(file2Path)); err != nil {
+		t.Fatalf("file2.txt not found before DeleteByPath: %v", err)
+	}
+
+	// Delete the whole subtree.
+	if err := ax.DeleteByPath(ctx, subdirPath); err != nil {
+		t.Fatalf("DeleteByPath(subdir): %v", err)
+	}
+
+	// Both subdir and file2.txt must be gone.
+	if _, err := ax.Graph().GetNodeByURI(ctx, types.PathToURI(subdirPath)); err == nil {
+		t.Error("subdir should have been removed")
+	}
+	if _, err := ax.Graph().GetNodeByURI(ctx, types.PathToURI(file2Path)); err == nil {
+		t.Error("file2.txt should have been removed (part of deleted subtree)")
+	}
+}
+
+func TestAxonDeleteByPath_Idempotent(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := ax.Index(ctx, ""); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	filePath := filepath.Join(dir, "file1.txt")
+
+	// First delete succeeds.
+	if err := ax.DeleteByPath(ctx, filePath); err != nil {
+		t.Fatalf("first DeleteByPath: %v", err)
+	}
+	// Second call on a non-existent node must also return nil (idempotent).
+	if err := ax.DeleteByPath(ctx, filePath); err != nil {
+		t.Errorf("second DeleteByPath should be idempotent, got: %v", err)
+	}
+}
+
+func TestAxonWatch_FileChange(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping watch integration test in short mode")
+	}
+	ctx := context.Background()
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	reindexed := make(chan string, 5)
+	watchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- ax.Watch(watchCtx, dir, WatchOptions{
+			IndexOptions: IndexOptions{SkipGC: true},
+			Debounce:     50 * time.Millisecond,
+			OnReindex: func(path string, result *IndexResult, err error) {
+				if err == nil {
+					reindexed <- path
+				}
+			},
+		})
+	}()
+
+	// Wait for the initial index to populate the graph.
+	select {
+	case <-waitForInitDone(ax, dir, 5*time.Second):
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial index timed out")
+	}
+
+	// Write a new file — the watcher should pick it up and re-index just that file.
+	newFile := filepath.Join(dir, "watch_new.txt")
+	if err := os.WriteFile(newFile, []byte("hello watcher"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Expect OnReindex to fire for the new file within a generous timeout.
+	select {
+	case path := <-reindexed:
+		if path != newFile {
+			t.Errorf("expected re-index path %s, got %s", newFile, path)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("timed out waiting for OnReindex after file creation")
+	}
+
+	// The new file must now be in the graph.
+	if _, err := ax.Graph().GetNodeByURI(ctx, types.PathToURI(newFile)); err != nil {
+		t.Errorf("watch_new.txt should be in graph after re-index: %v", err)
+	}
+
+	cancel()
+	<-errCh
+}
+
+func TestAxonWatch_FileDeletion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping watch integration test in short mode")
+	}
+	ctx := context.Background()
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	watchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- ax.Watch(watchCtx, dir, WatchOptions{
+			IndexOptions: IndexOptions{SkipGC: true},
+			Debounce:     50 * time.Millisecond,
+		})
+	}()
+
+	// Wait for the initial index.
+	select {
+	case <-waitForInitDone(ax, dir, 5*time.Second):
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial index timed out")
+	}
+
+	fileToDelete := filepath.Join(dir, "file1.txt")
+	fileURI := types.PathToURI(fileToDelete)
+
+	// Confirm the file is indexed.
+	if _, err := ax.Graph().GetNodeByURI(ctx, fileURI); err != nil {
+		t.Fatalf("file1.txt should be indexed before deletion: %v", err)
+	}
+
+	// Delete the file on disk; the watcher should remove it from the graph.
+	if err := os.Remove(fileToDelete); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	// Poll until the node is gone or the deadline is exceeded.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := ax.Graph().GetNodeByURI(ctx, fileURI); err != nil {
+			// Node is gone — expected.
+			cancel()
+			<-errCh
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Error("file1.txt should have been removed from graph after filesystem deletion")
+	cancel()
+	<-errCh
 }

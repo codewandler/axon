@@ -35,7 +35,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&flagDBDir, "db-dir", "", "explicit directory containing the database")
 	rootCmd.PersistentFlags().BoolVar(&flagGlobal, "global", false, "search parent directories for a database, falling back to ~/.axon (opposite of default local-only behaviour)")
 
-	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(indexCmd)
 	rootCmd.AddCommand(treeCmd)
 	rootCmd.AddCommand(showCmd)
 	rootCmd.AddCommand(findCmd)
@@ -47,7 +47,6 @@ func init() {
 	rootCmd.AddCommand(statsCmd)
 	rootCmd.AddCommand(infoCmd)
 	rootCmd.AddCommand(parseCmd)
-	rootCmd.AddCommand(watchCmd)
 	rootCmd.AddCommand(impactCmd)
 
 	rootCmd.Version = version

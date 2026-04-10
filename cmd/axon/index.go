@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,28 +20,35 @@ import (
 )
 
 var (
-	flagNoGC  bool
-	flagEmbed bool
+	flagNoGC          bool
+	flagEmbed         bool
+	flagWatch         bool
+	flagWatchDebounce time.Duration
+	flagWatchQuiet    bool
 )
 
-var initCmd = &cobra.Command{
-	Use:   "init [path]",
-	Short: "Initialize and index a directory",
-	Long: `Initialize axon in a directory and index its contents.
+var indexCmd = &cobra.Command{
+	Use:     "index [path]",
+	Aliases: []string{"init"},
+	Short:   "Index a directory into the knowledge graph",
+	Long: `Index a directory into the knowledge graph.
 If no path is provided, the current directory is used.
 
 This command indexes all files and directories, creating a graph
 structure that can be queried with other axon commands.`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: runInit,
+	RunE: runIndex,
 }
 
 func init() {
-	initCmd.Flags().BoolVar(&flagNoGC, "no-gc", false, "Skip garbage collection (orphaned edge cleanup)")
-	initCmd.Flags().BoolVar(&flagEmbed, "embed", false, "Generate embeddings after indexing (requires Ollama with nomic-embed-text or AXON_EMBED_PROVIDER=ollama)")
+	indexCmd.Flags().BoolVar(&flagNoGC, "no-gc", false, "Skip garbage collection (orphaned edge cleanup)")
+	indexCmd.Flags().BoolVar(&flagEmbed, "embed", false, "Generate embeddings after indexing (requires Ollama with nomic-embed-text or AXON_EMBED_PROVIDER=ollama)")
+	indexCmd.Flags().BoolVar(&flagWatch, "watch", false, "watch for changes and re-index automatically (Ctrl+C to stop)")
+	indexCmd.Flags().DurationVar(&flagWatchDebounce, "watch-debounce", 150*time.Millisecond, "debounce window for change events (only with --watch)")
+	indexCmd.Flags().BoolVar(&flagWatchQuiet, "watch-quiet", false, "suppress per-change output (only with --watch)")
 }
 
-func runInit(cmd *cobra.Command, args []string) error {
+func runIndex(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 
 	// Determine path to index
@@ -122,7 +132,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 	if isTTY {
 		// Use bubbletea progress UI
-		result, err = runInitWithProgress(ctx, ax, absPath, opts)
+		result, err = runIndexWithProgress(ctx, ax, absPath, opts)
 	} else {
 		// Simple text output
 		result, err = ax.IndexWithOptions(ctx, opts)
@@ -142,11 +152,42 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Removed %d stale entries\n", result.StaleRemoved)
 	}
 
-	return nil
+	if !flagWatch {
+		return nil
+	}
+
+	// Enter watch mode
+	if !flagWatchQuiet {
+		fmt.Fprintf(os.Stderr, "Watching %s — press Ctrl+C to stop.\n", absPath)
+	}
+	watchCtx, watchCancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer watchCancel()
+
+	err = ax.Watch(watchCtx, absPath, axon.WatchOptions{
+		IndexOptions: axon.IndexOptions{SkipGC: flagNoGC},
+		Debounce:     flagWatchDebounce,
+		OnReindex: func(path string, result *axon.IndexResult, err error) {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "✗  re-index error: %v\n", err)
+				return
+			}
+			if !flagWatchQuiet {
+				rel, _ := filepath.Rel(absPath, path)
+				if rel == "" || rel == "." {
+					rel = "."
+				}
+				fmt.Fprintf(os.Stderr, "↻  ./%s — %d files\n", rel, result.Files)
+			}
+		},
+	})
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
 }
 
-// runInitWithProgress runs indexing with a bubbletea progress UI.
-func runInitWithProgress(ctx context.Context, ax *axon.Axon, absPath string, opts axon.IndexOptions) (*axon.IndexResult, error) {
+// runIndexWithProgress runs indexing with a bubbletea progress UI.
+func runIndexWithProgress(ctx context.Context, ax *axon.Axon, absPath string, opts axon.IndexOptions) (*axon.IndexResult, error) {
 	// Create progress coordinator
 	coord := progress.NewCoordinator()
 	startTime := time.Now()

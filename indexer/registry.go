@@ -66,6 +66,19 @@ func (r *Registry) All() []Indexer {
 	return result
 }
 
+// ByName returns the indexer with the given name, or nil if not found.
+func (r *Registry) ByName(name string) Indexer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, idx := range r.indexers {
+		if idx.Name() == name {
+			return idx
+		}
+	}
+	return nil
+}
+
 // SubscribersFor returns all indexers that have a subscription matching the event.
 func (r *Registry) SubscribersFor(event Event) []Indexer {
 	r.mu.RLock()

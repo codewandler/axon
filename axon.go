@@ -19,7 +19,7 @@ import (
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
 	"github.com/codewandler/axon/indexer/embeddings"
-	"github.com/codewandler/axon/indexer/fs"
+	fspkg "github.com/codewandler/axon/indexer/fs"
 	"github.com/codewandler/axon/indexer/git"
 	"github.com/codewandler/axon/indexer/golang"
 	"github.com/codewandler/axon/indexer/markdown"
@@ -35,19 +35,31 @@ const (
 	eventChannelBuffer = 10000
 )
 
-// DefaultFSIgnore contains the default patterns to ignore when indexing.
-// Note: All hidden files/dirs (names starting with '.') are unconditionally
-// excluded by the FS indexer, so they don't need to be listed here.
+// DefaultFSIgnore contains the default patterns to exclude when indexing.
+// Dot-prefixed paths are no longer blanket-excluded; specific entries are
+// listed here so that useful dotfiles (.agents/, .claude/, etc.) remain
+// visible to the graph.
 var DefaultFSIgnore = []string{
+	// Version control internals — indexed as marker dirs for deletion detection
+	".git",
+
+	// Build and dependency output
 	"node_modules",
 	"__pycache__",
-	"target",         // Rust/Cargo build output
-	"vendor",         // Go vendor, PHP composer
-	"venv",           // Python virtual environments
-	"env",            // Python virtual environments (alt)
-	"dist",           // JS/TS build output
-	"build",          // Generic build output
-	"site-packages",  // Python packages (catches nested ones)
+	"target",        // Rust/Cargo
+	"vendor",        // Go vendor, PHP Composer
+	"venv",          // Python virtualenvs
+	"env",           // Python virtualenvs (alt)
+	"dist",          // JS/TS build output
+	"build",         // generic build output
+	"site-packages", // Python packages
+
+	// Tool-specific directories
+	".devspace",
+	".DS_Store",
+
+	// Log files (often large, low signal)
+	"*.log",
 }
 
 // Config holds configuration for an Axon instance.
@@ -58,7 +70,18 @@ type Config struct {
 	// Storage is the storage backend. Defaults to in-memory storage.
 	Storage graph.Storage
 
-	// FSIgnore contains glob patterns to ignore when indexing filesystem.
+	// FSExclude contains glob patterns to exclude from indexing.
+	// When empty, DefaultFSIgnore is used. To clear all defaults, set FSExclude
+	// to a non-nil empty slice: []string{}.
+	// Patterns matched against file name and full absolute path.
+	FSExclude []string
+
+	// FSInclude contains glob patterns to include. When non-empty, only files
+	// matching at least one pattern are indexed (directories always traversed).
+	FSInclude []string
+
+	// FSIgnore is a deprecated alias for FSExclude.
+	// If both are set they are merged. Prefer FSExclude.
 	FSIgnore []string
 
 	// EmbeddingProvider is an optional embedding provider for semantic search.
@@ -117,12 +140,16 @@ func New(cfg Config) (*Axon, error) {
 	// Create indexer registry with built-in indexers
 	idxRegistry := indexer.NewRegistry()
 
-	// Default ignore patterns
-	ignore := cfg.FSIgnore
-	if len(ignore) == 0 {
-		ignore = DefaultFSIgnore
+	// Merge exclude patterns (FSExclude + deprecated FSIgnore alias).
+	// Use an explicit copy to avoid mutating the caller's backing array.
+	exclude := append(append([]string(nil), cfg.FSExclude...), cfg.FSIgnore...)
+	if len(exclude) == 0 {
+		exclude = DefaultFSIgnore
 	}
-	idxRegistry.Register(fs.New(fs.Config{Ignore: ignore}))
+	idxRegistry.Register(fspkg.New(fspkg.Config{
+		Include: cfg.FSInclude,
+		Exclude: exclude,
+	}))
 	idxRegistry.Register(git.New(cfg.GitConfig))
 	idxRegistry.Register(golang.New())
 	idxRegistry.Register(markdown.New())
@@ -474,6 +501,25 @@ func (a *Axon) RegisterIndexer(idx indexer.Indexer) {
 	a.indexers.Register(idx)
 }
 
+// DeleteByPath removes the graph node(s) for the given filesystem path and
+// cleans up orphaned edges. For directory paths it removes all nodes whose
+// URI has the directory URI as a prefix (entire subtree).
+// Returns nil when no node exists for the path (idempotent).
+func (a *Axon) DeleteByPath(ctx context.Context, path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolving path %q: %w", path, err)
+	}
+	uri := types.PathToURI(absPath)
+	if _, err := a.storage.DeleteByURIPrefix(ctx, uri); err != nil {
+		return fmt.Errorf("deleting nodes for %s: %w", uri, err)
+	}
+	if _, err := a.storage.DeleteOrphanedEdges(ctx); err != nil {
+		return fmt.Errorf("cleaning orphaned edges after delete: %w", err)
+	}
+	return nil
+}
+
 // SemanticSearchResult is a node with its best-match score and the query that produced it.
 type SemanticSearchResult struct {
 	*graph.NodeWithScore
@@ -559,9 +605,9 @@ type WatchOptions struct {
 }
 
 // Watch watches the given path for filesystem changes and re-indexes affected
-// subtrees automatically. It performs an initial full index, then blocks until
-// ctx is cancelled, re-indexing on each batch of changes after the debounce
-// window elapses.
+// files automatically. It performs an initial full index, then blocks until
+// ctx is cancelled, re-indexing individual changed files/directories on each
+// batch of changes after the debounce window elapses.
 func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error {
 	if opts.Debounce == 0 {
 		opts.Debounce = 150 * time.Millisecond
@@ -584,6 +630,13 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 		return fmt.Errorf("initial index: %w", indexErr)
 	}
 
+	// Retrieve the fs indexer to reuse its ShouldIgnore logic in the watcher,
+	// so the event filter matches the indexer's exclusion rules exactly.
+	var fsIdx *fspkg.Indexer
+	if raw := a.indexers.ByName("fs"); raw != nil {
+		fsIdx, _ = raw.(*fspkg.Indexer)
+	}
+
 	// Create fsnotify watcher.
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -592,14 +645,12 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 	defer watcher.Close()
 
 	// Resolve the DB directory so we can exclude it from the watcher.
-	// Writing to the database would otherwise trigger re-index storms.
 	dbDir := ""
 	if a.storage != nil {
 		if dbPather, ok := a.storage.(interface{ Path() string }); ok {
 			dbDir = filepath.Dir(dbPather.Path())
 		}
 	}
-	// Fallback: look for a .axon directory under the watched path.
 	if dbDir == "" {
 		candidate := filepath.Join(absPath, ".axon")
 		if info, err2 := os.Stat(candidate); err2 == nil && info.IsDir() {
@@ -607,8 +658,7 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 		}
 	}
 
-	// Walk directory tree and register every subdirectory with the watcher,
-	// skipping the DB directory to avoid self-triggering.
+	// skipDir returns true for the DB directory and its children.
 	skipDir := func(p string) bool {
 		if dbDir == "" {
 			return false
@@ -616,12 +666,26 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 		rel, err2 := filepath.Rel(dbDir, p)
 		return err2 == nil && !strings.HasPrefix(rel, "..")
 	}
+
+	// shouldSkipWatch returns true for paths that should not be watched or
+	// trigger re-indexing (DB dir, excluded patterns).
+	shouldSkipWatch := func(p string) bool {
+		if skipDir(p) {
+			return true
+		}
+		if fsIdx != nil && fsIdx.ShouldIgnore(p, filepath.Base(p)) {
+			return true
+		}
+		return false
+	}
+
+	// Walk directory tree and register every subdirectory with the watcher.
 	if err := filepath.WalkDir(absPath, func(p string, d iofs.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip inaccessible paths
 		}
 		if d.IsDir() {
-			if skipDir(p) {
+			if shouldSkipWatch(p) {
 				return iofs.SkipDir
 			}
 			if watchErr := watcher.Add(p); watchErr != nil {
@@ -633,9 +697,10 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 		return fmt.Errorf("walking directory for watch: %w", err)
 	}
 
-	// Debounce loop: accumulate changed paths, fire re-index after quiet period.
-	pending := make(map[string]struct{})
-	var debounce <-chan time.Time // nil = no pending timer (blocks in select)
+	// Debounce loop: accumulate changed paths with their operation types,
+	// then fire targeted re-index (or delete) per path after quiet period.
+	pending := make(map[string]fsnotify.Op)
+	var debounce <-chan time.Time
 
 	for {
 		select {
@@ -646,17 +711,14 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 			if !ok {
 				return nil
 			}
-			// Skip events originating from the DB directory.
-			if skipDir(event.Name) {
+			// Skip events from the DB directory.
+			if shouldSkipWatch(event.Name) {
 				continue
 			}
-			// Skip events from hidden files/dirs (starting with '.').
-			// These are excluded from indexing, so re-indexing would be wasted work.
-			if base := filepath.Base(event.Name); strings.HasPrefix(base, ".") {
-				continue
-			}
-			pending[event.Name] = struct{}{}
-			debounce = time.After(opts.Debounce) // reset/start debounce window
+			// Accumulate ops: multiple events for the same path within the
+			// debounce window are OR-ed together.
+			pending[event.Name] |= event.Op
+			debounce = time.After(opts.Debounce)
 
 		case watchErr, ok := <-watcher.Errors:
 			if !ok {
@@ -669,75 +731,63 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 				debounce = nil
 				continue
 			}
-			reindexRoot := watchCommonAncestorDir(pending, absPath)
-			pending = make(map[string]struct{})
+			snapshot := pending
+			pending = make(map[string]fsnotify.Op)
 			debounce = nil
 
-			reindexOpts := opts.IndexOptions
-			reindexOpts.Path = reindexRoot
-			res, rerr := a.IndexWithOptions(ctx, reindexOpts)
-			if opts.OnReindex != nil {
-				opts.OnReindex(reindexRoot, res, rerr)
+			for changedPath, op := range snapshot {
+				// Deletion: remove from graph and stop watching.
+				if op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+					// Path was deleted or renamed away — remove from graph.
+					// OnReindex is intentionally NOT called for deletions;
+					// callers can't distinguish "0 files indexed" from a deletion.
+					if err := a.DeleteByPath(ctx, changedPath); err != nil {
+						log.Printf("axon: delete %s: %v", changedPath, err)
+					}
+					_ = watcher.Remove(changedPath)
+					continue
+				}
+
+				// Created or modified: stat to confirm it still exists.
+				info, statErr := os.Stat(changedPath)
+				if statErr != nil {
+					// File disappeared between event and debounce.
+					if err := a.DeleteByPath(ctx, changedPath); err != nil {
+						log.Printf("axon: delete disappeared %s: %v", changedPath, err)
+					}
+					continue
+				}
+
+				// New directory: recursively register it and all its subdirectories
+				// with the watcher so future events inside deeply nested paths are
+				// captured (e.g. after `git clone` or `cp -r`).
+				if info.IsDir() && op&fsnotify.Create != 0 {
+					_ = filepath.WalkDir(changedPath, func(p string, d iofs.DirEntry, err error) error {
+						if err != nil {
+							return nil // skip inaccessible paths
+						}
+						if d.IsDir() {
+							if shouldSkipWatch(p) {
+								return iofs.SkipDir
+							}
+							if watchErr := watcher.Add(p); watchErr != nil {
+								log.Printf("axon: watch: failed to watch new dir %s: %v", p, watchErr)
+							}
+						}
+						return nil
+					})
+				}
+
+				// Re-index the individual file or directory.
+				reindexOpts := opts.IndexOptions
+				reindexOpts.Path = changedPath
+				res, rerr := a.IndexWithOptions(ctx, reindexOpts)
+				if opts.OnReindex != nil {
+					opts.OnReindex(changedPath, res, rerr)
+				}
 			}
 		}
 	}
-}
-
-// watchCommonAncestorDir returns the deepest common ancestor directory of all
-// paths in the set. It falls back to fallback when the set is empty or the
-// common ancestor cannot be determined.
-func watchCommonAncestorDir(paths map[string]struct{}, fallback string) string {
-	if len(paths) == 0 {
-		return fallback
-	}
-
-	// Collect the parent directory of each changed path.
-	// Use filepath.Dir so that both file and directory events resolve
-	// to the containing directory.
-	dirs := make([]string, 0, len(paths))
-	for p := range paths {
-		info, err := os.Stat(p)
-		if err == nil && info.IsDir() {
-			dirs = append(dirs, filepath.Clean(p))
-		} else {
-			dirs = append(dirs, filepath.Dir(p))
-		}
-	}
-
-	common := dirs[0]
-	for _, d := range dirs[1:] {
-		common = watchLongestCommonPathPrefix(common, d)
-	}
-
-	if common == "" || common == "." {
-		return fallback
-	}
-	return common
-}
-
-// watchLongestCommonPathPrefix returns the longest common path prefix shared by
-// two absolute paths, always at a directory boundary.
-func watchLongestCommonPathPrefix(a, b string) string {
-	sep := string(filepath.Separator)
-	aParts := strings.Split(filepath.Clean(a), sep)
-	bParts := strings.Split(filepath.Clean(b), sep)
-
-	var common []string
-	for i := 0; i < len(aParts) && i < len(bParts); i++ {
-		if aParts[i] != bParts[i] {
-			break
-		}
-		common = append(common, aParts[i])
-	}
-
-	if len(common) == 0 {
-		return sep
-	}
-	result := strings.Join(common, sep)
-	if result == "" {
-		return sep
-	}
-	return result
 }
 
 // ErrNoIndexer is returned when no indexer can handle a URI.

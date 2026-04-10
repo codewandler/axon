@@ -17,7 +17,16 @@ import (
 
 // Config holds configuration for the filesystem indexer.
 type Config struct {
-	// Ignore contains glob patterns to ignore (e.g., ".git", "node_modules").
+	// Include contains glob patterns. When non-empty, only paths matching
+	// at least one pattern are indexed (applied to files only; directories
+	// are always traversed). Patterns matched against name and full path.
+	Include []string
+
+	// Exclude contains glob patterns to skip. Matched against file name
+	// and full absolute path. Takes precedence over Include.
+	Exclude []string
+
+	// Ignore is a deprecated alias for Exclude. Merged with Exclude in New().
 	Ignore []string
 }
 
@@ -29,6 +38,10 @@ type Indexer struct {
 
 // New creates a new filesystem indexer with the given configuration.
 func New(cfg Config) *Indexer {
+	// Merge deprecated Ignore into Exclude. Use an explicit copy to avoid
+	// mutating the caller's backing array via append.
+	cfg.Exclude = append(append([]string(nil), cfg.Exclude...), cfg.Ignore...)
+	cfg.Ignore = nil
 	return &Indexer{
 		config: cfg,
 		tagger: tagger.New(tagger.Config{}),
@@ -89,8 +102,8 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 
 		uri := types.PathToURI(path)
 
-		// Check ignore patterns
-		if i.shouldIgnore(path, d.Name()) {
+		// Check exclude patterns first (takes precedence over include)
+		if i.ShouldIgnore(path, d.Name()) {
 			if d.IsDir() {
 				// Include ignored dirs for deletion detection, but mark as ignored
 				entries = append(entries, discoveredEntry{
@@ -101,6 +114,11 @@ func (i *Indexer) Index(ctx context.Context, ictx *indexer.Context) error {
 				return filepath.SkipDir
 			}
 			// Ignored files are simply skipped
+			return nil
+		}
+
+		// Check include filter (files only — directories always traversed)
+		if !d.IsDir() && !i.shouldInclude(path, d.Name()) {
 			return nil
 		}
 
@@ -315,21 +333,31 @@ func (i *Indexer) HandleEvent(ctx context.Context, ictx *indexer.Context, event 
 	return nil
 }
 
-func (i *Indexer) shouldIgnore(path, name string) bool {
-	// Skip all hidden files and directories (names starting with '.').
-	// This covers .git, .vscode, .idea, .DS_Store, .env, etc.
-	// The .git directory is still indexed as a minimal node (ignored=true)
-	// for deletion detection, so the git indexer still receives events.
-	if strings.HasPrefix(name, ".") {
-		return true
-	}
-
-	for _, pattern := range i.config.Ignore {
-		// Check if pattern matches the name directly
+// ShouldIgnore reports whether path should be excluded from indexing.
+// Exported so the watcher can apply the same logic to fsnotify events.
+func (i *Indexer) ShouldIgnore(path, name string) bool {
+	for _, pattern := range i.config.Exclude {
 		if matched, _ := filepath.Match(pattern, name); matched {
 			return true
 		}
-		// Check if pattern matches the full path
+		if matched, _ := filepath.Match(pattern, path); matched {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldInclude reports whether path passes the include filter.
+// Always returns true when no include patterns are configured.
+// Applied to files only; directories are never filtered by include patterns.
+func (i *Indexer) shouldInclude(path, name string) bool {
+	if len(i.config.Include) == 0 {
+		return true
+	}
+	for _, pattern := range i.config.Include {
+		if matched, _ := filepath.Match(pattern, name); matched {
+			return true
+		}
 		if matched, _ := filepath.Match(pattern, path); matched {
 			return true
 		}

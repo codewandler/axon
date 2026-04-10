@@ -11,6 +11,49 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`axon index` command** — replaces the separate `init` and `watch` commands
+  with a single `index [path]` command. `--watch`, `--watch-debounce`, and
+  `--watch-quiet` flags added. `init` is kept as an alias for backward
+  compatibility. (`cmd/axon/index.go`)
+
+- **`Axon.DeleteByPath()`** — removes a filesystem path (or entire subtree for
+  directories) from the graph and cleans up orphaned edges. Used internally by
+  the watch loop on `Remove`/`Rename` events. (`axon.go`)
+
+- **`FSInclude` config field** — allow-list of glob patterns; when non-empty
+  only matching files are indexed (directories are always traversed). (`axon.go`)
+
+- **`Registry.ByName()`** — looks up a registered indexer by its `Name()`
+  string. (`indexer/registry.go`)
+
+### Changed
+
+- **Per-file targeted watch re-indexing** — the watch loop now re-indexes or
+  deletes each changed path individually instead of computing the deepest
+  common ancestor of all pending paths. Deletions are handled without calling
+  `OnReindex`; the watcher also consults the FS indexer's exclusion rules so
+  ignored paths never trigger re-indexes. (`axon.go`)
+
+- **Dotfiles no longer blanket-excluded** — the FS indexer no longer skips all
+  hidden files/directories. `DefaultFSIgnore` is updated with specific entries
+  (`.git`, `.devspace`, `.DS_Store`, `*.log`) so that useful dotfiles such as
+  `.agents/` and `.claude/` remain visible in the graph. (`axon.go`,
+  `indexer/fs/indexer.go`)
+
+- **`FSExclude` replaces `FSIgnore`** in `axon.Config`; `FSIgnore` kept as a
+  deprecated alias that is merged into `FSExclude` at construction time.
+  `fs.Config` gains matching `Include`/`Exclude` fields and exports
+  `ShouldIgnore()`. (`axon.go`, `indexer/fs/indexer.go`)
+
+### Fixed
+
+- **`context.Canceled` on Ctrl+C in `--watch` mode** no longer causes cobra to
+  print an error message and the full usage block. (`cmd/axon/index.go`)
+
+---
+
+### Added
+
 - **Git commit indexing** — the git indexer now walks the commit log (default
   cap: 500 per repo) and creates `vcs:commit` nodes with full metadata: SHA,
   subject, body, author, committer, date, and change stats (files changed,
