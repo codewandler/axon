@@ -35,8 +35,9 @@ golangci-lint run
 # Format code
 gofmt -w .
 
-# Install CLI globally (final step after impl, test, e2e test)
-go install ./cmd/axon
+# Install CLI globally — always use task, not go install directly.
+# go install skips -ldflags and leaves the version as "dev".
+task install
 ```
 
 ## Project Structure
