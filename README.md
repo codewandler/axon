@@ -30,7 +30,7 @@ Axon is built to be used directly by AI agents as a persistent knowledge tool. C
 
 > You have access to **`axon`** — a graph-based knowledge CLI for AI agents that indexes your codebase into a queryable graph.
 >
-> **Step 1 — Install** (requires Go 1.23+):
+> **Step 1 — Install** (requires Go 1.25+):
 > ```bash
 > go install github.com/codewandler/axon/cmd/axon@latest
 > ```
@@ -58,7 +58,7 @@ Axon is built to be used directly by AI agents as a persistent knowledge tool. C
 go install github.com/codewandler/axon/cmd/axon@latest
 ```
 
-Requires Go 1.23 or later.
+Requires Go 1.25 or later.
 
 ## Quickstart
 
