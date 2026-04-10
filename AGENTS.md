@@ -2,6 +2,12 @@
 
 Graph-based storage system for AI agent context management, retrieval, and exploration.
 
+> ⚠️ **Agent: this file overrides the generic coder skill workflow.**
+> Before doing ANY work on a GitHub issue, read `## GitHub Issue Workflow` below.
+> It defines the exact 13-step process — including worktree location, design doc,
+> plan doc, PR, release, and close-the-loop steps — that must be followed instead
+> of the generic skill workflow.
+
 ## Build & Test Commands
 
 ```bash
@@ -388,6 +394,7 @@ Built-in providers:
 All providers are in `indexer/embeddings/`. The package is designed to be extractable as a standalone library — no file except `indexer.go` imports axon-internal packages.
 
 ## GitHub Issue Workflow
+<!-- trigger: work on issue, github issue, according to workflow, github workflow, implement issue, fix issue -->
 
 This is the end-to-end autonomous workflow for working on a GitHub issue.
 All steps are performed by the agent without waiting for human input **unless

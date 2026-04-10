@@ -8,3 +8,4 @@ TODO.md
 *.exe
 .axon
 worktrees
+.task
