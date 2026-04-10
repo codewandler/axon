@@ -7,7 +7,7 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.5.0] — 2026-04-10
 
 ### Added
 
@@ -59,6 +59,33 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   packages import those packages via the import graph.
   (`cmd/axon/impact.go`)
 
+- **`axon tree` accepts a node ID prefix** — in addition to filesystem
+  paths, `axon tree` now resolves a short node ID prefix (≥ 4 chars,
+  no path separators) against the graph and roots the tree at the
+  matching node. (`cmd/axon/tree.go`)
+
+### Changed
+
+- **`data.ext` stored without leading dot** — `data.ext` was stored as
+  `".go"` (matching `filepath.Ext()` output) but every query example and
+  user expectation used `'go'` without the dot. The fs indexer now strips
+  the leading dot before storing, so `data.ext = 'go'` and
+  `axon find --ext go` work consistently. Existing databases need
+  re-indexing. (`indexer/fs/indexer.go`, `types/fs.go`, `cmd/axon/find.go`,
+  `cmd/axon/query.go`, `cmd/axontui/preview.go`, `cmd/axontui/querybar.go`)
+
+- **Removed dead code identified by staticcheck** — unused functions
+  (`formatTimestamp`, `fileExtension`, `edgeArrow`, `padRight`,
+  `compileCTEVariableLength`), unused struct fields (`skipIndex`,
+  `contentStart`, `contentEnd`), unused variables (`pomNameRegex`,
+  `pomVersionRegex`), and unused style declarations removed across
+  multiple packages.
+
+- **`strings.Title` replaced with an ASCII-safe `titleCase` helper** —
+  the deprecated `strings.Title` call used for display-header formatting
+  has been replaced with a local helper that capitalises ASCII words
+  without importing `golang.org/x/text`. (`cmd/axon/query.go`)
+
 ### Fixed
 
 - **`SELECT COUNT(*)` in pattern queries no longer requires `GROUP BY`** —
@@ -85,27 +112,6 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `axon stats` display now annotates node and edge counts with
   `(scoped to CWD)` or `(global)` depending on the `--global` flag.
   (`cmd/axon/stats.go`)
-
-### Added
-
-- **`axon tree` accepts a node ID prefix** — in addition to filesystem
-  paths, `axon tree` now resolves a short node ID prefix (≥ 4 chars,
-  no path separators) against the graph and roots the tree at the
-  matching node. (`cmd/axon/tree.go`)
-
-### Changed
-
-- **Removed dead code identified by staticcheck** — unused functions
-  (`formatTimestamp`, `fileExtension`, `edgeArrow`, `padRight`,
-  `compileCTEVariableLength`), unused struct fields (`skipIndex`,
-  `contentStart`, `contentEnd`), unused variables (`pomNameRegex`,
-  `pomVersionRegex`), and unused style declarations removed across
-  multiple packages.
-
-- **`strings.Title` replaced with an ASCII-safe `titleCase` helper** —
-  the deprecated `strings.Title` call used for display-header formatting
-  has been replaced with a local helper that capitalises ASCII words
-  without importing `golang.org/x/text`. (`cmd/axon/query.go`)
 
 ---
 
