@@ -159,6 +159,14 @@ func sendProgress(ch chan<- progress.Event, evt progress.Event) {
 	ch <- evt
 }
 
+// BuildNodeText builds a text representation of a node for embedding.
+// It is exported so callers that write nodes programmatically (e.g. via
+// (*Axon).WriteNode) can generate consistent embeddings without re-implementing
+// the same logic.
+func BuildNodeText(node *graph.Node) string {
+	return buildNodeText(node)
+}
+
 // buildNodeText builds a text representation of a node for embedding.
 func buildNodeText(node *graph.Node) string {
 	parts := []string{node.Name, node.Type}

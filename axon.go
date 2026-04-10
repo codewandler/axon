@@ -575,9 +575,23 @@ func (a *Axon) SemanticSearch(ctx context.Context, queries []string, limit int, 
 	return out, nil
 }
 
+// SearchOptions configures a call to (*Axon).Search.
+type SearchOptions struct {
+	// Limit is the maximum number of results to return. Defaults to 20.
+	Limit int
+
+	// Filter restricts the search to nodes matching the given criteria.
+	// nil = no filter (search all nodes).
+	Filter *graph.NodeFilter
+
+	// MinScore drops results whose similarity score is below this threshold.
+	// Range 0.0–1.0. Default 0 = return all results.
+	MinScore float32
+}
+
 // Querier is the read-only interface for executing queries against an axon graph.
-// Both *Axon (after indexing) and *Client (opened from a DB file) satisfy it,
-// allowing integrators to write functions that accept either.
+// *Axon satisfies it, allowing integrators to depend on the interface for easier
+// testing and decoupling.
 type Querier interface {
 	// Query executes a pre-built AQL query (from aql.Builder.Build or aql.Parse).
 	Query(ctx context.Context, q *aql.Query) (*graph.QueryResult, error)
@@ -592,10 +606,9 @@ type Querier interface {
 	// Find returns nodes matching the structural filter.
 	Find(ctx context.Context, filter graph.NodeFilter, opts graph.QueryOptions) ([]*graph.Node, error)
 
-	// Search performs semantic vector similarity search across all query
-	// strings and returns up to limit results sorted by score descending.
-	// Returns ErrNoEmbeddingProvider if no provider is configured.
-	Search(ctx context.Context, queries []string, limit int, filter *graph.NodeFilter) ([]*SemanticSearchResult, error)
+	// Search performs semantic vector similarity search.
+	// Returns ErrNoEmbeddingProvider if no embedding provider is configured.
+	Search(ctx context.Context, queries []string, opts SearchOptions) ([]*SemanticSearchResult, error)
 }
 
 // compile-time check: *Axon must satisfy Querier.
@@ -626,9 +639,69 @@ func (a *Axon) Find(ctx context.Context, filter graph.NodeFilter, opts graph.Que
 	return a.storage.FindNodes(ctx, filter, opts)
 }
 
-// Search is a convenience alias for SemanticSearch.
-func (a *Axon) Search(ctx context.Context, queries []string, limit int, filter *graph.NodeFilter) ([]*SemanticSearchResult, error) {
-	return a.SemanticSearch(ctx, queries, limit, filter)
+// Search performs semantic vector similarity search with the given options.
+// It wraps SemanticSearch and applies MinScore filtering after the search.
+func (a *Axon) Search(ctx context.Context, queries []string, opts SearchOptions) ([]*SemanticSearchResult, error) {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	results, err := a.SemanticSearch(ctx, queries, limit, opts.Filter)
+	if err != nil {
+		return nil, err
+	}
+	if opts.MinScore > 0 {
+		filtered := results[:0]
+		for _, r := range results {
+			if r.Score >= opts.MinScore {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
+	return results, nil
+}
+
+// WriteNode writes a node to the graph, flushes it to storage, and
+// automatically generates and stores an embedding if an EmbeddingProvider is
+// configured. This is the preferred way to persist custom nodes programmatically
+// — the node will be immediately findable via Search without requiring a full
+// re-index run.
+func (a *Axon) WriteNode(ctx context.Context, node *graph.Node) error {
+	if err := a.storage.PutNode(ctx, node); err != nil {
+		return fmt.Errorf("WriteNode: put: %w", err)
+	}
+	if err := a.storage.Flush(ctx); err != nil {
+		return fmt.Errorf("WriteNode: flush: %w", err)
+	}
+	if a.config.EmbeddingProvider != nil {
+		type embedStore interface {
+			PutEmbedding(context.Context, string, []float32) error
+		}
+		if es, ok := a.storage.(embedStore); ok {
+			vec, err := a.config.EmbeddingProvider.Embed(ctx, embeddings.BuildNodeText(node))
+			if err == nil {
+				_ = es.PutEmbedding(ctx, node.ID, vec)
+			}
+		}
+	}
+	return nil
+}
+
+// PutNode writes a node to the storage layer without flushing or embedding.
+// Use WriteNode for the full write-flush-embed cycle.
+func (a *Axon) PutNode(ctx context.Context, node *graph.Node) error {
+	return a.storage.PutNode(ctx, node)
+}
+
+// GetNodeByURI returns the node with the given URI, or an error if not found.
+func (a *Axon) GetNodeByURI(ctx context.Context, uri string) (*graph.Node, error) {
+	return a.storage.GetNodeByURI(ctx, uri)
+}
+
+// Flush flushes any buffered writes to the underlying storage.
+func (a *Axon) Flush(ctx context.Context) error {
+	return a.storage.Flush(ctx)
 }
 
 // IndexResult contains statistics from an indexing operation.

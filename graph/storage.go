@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -18,6 +19,21 @@ type NodeFilter struct {
 	Generation  string   // Filter by exact generation ID (empty = any). Pass indexer.Context.Generation
 	             // to scope a query to only nodes written in the current indexing run.
 	Root        bool     // Only nodes with no incoming containment edges (top-level roots)
+}
+
+// Normalize returns a copy of f with normalized field values.
+// Extensions are stripped of any leading dot so that "go" and ".go" are
+// treated identically — callers need not pre-strip the dot.
+func (f NodeFilter) Normalize() NodeFilter {
+	if len(f.Extensions) == 0 {
+		return f
+	}
+	result := f
+	result.Extensions = make([]string, len(f.Extensions))
+	for i, e := range f.Extensions {
+		result.Extensions[i] = strings.TrimPrefix(e, ".")
+	}
+	return result
 }
 
 // EdgeFilter specifies criteria for finding/counting edges.

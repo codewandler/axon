@@ -550,23 +550,9 @@ func outputSemanticResults(results []*graph.NodeWithScore, format string) error 
 	}
 }
 
-// uriPrefixForScope returns the URI prefix for local scoping, using the
-// correct scheme for the given node type. Without this, non-filesystem types
-// (vcs:commit → git+file://, go:func → go+file://, md:section → file+md://)
-// would be silently excluded by the file:// prefix used for FS nodes.
-// When type is empty (no --type flag), falls back to file:// which scopes
-// to filesystem nodes; use --global to search all types without restriction.
+// uriPrefixForScope delegates to types.URIPrefixForType.
 func uriPrefixForScope(absPath, nodeType string) string {
-	switch {
-	case strings.HasPrefix(nodeType, "vcs:"):
-		return "git+file://" + absPath
-	case strings.HasPrefix(nodeType, "go:"):
-		return "go+file://" + absPath
-	case strings.HasPrefix(nodeType, "md:"):
-		return "file+md://" + absPath
-	default:
-		return types.PathToURI(absPath) // file://
-	}
+	return types.URIPrefixForType(nodeType, absPath)
 }
 
 // escapeSQL escapes single quotes in a string for safe interpolation into AQL/SQL.

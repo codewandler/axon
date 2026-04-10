@@ -886,6 +886,7 @@ func (s *Storage) scanEdges(rows *sql.Rows) ([]*graph.Edge, error) {
 }
 
 func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter, opts graph.QueryOptions) ([]*graph.Node, error) {
+	filter = filter.Normalize()
 	if err := s.Flush(ctx); err != nil {
 		return nil, err
 	}
@@ -1054,6 +1055,7 @@ func (s *Storage) buildOrderBy(opts graph.QueryOptions, validColumns ...string) 
 }
 
 func (s *Storage) CountNodes(ctx context.Context, filter graph.NodeFilter, opts graph.QueryOptions) (map[string]int, error) {
+	filter = filter.Normalize()
 	if err := s.Flush(ctx); err != nil {
 		return nil, err
 	}
@@ -1589,6 +1591,10 @@ func (s *Storage) GetEmbedding(ctx context.Context, nodeID string) ([]float32, e
 
 // FindSimilar loads all embeddings, computes cosine similarity, and returns top-k results.
 func (s *Storage) FindSimilar(ctx context.Context, query []float32, limit int, filter *graph.NodeFilter) ([]*graph.NodeWithScore, error) {
+	if filter != nil {
+		norm := filter.Normalize()
+		filter = &norm
+	}
 	// First flush to ensure all nodes are committed
 	if err := s.Flush(ctx); err != nil {
 		return nil, err

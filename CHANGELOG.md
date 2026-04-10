@@ -7,6 +7,42 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.1] — 2026-04-10
+
+### Added
+
+- **`types.URIPrefixForType(nodeType, workDir...)`** — exported helper that maps a
+  node type family to its URI scheme prefix (`go:*` → `go+file://`, `vcs:*` →
+  `git+file://`, `md:*` → `file+md://`, everything else → `file://`). `workDir`
+  is optional and defaults to the current working directory.
+- **`SearchOptions` struct** — replaces the old `limit int, filter *NodeFilter`
+  parameters on `(*Axon).Search`. Adds `MinScore float32` so callers no longer
+  need to post-filter results themselves.
+- **`(*Axon).WriteNode`** — writes a node, flushes it to storage, and automatically
+  generates and stores an embedding if an `EmbeddingProvider` is configured.
+  Custom nodes are immediately findable via `Search` without a full re-index.
+- **`(*Axon).PutNode`** — raw write without flush or embedding (escape hatch).
+- **`(*Axon).GetNodeByURI`** — look up a node by URI without reaching into
+  `ax.Graph().Storage()`.
+- **`(*Axon).Flush`** — flush buffered writes to storage.
+- **`embeddings.BuildNodeText`** — exported helper that builds the canonical text
+  representation of a node used for embedding (name + type + labels + doc/sig).
+- **`NodeFilter.Normalize()`** — returns a copy of the filter with extensions
+  stripped of leading dots, so `"go"` and `".go"` are treated identically.
+  Called automatically by `FindNodes`, `CountNodes`, and `FindSimilar` in the
+  SQLite adapter.
+
+### Changed
+
+- **`(*Axon).Search` signature** — now accepts `SearchOptions` instead of
+  `limit int, filter *graph.NodeFilter`. `SemanticSearch` is unchanged.
+- **`Querier.Search` signature** — updated to match the new `SearchOptions`-based
+  `Search` method.
+- **`cmd/axon/find.go`** — private `uriPrefixForScope` now delegates to
+  `types.URIPrefixForType` (no behaviour change).
+
+---
+
 ## [0.9.0] — 2026-04-10
 
 ### Added
