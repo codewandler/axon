@@ -7,10 +7,18 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [0.8.0] — 2026-05-13
 
 ### Added
 
+- **Semantic search in `axon find`** — pass a text argument to trigger vector
+  similarity search; all existing flags (`--type`, `--label`, `--ext`, `--global`)
+  apply as post-filters on the results:
+  ```
+  axon find "error handling"
+  axon find "concurrency and goroutines" --type go:func
+  axon find "recent logo commits" --type vcs:commit --limit 5
+  ```
 - **Embedding progress in TUI** — `axon index --embed` now shows a live
   `Vectorizing` row with progress bar, percentage, rate, and ETA while
   embeddings are being generated; previously the embedding phase ran silently.
@@ -20,9 +28,31 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Redesigned post-run summary** — rows are prefixed with ✓ / ✗ icons, the
   name column is auto-sized, and embedding stats appear in a dedicated
   `Vectorizing` section.
-- **Visual polish** — deterministic per-indexer spinner offsets (no more
-  visually noisy random frames), smooth bar-width calculation, auto-sized name
-  column, `"items"` label replaced with `"nodes"`.
+- **`vcs:commit` embeddings** — commit nodes are now included in
+  `DefaultEmbedTypes`; message + body are used as embedding text, enabling
+  semantic search over git history.
+- **`IsClosed()` on Coordinator** — prevents the TUI from quitting before
+  PostIndexers have had a chance to start and report progress.
+- **`StartedInPhase(indexer, phase)`** — new progress helper for tagging
+  events with a named display group.
+
+### Changed
+
+- **`axon search` deprecated** — replaced by `axon find "<query>"`; the old
+  command is kept as a hidden shim for one release cycle and prints a
+  deprecation notice.
+- **`FindSimilar` filter order fixed** — type/label/ext filters are now applied
+  before truncating to `limit`, so the full requested number of results is
+  returned even when filters discard candidates.
+- **`nodeMatchesFilter` extended** — now covers `URIPrefix`, `Labels`, and
+  `Extensions`, enabling scoped and filtered semantic search.
+- **Deterministic TUI spinner** — each indexer row uses a fixed per-indexer
+  offset instead of `rand.Intn`; eliminates visual noise during concurrent indexing.
+- **Auto-sized name column** — both the live TUI and post-run summary adjust
+  the name column width to the longest indexer name.
+- **Smooth bar-width calculation** — progress bar width scales linearly with
+  terminal width instead of hard-switching at 100 columns.
+- Go version requirement in docs aligned to 1.25.
 
 ### Fixed
 
@@ -30,6 +60,14 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   quit as soon as all main indexers completed, before `PostIndexer` work
   (embeddings, link resolution) began. The quit condition now waits for
   `coord.Close()`, which is only called after all post-index stages finish.
+
+### Docs
+
+- README rewritten to reflect unified `axon find`; `axon search` section
+  replaced with a deprecation notice.
+- AGENTS.md CLI command table updated.
+- Axon skill files updated (`axon search` → `axon find` throughout).
+- Design and plan docs added under `.agents/plans/`.
 
 ---
 
