@@ -724,6 +724,7 @@ Axon uses typed nodes with `domain:name` format:
 ### Version Control
 
 - `vcs:repo` - Git repository
+- `vcs:remote` - Git remote
 - `vcs:branch` - Branch
 - `vcs:tag` - Tag
 - `vcs:commit` - Commit
@@ -731,16 +732,28 @@ Axon uses typed nodes with `domain:name` format:
 ### Documents
 
 - `md:document` - Markdown document
-- `md:section` - Document section
-- `md:heading` - Heading
+- `md:section` - Document section (heading-based; `data.level` = 1–6)
+- `md:codeblock` - Fenced code block
+- `md:link` - External link
+- `md:image` - Image reference
 
 ### Go Code
 
+- `go:module` - Go module (go.mod root)
 - `go:package` - Go package
 - `go:func` - Function or method
+- `go:method` - Method on a type
 - `go:struct` - Struct type
+- `go:field` - Struct field
 - `go:interface` - Interface type
+- `go:const` - Constant
+- `go:var` - Package-level variable
 - `go:ref` - Symbol reference (call site, type usage, etc.)
+
+### Project
+
+- `project:root` - Project root detected from a manifest file (go.mod, package.json, Cargo.toml, etc.)
+  - Data: `type` (language: go, node, rust, python, java, ruby, php), `name`, `version`, `dep_count`
 
 ## Edge Types
 
@@ -756,6 +769,8 @@ Common edge types follow generic semantics:
 - `implements` - Struct implements interface (go:struct → go:interface)
 - `tests` - Test package tests source package (go:package → go:package)
 - `defines` - Package defines symbol (go:package → go:func/struct/etc.)
+- `parent_of` - Commit DAG parent-to-child (vcs:commit → vcs:commit)
+- `modifies` - Commit modified a file (vcs:commit → fs:file)
 
 ## Architecture
 
@@ -768,7 +783,13 @@ Axon consists of:
   - `fs` - Filesystem indexer
   - `git` - Git repository indexer
   - `markdown` - Markdown document indexer
+  - `golang` - Go source code indexer
+  - `project` - Project manifest indexer (go.mod, package.json, …)
+  - `tagger` - Rule-based label tagger (applies labels by name/path pattern)
+  - `embeddings` - Embedding providers (Ollama, Hugot, null)
+- **Context Engine** (`context/`) - Token-budget-aware context gathering for AI agents
 - **CLI** (`cmd/axon/`) - Command-line interface
+- **TUI** (`cmd/axontui/`) - Terminal UI explorer
 
 **Key Features**:
 

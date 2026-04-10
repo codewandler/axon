@@ -7,6 +7,26 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.3] — 2026-04-10
+
+### Changed
+
+- **`README.md`** — Architecture section now lists all indexers (`tagger`,
+  `embeddings`, `golang`, `project`), the `context/` engine, and the
+  `cmd/axontui/` TUI explorer.
+- **`AGENTS.md`** — Project structure tree updated to match the real directory
+  layout (added `golang/`, `project/`, `tagger/`, `embeddings/` under
+  `indexer/`; added `context/` and `cmd/axontui/` at the top level).
+
+### Fixed
+
+- **`cmd/axontui/pane.go`** — Removed dead empty `if` block (stale "show more"
+  placeholder that was never implemented).
+- **`indexer/project/indexer_test.go`** — Converted `if/else if` chain on
+  `sub.EventType` to a `switch` for clarity.
+
+---
+
 ## [0.9.2] — 2026-04-10
 
 ### Changed

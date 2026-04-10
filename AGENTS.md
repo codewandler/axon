@@ -58,11 +58,17 @@ axon/
 ├── indexer/             # Indexer interface, registry, events, emitter
 │   ├── fs/              # Filesystem indexer
 │   ├── git/             # Git repository indexer
-│   └── markdown/        # Markdown document indexer
+│   ├── markdown/        # Markdown document indexer
+│   ├── golang/          # Go source code indexer
+│   ├── project/         # Project manifest indexer
+│   ├── tagger/          # Rule-based label tagger
+│   └── embeddings/      # Embedding providers (Ollama, Hugot, null)
+├── context/             # Context engine for AI agents (budget, walker, source, format)
 ├── types/               # Node/edge type definitions (fs, vcs, markdown)
 ├── progress/            # Progress reporting (coordinator, bubbletea UI)
 ├── render/              # Tree rendering utilities
-└── cmd/axon/            # CLI commands (init, query, tree, find, show, etc.)
+├── cmd/axon/            # CLI commands (init, query, tree, find, show, etc.)
+└── cmd/axontui/         # Terminal UI explorer
 ```
 
 ## Code Style Guidelines

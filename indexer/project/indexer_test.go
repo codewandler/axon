@@ -601,9 +601,10 @@ func TestSubscriptions(t *testing.T) {
 	deleteSubs := make(map[string]bool)
 
 	for _, sub := range subs {
-		if sub.EventType == indexer.EventEntryVisited {
+		switch sub.EventType {
+		case indexer.EventEntryVisited:
 			visitSubs[sub.Name] = true
-		} else if sub.EventType == indexer.EventNodeDeleting {
+		case indexer.EventNodeDeleting:
 			deleteSubs[sub.Name] = true
 		}
 	}

@@ -57,10 +57,6 @@ func (p *pane) loadFromGroups(groups []*edgeGroup) {
 				groupIdx: i,
 			})
 		}
-		// "Show more" indicator if there are more nodes than loaded
-		if g.Loaded && len(g.Nodes) < g.Count {
-			// We'll show "... +N more" inline
-		}
 	}
 
 	// Reset cursor if it's out of bounds
