@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/types"
@@ -215,30 +216,20 @@ func TestAxonIndex_Silent(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	// Redirect both stdout and stderr to pipes so we can capture any output.
-	oldStdout := os.Stdout
-	oldStderr := os.Stderr
-
 	rOut, wOut, _ := os.Pipe()
 	rErr, wErr, _ := os.Pipe()
-	os.Stdout = wOut
-	os.Stderr = wErr
+	oldOut, oldErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = wOut, wErr
 
 	_, indexErr := ax.Index(ctx, "")
 
-	// Restore before reading so any deferred prints don't land in captures.
 	wOut.Close()
 	wErr.Close()
-	os.Stdout = oldStdout
-	os.Stderr = oldStderr
+	os.Stdout, os.Stderr = oldOut, oldErr
 
 	var bufOut, bufErr strings.Builder
-	if _, err := io.Copy(&bufOut, rOut); err != nil {
-		t.Fatalf("reading stdout pipe: %v", err)
-	}
-	if _, err := io.Copy(&bufErr, rErr); err != nil {
-		t.Fatalf("reading stderr pipe: %v", err)
-	}
+	io.Copy(&bufOut, rOut) //nolint:errcheck
+	io.Copy(&bufErr, rErr) //nolint:errcheck
 	rOut.Close()
 	rErr.Close()
 
@@ -246,11 +237,86 @@ func TestAxonIndex_Silent(t *testing.T) {
 		t.Fatalf("Index: %v", indexErr)
 	}
 	if got := bufOut.String(); got != "" {
-		t.Errorf("expected no stdout, got: %q", got)
+		t.Errorf("Index() wrote to stdout: %q", got)
 	}
 	if got := bufErr.String(); got != "" {
-		t.Errorf("expected no stderr, got: %q", got)
+		t.Errorf("Index() wrote to stderr: %q", got)
 	}
+}
+
+// TestAxonWatch_Silent verifies Watch() with no callbacks and no ShowProgress
+// produces zero output — the initial index and the library internals are silent.
+func TestAxonWatch_Silent(t *testing.T) {
+	dir := setupTestDir(t)
+
+	ax, err := New(Config{Dir: dir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	oldOut, oldErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = wOut, wErr
+
+	// Cancel immediately after the initial index so Watch returns quickly.
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- ax.Watch(ctx, dir, WatchOptions{
+			// OnReady and OnReindex deliberately nil — no output expected.
+		})
+	}()
+	// Give the initial index time to complete then cancel.
+	// (setupTestDir is tiny, so 500 ms is generous.)
+	select {
+	case err := <-errCh:
+		// Watch exited before we cancelled — unexpected but non-fatal.
+		if err != nil && err != context.Canceled {
+			t.Logf("Watch returned early: %v", err)
+		}
+	case <-waitForInitDone(ax, dir, 2*time.Second):
+		cancel()
+		<-errCh
+	}
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+
+	var bufOut, bufErr strings.Builder
+	io.Copy(&bufOut, rOut) //nolint:errcheck
+	io.Copy(&bufErr, rErr) //nolint:errcheck
+	rOut.Close()
+	rErr.Close()
+
+	if got := bufOut.String(); got != "" {
+		t.Errorf("Watch() wrote to stdout: %q", got)
+	}
+	if got := bufErr.String(); got != "" {
+		t.Errorf("Watch() wrote to stderr: %q", got)
+	}
+}
+
+// waitForInitDone returns a channel that closes once the initial index has
+// populated at least one node in the graph — used to time Watch cancellation.
+func waitForInitDone(ax *Axon, dir string, timeout time.Duration) <-chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		deadline := time.Now().Add(timeout)
+		for time.Now().Before(deadline) {
+			nodes, _ := ax.Graph().FindNodes(context.Background(),
+				graph.NodeFilter{URIPrefix: types.PathToURI(dir)},
+				graph.QueryOptions{Limit: 1})
+			if len(nodes) > 0 {
+				close(ch)
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		close(ch) // timed out — let caller proceed anyway
+	}()
+	return ch
 }
 
 // TestAxonIndex_ShowProgress verifies that ShowProgress: true writes lines to
@@ -264,40 +330,30 @@ func TestAxonIndex_ShowProgress(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	oldStdout := os.Stdout
-	oldStderr := os.Stderr
-
 	rOut, wOut, _ := os.Pipe()
 	rErr, wErr, _ := os.Pipe()
-	os.Stdout = wOut
-	os.Stderr = wErr
+	oldOut, oldErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = wOut, wErr
 
 	_, indexErr := ax.IndexWithOptions(ctx, IndexOptions{ShowProgress: true})
 
 	wOut.Close()
 	wErr.Close()
-	os.Stdout = oldStdout
-	os.Stderr = oldStderr
+	os.Stdout, os.Stderr = oldOut, oldErr
 
 	var bufOut, bufErr strings.Builder
-	if _, err := io.Copy(&bufOut, rOut); err != nil {
-		t.Fatalf("reading stdout pipe: %v", err)
-	}
-	if _, err := io.Copy(&bufErr, rErr); err != nil {
-		t.Fatalf("reading stderr pipe: %v", err)
-	}
+	io.Copy(&bufOut, rOut) //nolint:errcheck
+	io.Copy(&bufErr, rErr) //nolint:errcheck
 	rOut.Close()
 	rErr.Close()
 
 	if indexErr != nil {
 		t.Fatalf("Index: %v", indexErr)
 	}
-	// Nothing on stdout.
 	if got := bufOut.String(); got != "" {
-		t.Errorf("expected no stdout, got: %q", got)
+		t.Errorf("ShowProgress wrote to stdout: %q", got)
 	}
-	// At least one [axon] line on stderr.
 	if got := bufErr.String(); !strings.Contains(got, "[axon]") {
-		t.Errorf("expected [axon] progress lines on stderr, got: %q", got)
+		t.Errorf("expected [axon] lines on stderr, got: %q", got)
 	}
 }

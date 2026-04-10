@@ -546,7 +546,19 @@ type IndexResult struct {
 // WatchOptions configures the Watch behavior.
 type WatchOptions struct {
 	IndexOptions
-	Debounce  time.Duration // default: 150ms
+
+	// Debounce is how long to wait after the last file event before
+	// triggering a re-index. Default: 150ms.
+	Debounce time.Duration
+
+	// OnReady is called once after the initial full index completes.
+	// It is NOT called on subsequent change-triggered re-indexes.
+	// If nil, the initial result is silently discarded.
+	OnReady func(result *IndexResult, err error)
+
+	// OnReindex is called after each change-triggered re-index.
+	// It is NOT called for the initial index (use OnReady for that).
+	// If nil, re-index results are silently discarded.
 	OnReindex func(path string, result *IndexResult, err error)
 }
 
@@ -569,8 +581,8 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 	initOpts := opts.IndexOptions
 	initOpts.Path = absPath
 	result, indexErr := a.IndexWithOptions(ctx, initOpts)
-	if opts.OnReindex != nil {
-		opts.OnReindex(absPath, result, indexErr)
+	if opts.OnReady != nil {
+		opts.OnReady(result, indexErr)
 	}
 	if indexErr != nil {
 		return fmt.Errorf("initial index: %w", indexErr)

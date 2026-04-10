@@ -64,6 +64,16 @@ func runWatch(cmd *cobra.Command, args []string) error {
 
 	opts := axon.WatchOptions{
 		Debounce: flagWatchDebounce,
+		OnReady: func(result *axon.IndexResult, err error) {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "✗  Initial index error: %v\n", err)
+				return
+			}
+			if !flagWatchQuiet {
+				fmt.Fprintf(os.Stderr, "✓  Ready — %d files, %d dirs indexed\n",
+					result.Files, result.Directories)
+			}
+		},
 		OnReindex: func(path string, result *axon.IndexResult, err error) {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "✗  Re-index error: %v\n", err)
@@ -74,7 +84,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 				if rel == "" || rel == "." {
 					rel = "."
 				}
-				fmt.Printf("↻  Re-indexed ./%s — %d files, %d dirs (done)\n",
+				fmt.Printf("↻  Re-indexed ./%s — %d files, %d dirs\n",
 					rel, result.Files, result.Directories)
 			}
 		},
