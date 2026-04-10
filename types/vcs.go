@@ -1,6 +1,10 @@
 package types
 
-import "github.com/codewandler/axon/graph"
+import (
+	"time"
+
+	"github.com/codewandler/axon/graph"
+)
 
 // VCS node types
 const (
@@ -8,6 +12,7 @@ const (
 	TypeRemote = "vcs:remote"
 	TypeBranch = "vcs:branch"
 	TypeTag    = "vcs:tag"
+	TypeCommit = "vcs:commit"
 )
 
 // RepoData holds data for a repository node.
@@ -38,6 +43,28 @@ type TagData struct {
 	Commit string `json:"commit,omitempty"`
 }
 
+// CommitData holds data for a commit node.
+type CommitData struct {
+	SHA            string    `json:"sha"`
+	Message        string    `json:"message"`        // First line only (subject)
+	Body           string    `json:"body,omitempty"` // Full body after subject
+	AuthorName     string    `json:"author_name"`
+	AuthorEmail    string    `json:"author_email"`
+	AuthorDate     time.Time `json:"author_date"`
+	CommitterName  string    `json:"committer_name,omitempty"`
+	CommitterEmail string    `json:"committer_email,omitempty"`
+	CommitDate     time.Time `json:"commit_date,omitempty"`
+	Parents        []string  `json:"parents"`       // Parent commit SHAs
+	FilesChanged   int       `json:"files_changed"`
+	Insertions     int       `json:"insertions"`
+	Deletions      int       `json:"deletions"`
+}
+
+// CommitToURI returns the URI for a commit node.
+func CommitToURI(repoPath, sha string) string {
+	return RepoPathToURI(repoPath) + "/commit/" + sha
+}
+
 // RegisterVCSTypes registers VCS node and edge types with the registry.
 func RegisterVCSTypes(r *graph.Registry) {
 	graph.RegisterNodeType[RepoData](r, graph.NodeSpec{
@@ -58,6 +85,11 @@ func RegisterVCSTypes(r *graph.Registry) {
 	graph.RegisterNodeType[TagData](r, graph.NodeSpec{
 		Type:        TypeTag,
 		Description: "A tag in the repository",
+	})
+
+	graph.RegisterNodeType[CommitData](r, graph.NodeSpec{
+		Type:        TypeCommit,
+		Description: "A git commit",
 	})
 
 	// VCS uses common edge types: has, belongs_to, located_at

@@ -50,6 +50,8 @@ var Edge = struct {
 	DependsOn   EdgeTypeRef
 	Imports     EdgeTypeRef
 	Defines     EdgeTypeRef
+	ParentOf    EdgeTypeRef
+	Modifies    EdgeTypeRef
 }{
 	Contains:    EdgeTypeRef{"contains"},
 	ContainedBy: EdgeTypeRef{"contained_by"},
@@ -61,6 +63,8 @@ var Edge = struct {
 	DependsOn:   EdgeTypeRef{"depends_on"},
 	Imports:     EdgeTypeRef{"imports"},
 	Defines:     EdgeTypeRef{"defines"},
+	ParentOf:    EdgeTypeRef{"parent_of"},
+	Modifies:    EdgeTypeRef{"modifies"},
 }
 
 // EdgeTypeOf creates a custom edge type reference.

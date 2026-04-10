@@ -9,6 +9,39 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Git commit indexing** — the git indexer now walks the commit log (default
+  cap: 500 per repo) and creates `vcs:commit` nodes with full metadata: SHA,
+  subject, body, author, committer, date, and change stats (files changed,
+  insertions, deletions). Enables queries like "recent commits by author" and
+  "largest commits by diff size".
+  (`indexer/git/indexer.go`, `types/vcs.go`)
+
+- **`parent_of` edges** — each `vcs:commit` node emits a `parent_of` edge to
+  each of its parent commits, forming the commit DAG in the graph. Variable-
+  length path queries (`[:parent_of*1..N]`) traverse the ancestry chain.
+  (`types/edges.go`, `indexer/git/indexer.go`)
+
+- **`modifies` edges** — for single-parent commits, a `modifies` edge is
+  emitted from the commit to each `fs:file` node it touched, enabling
+  "hotspot" queries (most frequently modified files).
+  (`types/edges.go`, `indexer/git/indexer.go`)
+
+- **Branch/tag → commit `references` edges** — `vcs:branch` and `vcs:tag`
+  nodes now emit a `references` edge to their tip `vcs:commit` node, making
+  it possible to query "what commit does this branch/tag point to?".
+  (`indexer/git/indexer.go`)
+
+- **`git.Config` with `MaxCommits`** — the git indexer accepts a `Config`
+  struct with a `MaxCommits` field (default 500) to cap commit ingestion per
+  repo. Exposed via `axon.Config.GitConfig`.
+  (`indexer/git/indexer.go`, `axon.go`)
+
+- **AQL constants** — `aql.NodeType.Commit`, `aql.Edge.ParentOf`, and
+  `aql.Edge.Modifies` added to the type-safe fluent builder.
+  (`aql/nodetypes.go`, `aql/edgetypes.go`)
+
 ### Fixed
 
 - **SQLite SQLITE_BUSY errors eliminated** — PRAGMAs (including `busy_timeout=30s`)

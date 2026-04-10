@@ -21,6 +21,7 @@ var NodeType = struct {
 	Remote NodeTypeRef
 	Branch NodeTypeRef
 	Tag    NodeTypeRef
+	Commit NodeTypeRef
 
 	// Markdown
 	Document NodeTypeRef
@@ -40,6 +41,7 @@ var NodeType = struct {
 	Remote: NodeTypeRef{"vcs:remote"},
 	Branch: NodeTypeRef{"vcs:branch"},
 	Tag:    NodeTypeRef{"vcs:tag"},
+	Commit: NodeTypeRef{"vcs:commit"},
 
 	// Markdown
 	Document: NodeTypeRef{"md:document"},

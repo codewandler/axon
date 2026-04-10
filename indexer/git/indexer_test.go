@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -287,5 +288,329 @@ func TestSubscriptions(t *testing.T) {
 	}
 	if sub2.Name != ".git" {
 		t.Errorf("expected Name .git, got %s", sub2.Name)
+	}
+}
+
+func setupTestRepoWithCommits(t *testing.T, n int) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+
+	worktree, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+
+	for i := 0; i < n; i++ {
+		fname := fmt.Sprintf("file%d.txt", i)
+		if err := os.WriteFile(filepath.Join(dir, fname), []byte(fmt.Sprintf("content %d", i)), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if _, err := worktree.Add(fname); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+		if _, err := worktree.Commit(fmt.Sprintf("commit %d", i), &gogit.CommitOptions{
+			Author: &object.Signature{
+				Name:  "Test",
+				Email: "test@example.com",
+				When:  time.Now(),
+			},
+		}); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+	}
+
+	return dir
+}
+
+func TestIndexerCommits(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestRepoWithCommits(t, 3)
+	g := setupGraph(t)
+
+	idx := New()
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+	ictx := &indexer.Context{
+		Root:       types.RepoPathToURI(dir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	gitDir := filepath.Join(dir, ".git")
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(gitDir),
+		Path:     gitDir,
+		Name:     ".git",
+		NodeType: types.TypeDir,
+		NodeID:   "test-git-dir-id",
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	// 3 commit nodes
+	commits, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeCommit}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes: %v", err)
+	}
+	if len(commits) != 3 {
+		t.Errorf("expected 3 commits, got %d", len(commits))
+	}
+
+	// Repo → commits via 'has' edges
+	repos, _ := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeRepo}, graph.QueryOptions{})
+	if len(repos) == 0 {
+		t.Fatal("no repo found")
+	}
+	edges, _ := g.GetEdgesFrom(ctx, repos[0].ID)
+	hasCommitEdges := 0
+	for _, e := range edges {
+		if e.Type == types.EdgeHas {
+			target, err := g.GetNode(ctx, e.To)
+			if err == nil && target.Type == types.TypeCommit {
+				hasCommitEdges++
+			}
+		}
+	}
+	if hasCommitEdges != 3 {
+		t.Errorf("expected 3 'has' edges to commits, got %d", hasCommitEdges)
+	}
+
+	// parent_of edges: chain of 3 → 2 parent edges
+	parentEdges := 0
+	for _, c := range commits {
+		ces, _ := g.GetEdgesFrom(ctx, c.ID)
+		for _, e := range ces {
+			if e.Type == types.EdgeParentOf {
+				parentEdges++
+			}
+		}
+	}
+	if parentEdges != 2 {
+		t.Errorf("expected 2 parent_of edges, got %d", parentEdges)
+	}
+}
+
+func TestIndexerCommitDepthLimit(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestRepoWithCommits(t, 10)
+	g := setupGraph(t)
+
+	idx := New(Config{MaxCommits: 3})
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+	ictx := &indexer.Context{
+		Root:       types.RepoPathToURI(dir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	gitDir := filepath.Join(dir, ".git")
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(gitDir),
+		Path:     gitDir,
+		Name:     ".git",
+		NodeType: types.TypeDir,
+		NodeID:   "test-git-dir-id",
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	commits, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeCommit}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes: %v", err)
+	}
+	if len(commits) != 3 {
+		t.Errorf("expected 3 commits (MaxCommits limit), got %d", len(commits))
+	}
+}
+
+func TestIndexerModifiesEdges(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestRepoWithCommits(t, 2)
+	g := setupGraph(t)
+
+	idx := New()
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+	ictx := &indexer.Context{
+		Root:       types.RepoPathToURI(dir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	gitDir := filepath.Join(dir, ".git")
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(gitDir),
+		Path:     gitDir,
+		Name:     ".git",
+		NodeType: types.TypeDir,
+		NodeID:   "test-git-dir-id",
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	commits, _ := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeCommit}, graph.QueryOptions{})
+	if len(commits) == 0 {
+		t.Fatal("no commits found")
+	}
+
+	found := false
+	for _, c := range commits {
+		ces, _ := g.GetEdgesFrom(ctx, c.ID)
+		for _, e := range ces {
+			if e.Type == types.EdgeModifies {
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Error("expected at least one 'modifies' edge from a commit to a file")
+	}
+}
+
+func TestIndexerBranchCommitReference(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestRepoWithCommits(t, 2)
+	g := setupGraph(t)
+
+	idx := New()
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+	ictx := &indexer.Context{
+		Root:       types.RepoPathToURI(dir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	gitDir := filepath.Join(dir, ".git")
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(gitDir),
+		Path:     gitDir,
+		Name:     ".git",
+		NodeType: types.TypeDir,
+		NodeID:   "test-git-dir-id",
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	branches, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeBranch}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes: %v", err)
+	}
+	if len(branches) == 0 {
+		t.Fatal("no branches found")
+	}
+
+	found := false
+	for _, branch := range branches {
+		edges, _ := g.GetEdgesFrom(ctx, branch.ID)
+		for _, e := range edges {
+			if e.Type == types.EdgeReferences {
+				target, err := g.GetNode(ctx, e.To)
+				if err == nil && target.Type == types.TypeCommit {
+					found = true
+					break
+				}
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'references' edge from branch to its tip commit")
+	}
+}
+
+func TestIndexerTagCommitReference(t *testing.T) {
+	ctx := context.Background()
+	dir := setupTestRepo(t) // creates 1 commit + 1 tag (v1.0.0)
+	g := setupGraph(t)
+
+	idx := New()
+	emitter := indexer.NewGraphEmitter(g, "gen-1")
+	ictx := &indexer.Context{
+		Root:       types.RepoPathToURI(dir),
+		Generation: "gen-1",
+		Graph:      g,
+		Emitter:    emitter,
+	}
+
+	gitDir := filepath.Join(dir, ".git")
+	event := indexer.Event{
+		Type:     indexer.EventEntryVisited,
+		URI:      types.PathToURI(gitDir),
+		Path:     gitDir,
+		Name:     ".git",
+		NodeType: types.TypeDir,
+		NodeID:   "test-git-dir-id",
+	}
+
+	if err := idx.HandleEvent(ctx, ictx, event); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if err := g.Storage().Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	tags, err := g.FindNodes(ctx, graph.NodeFilter{Type: types.TypeTag}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes: %v", err)
+	}
+	if len(tags) == 0 {
+		t.Fatal("no tags found")
+	}
+
+	found := false
+	for _, tag := range tags {
+		edges, _ := g.GetEdgesFrom(ctx, tag.ID)
+		for _, e := range edges {
+			if e.Type == types.EdgeReferences {
+				target, err := g.GetNode(ctx, e.To)
+				if err == nil && target.Type == types.TypeCommit {
+					found = true
+					break
+				}
+			}
+		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'references' edge from tag to its commit")
 	}
 }

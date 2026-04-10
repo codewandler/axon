@@ -66,6 +66,10 @@ type Config struct {
 	// and Markdown sections after each indexing run.
 	// If nil (default), no embeddings are generated.
 	EmbeddingProvider embeddings.Provider
+
+	// GitConfig holds configuration for the git indexer.
+	// Controls how many commits are indexed per repository (default: 500).
+	GitConfig git.Config
 }
 
 // Axon is the main entry point for the axon library.
@@ -119,7 +123,7 @@ func New(cfg Config) (*Axon, error) {
 		ignore = DefaultFSIgnore
 	}
 	idxRegistry.Register(fs.New(fs.Config{Ignore: ignore}))
-	idxRegistry.Register(git.New())
+	idxRegistry.Register(git.New(cfg.GitConfig))
 	idxRegistry.Register(golang.New())
 	idxRegistry.Register(markdown.New())
 	idxRegistry.Register(project.New())

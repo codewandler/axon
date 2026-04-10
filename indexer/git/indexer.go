@@ -2,6 +2,8 @@ package git
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 
@@ -14,12 +16,32 @@ import (
 	"github.com/codewandler/axon/types"
 )
 
-// Indexer indexes git repositories.
-type Indexer struct{}
+// Config holds configuration for the git indexer.
+type Config struct {
+	// MaxCommits limits the number of commits to index per repository.
+	// Default: 500. Set to 0 for unlimited (not recommended for large repos).
+	MaxCommits int
+}
 
-// New creates a new git indexer.
-func New() *Indexer {
-	return &Indexer{}
+func defaultConfig() Config {
+	return Config{MaxCommits: 500}
+}
+
+// Indexer indexes git repositories.
+type Indexer struct {
+	cfg Config
+}
+
+// New creates a new git indexer with optional configuration.
+func New(cfg ...Config) *Indexer {
+	c := defaultConfig()
+	if len(cfg) > 0 {
+		c = cfg[0]
+		if c.MaxCommits == 0 {
+			c.MaxCommits = defaultConfig().MaxCommits
+		}
+	}
+	return &Indexer{cfg: c}
 }
 
 func (i *Indexer) Name() string {
@@ -124,12 +146,20 @@ func (i *Indexer) HandleEvent(ctx context.Context, ictx *indexer.Context, event 
 	}
 
 	// Index branches
-	if err := i.indexBranches(ctx, ictx, repo, repoNode.ID, repoURI, head); err != nil {
+	if err := i.indexBranches(ctx, ictx, repo, repoNode.ID, repoURI, repoPath, head); err != nil {
 		return err
 	}
 
 	// Index tags
-	if err := i.indexTags(ctx, ictx, repo, repoNode.ID, repoURI); err != nil {
+	if err := i.indexTags(ctx, ictx, repo, repoNode.ID, repoURI, repoPath); err != nil {
+		if ictx.Progress != nil {
+			ictx.Progress <- progress.Error(i.Name(), err)
+		}
+		return err
+	}
+
+	// Index commits
+	if err := i.indexCommits(ctx, ictx, repo, repoNode, repoPath); err != nil {
 		if ictx.Progress != nil {
 			ictx.Progress <- progress.Error(i.Name(), err)
 		}
@@ -174,7 +204,7 @@ func (i *Indexer) indexRemotes(ctx context.Context, ictx *indexer.Context, repo 
 	return nil
 }
 
-func (i *Indexer) indexBranches(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoID string, repoURI string, head *plumbing.Reference) error {
+func (i *Indexer) indexBranches(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoID string, repoURI string, repoPath string, head *plumbing.Reference) error {
 	branches, err := repo.Branches()
 	if err != nil {
 		return err
@@ -199,13 +229,20 @@ func (i *Indexer) indexBranches(ctx context.Context, ictx *indexer.Context, repo
 			return err
 		}
 
-		return indexer.EmitOwnership(ctx, ictx.Emitter, repoID, branchNode.ID)
+		if err := indexer.EmitOwnership(ctx, ictx.Emitter, repoID, branchNode.ID); err != nil {
+			return err
+		}
+
+		// references edge: branch → tip commit
+		commitID := graph.IDFromURI(types.CommitToURI(repoPath, ref.Hash().String()))
+		refEdge := graph.NewEdge(types.EdgeReferences, branchNode.ID, commitID)
+		return ictx.Emitter.EmitEdge(ctx, refEdge)
 	})
 
 	return err
 }
 
-func (i *Indexer) indexTags(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoID string, repoURI string) error {
+func (i *Indexer) indexTags(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoID string, repoURI string, repoPath string) error {
 	tags, err := repo.Tags()
 	if err != nil {
 		return err
@@ -227,10 +264,123 @@ func (i *Indexer) indexTags(ctx context.Context, ictx *indexer.Context, repo *gi
 			return err
 		}
 
-		return indexer.EmitOwnership(ctx, ictx.Emitter, repoID, tagNode.ID)
+		if err := indexer.EmitOwnership(ctx, ictx.Emitter, repoID, tagNode.ID); err != nil {
+			return err
+		}
+
+		// references edge: tag → commit
+		commitID := graph.IDFromURI(types.CommitToURI(repoPath, ref.Hash().String()))
+		refEdge := graph.NewEdge(types.EdgeReferences, tagNode.ID, commitID)
+		return ictx.Emitter.EmitEdge(ctx, refEdge)
 	})
 
 	return err
+}
+
+func (i *Indexer) indexCommits(ctx context.Context, ictx *indexer.Context, repo *git.Repository, repoNode *graph.Node, repoPath string) error {
+	iter, err := repo.Log(&git.LogOptions{})
+	if err != nil {
+		return fmt.Errorf("git log: %w", err)
+	}
+	defer iter.Close()
+
+	count := 0
+	for {
+		if i.cfg.MaxCommits > 0 && count >= i.cfg.MaxCommits {
+			break
+		}
+		commit, err := iter.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("iterating commits: %w", err)
+		}
+
+		sha := commit.Hash.String()
+		commitURI := types.CommitToURI(repoPath, sha)
+
+		// Split message into subject + body
+		msg := strings.TrimSpace(commit.Message)
+		subject, body := msg, ""
+		if idx := strings.Index(msg, "\n"); idx != -1 {
+			subject = msg[:idx]
+			body = strings.TrimSpace(msg[idx+1:])
+		}
+
+		// Parent SHAs
+		parents := make([]string, len(commit.ParentHashes))
+		for pi, h := range commit.ParentHashes {
+			parents[pi] = h.String()
+		}
+
+		// File stats for single-parent commits only (skip merge commits)
+		type fileChange struct{ name string }
+		var fileChanges []fileChange
+		var filesChanged, insertions, deletions int
+		if commit.NumParents() == 1 {
+			stats, err := commit.Stats()
+			if err == nil {
+				for _, fs := range stats {
+					filesChanged++
+					insertions += fs.Addition
+					deletions += fs.Deletion
+					fileChanges = append(fileChanges, fileChange{name: fs.Name})
+				}
+			}
+		}
+
+		commitNode := graph.NewNode(types.TypeCommit).
+			WithURI(commitURI).
+			WithKey(sha).
+			WithName(sha[:8]).
+			WithData(types.CommitData{
+				SHA:            sha,
+				Message:        subject,
+				Body:           body,
+				AuthorName:     commit.Author.Name,
+				AuthorEmail:    commit.Author.Email,
+				AuthorDate:     commit.Author.When,
+				CommitterName:  commit.Committer.Name,
+				CommitterEmail: commit.Committer.Email,
+				CommitDate:     commit.Committer.When,
+				Parents:        parents,
+				FilesChanged:   filesChanged,
+				Insertions:     insertions,
+				Deletions:      deletions,
+			})
+
+		if err := ictx.Emitter.EmitNode(ctx, commitNode); err != nil {
+			return err
+		}
+
+		// Repo owns commit
+		if err := indexer.EmitOwnership(ctx, ictx.Emitter, repoNode.ID, commitNode.ID); err != nil {
+			return err
+		}
+
+		// parent_of edges
+		for _, parentSHA := range parents {
+			parentID := graph.IDFromURI(types.CommitToURI(repoPath, parentSHA))
+			pEdge := graph.NewEdge(types.EdgeParentOf, commitNode.ID, parentID)
+			if err := ictx.Emitter.EmitEdge(ctx, pEdge); err != nil {
+				return err
+			}
+		}
+
+		// modifies edges (commit → fs:file)
+		for _, fc := range fileChanges {
+			fileID := graph.IDFromURI(types.PathToURI(filepath.Join(repoPath, fc.name)))
+			mEdge := graph.NewEdge(types.EdgeModifies, commitNode.ID, fileID)
+			if err := ictx.Emitter.EmitEdge(ctx, mEdge); err != nil {
+				return err
+			}
+		}
+
+		count++
+	}
+
+	return nil
 }
 
 // cleanup removes all git nodes for the given repository.

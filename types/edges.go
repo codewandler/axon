@@ -81,6 +81,12 @@ const (
 	// Test relationship: test package → source package
 	// Used when a test package tests a source package
 	EdgeTests = "tests"
+
+	// Commit DAG: parent commit → child commit
+	EdgeParentOf = "parent_of"
+
+	// File modification: commit → file
+	EdgeModifies = "modifies"
 )
 
 // RegisterCommonEdges registers the common edge types that are used across domains.
@@ -149,5 +155,15 @@ func RegisterCommonEdges(r *graph.Registry) {
 	r.RegisterEdgeType(graph.EdgeSpec{
 		Type:        EdgeTests,
 		Description: "Test package tests source package",
+	})
+
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeParentOf,
+		Description: "Commit DAG parent-to-child relationship",
+	})
+
+	r.RegisterEdgeType(graph.EdgeSpec{
+		Type:        EdgeModifies,
+		Description: "Commit modified a file",
 	})
 }
