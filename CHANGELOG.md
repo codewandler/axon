@@ -7,6 +7,25 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.15.0] — 2026-04-11
+
+### Added
+
+- **Graph path finding** — new `(*Axon).FindPath(ctx, fromID, toID, PathOptions)`
+  method discovers the shortest path(s) between any two nodes in the knowledge
+  graph using bidirectional BFS. Both outgoing and incoming edges are traversed
+  so structural and semantic relationships are bridged. Configurable via
+  `PathOptions.MaxDepth` (default 6), `PathOptions.MaxPaths` (default 3), and
+  `PathOptions.EdgeTypes` (restrict to specific edge types). Closes #6.
+- **`Querier` interface extended** — `FindPath` is part of the `Querier`
+  interface so library consumers that program to the interface get the method
+  automatically without any changes.
+- **`axon path <from> <to>` CLI command** — find paths interactively.
+  Accepts node names, URIs, or IDs. Flags: `--max-depth`, `--max-paths`,
+  `--edge-type` (repeatable), `-o json|text`.
+
+---
+
 ## [0.14.0] — 2026-04-11
 
 ### Added
