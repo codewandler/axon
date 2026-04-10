@@ -7,6 +7,21 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.6] — 2026-04-10
+
+### Changed
+
+- **`AGENTS.md`** — Release workflow section rewritten with two explicit
+  non-negotiable rules at the top:
+  1. Never commit work without its CHANGELOG entry — all changes land in
+     one `chore(release)` commit so the tag diff is always meaningful.
+  2. Always `git push origin main` before `gh release create`.
+  Added squash recipe (`git reset --soft <last-tag>`) for cases where
+  work was committed incrementally. Added `git rev-parse v<N> HEAD`
+  verification step to confirm tag SHA matches HEAD.
+
+---
+
 ## [0.9.5] — 2026-04-10
 
 ### Fixed

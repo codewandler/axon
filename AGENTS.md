@@ -389,6 +389,16 @@ All providers are in `indexer/embeddings/`. The package is designed to be extrac
 
 When cutting a release **or** applying a git tag (even a standalone `tag` request):
 
+> **Two non-negotiable rules:**
+> 1. **Never commit work without its CHANGELOG entry.** All changes — code,
+>    docs, config — and the corresponding CHANGELOG update must be staged
+>    together and land in a single `chore(release)` commit. A release commit
+>    that only touches `CHANGELOG.md` means clicking the tag on GitHub shows
+>    a useless diff.
+> 2. **Always `git push origin main` before `gh release create`.** `gh`
+>    creates the tag on GitHub pointing to `origin/main` HEAD, not your local
+>    HEAD. Push first or the tag points at the wrong commit.
+
 1. **Determine the new version** — inspect the existing tags (`git tag --sort=-version:refname | head -5`) and choose the next semver:
    - Patch (`v0.x.Y+1`) for bug fixes and non-breaking changes
    - Minor (`v0.X+1.0`) for new features or any breaking CLI/API change
@@ -398,45 +408,43 @@ When cutting a release **or** applying a git tag (even a standalone `tag` reques
    ```bash
    git log <last-tag>..HEAD --oneline
    ```
-   Read the commit messages to understand what changed.
+   Check `git status` too — any uncommitted work must be included.
 
-3. **Update CHANGELOG.md before tagging** — replace the `[Unreleased]` section
-   header (or create one if absent) with the concrete version and today's date:
+3. **Update CHANGELOG.md** — write the entry for the new version. If there
+   are no staged changes yet, this is the only file that needs staging.
    ```
    ## [0.4.0] — 2026-04-10
    ```
-   Verify the entry accurately reflects the commits since the last tag.
-   If the entry is missing or incomplete, write it now.
 
-4. **Push `main` and commit CHANGELOG together** — stage the CHANGELOG
-   update alongside any uncommitted work, then commit and push **before**
-   creating the release:
+4. **Stage everything and commit as one** — CHANGELOG plus all uncommitted
+   work in a single commit:
    ```bash
-   git add CHANGELOG.md          # plus any other unstaged work
+   git add -A                    # or stage specific files
    git commit -m "chore(release): v0.4.0
 
-   - bullet summary of changes"
-   git push origin main          # MUST push before gh release create
+   - bullet summary of all changes"
    ```
-   > ⚠️ `gh release create` tags the current HEAD **on GitHub** (i.e. `origin/main`),
-   > not your local HEAD. If you haven't pushed, the tag will point to the wrong commit
-   > and clicking the release on GitHub will show a stale diff.
-
-5. **Create the GitHub release**:
+   If work was already committed in separate commits, squash them first:
    ```bash
+   git reset --soft <last-tag>   # unstage all commits since last tag
+   git add -A
+   git commit -m "chore(release): v0.4.0 ..."
+   ```
+
+5. **Push, then release** — in this order, never reversed:
+   ```bash
+   git push origin main
    gh release create v0.4.0 \
      --title "v0.4.0" \
-     --notes "<release notes>" \
+     --notes "<changelog entry>" \
      --latest
    ```
-   - Copy the CHANGELOG entry for this version as `--notes`.
-   - Use `--latest` on the most recent release; omit it for backfills.
-   - `gh release create` creates the tag on GitHub pointing to current
-     `origin/main`. Always push first (step 4).
 
-6. **Verify** the release appears on GitHub:
+6. **Verify** tag SHA matches HEAD:
    ```bash
-   gh release list
+   git fetch --tags
+   git rev-parse v0.4.0 HEAD     # both lines must be identical
+   gh release list | head -3
    ```
 
 > **Never tag a commit that still has `[Unreleased]` in CHANGELOG.md.**
