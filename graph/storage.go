@@ -17,7 +17,7 @@ type NodeFilter struct {
 	Extensions  []string // Filter by file extension without dot (OR logic, e.g., "go", "py")
 	NodeIDs     []string // Filter to specific node IDs (OR logic)
 	Generation  string   // Filter by exact generation ID (empty = any). Pass indexer.Context.Generation
-	             // to scope a query to only nodes written in the current indexing run.
+	// to scope a query to only nodes written in the current indexing run.
 	Root         bool     // Only nodes with no incoming containment edges (top-level roots)
 	ExcludeTypes []string // Exclude nodes whose type matches any of these values (OR logic)
 }
@@ -135,6 +135,7 @@ type StalenessManager interface {
 	DeleteStaleEdges(ctx context.Context, currentGen string) (int, error)
 	DeleteOrphanedEdges(ctx context.Context) (int, error)
 	CountOrphanedEdges(ctx context.Context) (int, error)
+	FindOrphanedEdges(ctx context.Context) ([]*Edge, error)
 }
 
 // IndexRunTracker tracks indexing run history.
@@ -170,7 +171,7 @@ type EmbeddingStore interface {
 type ResultType int
 
 const (
-	ResultTypeNodes  ResultType = iota
+	ResultTypeNodes ResultType = iota
 	ResultTypeEdges
 	ResultTypeCounts
 	ResultTypeRows // Multi-variable or cross-variable field-selector pattern queries

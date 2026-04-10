@@ -466,7 +466,9 @@ axon stats                     # Database statistics
 axon labels                    # List all labels with counts
 axon types                     # List all node types with counts
 axon edges                     # List all edge types with counts
-axon gc                        # Run garbage collection
+axon gc                        # Run garbage collection (verbose: lists deleted edges)
+axon gc --dry-run              # Preview what would be cleaned without making changes
+axon gc --dry-run -q           # Dry-run quiet mode: summary count only
 ```
 
 ### Watch Mode

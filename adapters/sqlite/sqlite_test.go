@@ -666,7 +666,6 @@ func TestBuildDSN(t *testing.T) {
 	}
 }
 
-
 func TestFindNodes_ExcludeTypes(t *testing.T) {
 	ctx := context.Background()
 	s := setupTestDB(t)
@@ -760,5 +759,89 @@ func TestFindSimilar_ExcludeTypes(t *testing.T) {
 	}
 	if results[0].Type == "vcs:commit" {
 		t.Errorf("excluded vcs:commit appeared in similarity results")
+	}
+}
+
+func TestFindOrphanedEdges(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node1 := graph.NewNode("vcs:repo").WithName(".")
+	node2 := graph.NewNode("fs:file").WithURI("file:///src/old.go").WithName("old.go")
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+
+	edge := graph.NewEdge("contains", node1.ID, node2.ID)
+	_ = s.PutEdge(ctx, edge)
+
+	// Remove the to-node — edge becomes orphaned
+	_ = s.DeleteNode(ctx, node2.ID)
+
+	orphanedEdges, err := s.FindOrphanedEdges(ctx)
+	if err != nil {
+		t.Fatalf("FindOrphanedEdges failed: %v", err)
+	}
+	if len(orphanedEdges) != 1 {
+		t.Fatalf("expected 1 orphaned edge, got %d", len(orphanedEdges))
+	}
+	if orphanedEdges[0].ID != edge.ID {
+		t.Errorf("expected edge ID %s, got %s", edge.ID, orphanedEdges[0].ID)
+	}
+	if orphanedEdges[0].Type != "contains" {
+		t.Errorf("expected edge type 'contains', got %s", orphanedEdges[0].Type)
+	}
+	if orphanedEdges[0].From != node1.ID {
+		t.Errorf("expected From=%s, got %s", node1.ID, orphanedEdges[0].From)
+	}
+	if orphanedEdges[0].To != node2.ID {
+		t.Errorf("expected To=%s, got %s", node2.ID, orphanedEdges[0].To)
+	}
+}
+
+func TestFindOrphanedEdges_NoOrphans(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node1 := graph.NewNode("fs:dir")
+	node2 := graph.NewNode("fs:file")
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+
+	_ = s.PutEdge(ctx, graph.NewEdge("contains", node1.ID, node2.ID))
+
+	orphanedEdges, err := s.FindOrphanedEdges(ctx)
+	if err != nil {
+		t.Fatalf("FindOrphanedEdges failed: %v", err)
+	}
+	if len(orphanedEdges) != 0 {
+		t.Errorf("expected 0 orphaned edges, got %d", len(orphanedEdges))
+	}
+}
+
+func TestFindOrphanedEdges_BothEndpointsMissing(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node1 := graph.NewNode("fs:dir")
+	node2 := graph.NewNode("fs:file")
+	_ = s.PutNode(ctx, node1)
+	_ = s.PutNode(ctx, node2)
+
+	edge := graph.NewEdge("defines", node1.ID, node2.ID)
+	_ = s.PutEdge(ctx, edge)
+
+	// Delete both nodes — edge has both endpoints missing
+	_ = s.DeleteNode(ctx, node1.ID)
+	_ = s.DeleteNode(ctx, node2.ID)
+
+	orphanedEdges, err := s.FindOrphanedEdges(ctx)
+	if err != nil {
+		t.Fatalf("FindOrphanedEdges failed: %v", err)
+	}
+	if len(orphanedEdges) != 1 {
+		t.Fatalf("expected 1 orphaned edge (both endpoints missing), got %d", len(orphanedEdges))
+	}
+	if orphanedEdges[0].ID != edge.ID {
+		t.Errorf("expected edge ID %s, got %s", edge.ID, orphanedEdges[0].ID)
 	}
 }
