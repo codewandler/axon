@@ -16,6 +16,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/codewandler/axon/adapters/sqlite"
+	"github.com/codewandler/axon/aql"
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer"
 	"github.com/codewandler/axon/indexer/embeddings"
@@ -572,6 +573,62 @@ func (a *Axon) SemanticSearch(ctx context.Context, queries []string, limit int, 
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// Querier is the read-only interface for executing queries against an axon graph.
+// Both *Axon (after indexing) and *Client (opened from a DB file) satisfy it,
+// allowing integrators to write functions that accept either.
+type Querier interface {
+	// Query executes a pre-built AQL query (from aql.Builder.Build or aql.Parse).
+	Query(ctx context.Context, q *aql.Query) (*graph.QueryResult, error)
+
+	// QueryString parses an AQL string and executes it in one call.
+	QueryString(ctx context.Context, q string) (*graph.QueryResult, error)
+
+	// Explain returns the execution plan for a pre-built AQL query without
+	// running it. Useful for debugging and performance analysis.
+	Explain(ctx context.Context, q *aql.Query) (*graph.QueryPlan, error)
+
+	// Find returns nodes matching the structural filter.
+	Find(ctx context.Context, filter graph.NodeFilter, opts graph.QueryOptions) ([]*graph.Node, error)
+
+	// Search performs semantic vector similarity search across all query
+	// strings and returns up to limit results sorted by score descending.
+	// Returns ErrNoEmbeddingProvider if no provider is configured.
+	Search(ctx context.Context, queries []string, limit int, filter *graph.NodeFilter) ([]*SemanticSearchResult, error)
+}
+
+// compile-time check: *Axon must satisfy Querier.
+var _ Querier = (*Axon)(nil)
+
+// Query executes a pre-built AQL query against the graph.
+func (a *Axon) Query(ctx context.Context, q *aql.Query) (*graph.QueryResult, error) {
+	return a.storage.Query(ctx, q)
+}
+
+// QueryString parses the AQL string and executes it. Convenience wrapper
+// around aql.Parse + Query.
+func (a *Axon) QueryString(ctx context.Context, q string) (*graph.QueryResult, error) {
+	parsed, err := aql.Parse(q)
+	if err != nil {
+		return nil, fmt.Errorf("parse AQL: %w", err)
+	}
+	return a.storage.Query(ctx, parsed)
+}
+
+// Explain returns the execution plan for a pre-built AQL query.
+func (a *Axon) Explain(ctx context.Context, q *aql.Query) (*graph.QueryPlan, error) {
+	return a.storage.Explain(ctx, q)
+}
+
+// Find returns nodes matching the structural filter.
+func (a *Axon) Find(ctx context.Context, filter graph.NodeFilter, opts graph.QueryOptions) ([]*graph.Node, error) {
+	return a.storage.FindNodes(ctx, filter, opts)
+}
+
+// Search is a convenience alias for SemanticSearch.
+func (a *Axon) Search(ctx context.Context, queries []string, limit int, filter *graph.NodeFilter) ([]*SemanticSearchResult, error) {
+	return a.SemanticSearch(ctx, queries, limit, filter)
 }
 
 // IndexResult contains statistics from an indexing operation.

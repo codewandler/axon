@@ -504,6 +504,125 @@ Environment variables:
 - `AXON_HUGOT_MODEL` — HuggingFace repo slug (default: `KnightsAnalytics/all-MiniLM-L6-v2`)
 - `AXON_HUGOT_MODEL_PATH` — local model directory (default: `~/.axon/models/<model>`)
 
+## Go Library
+
+Axon is available as an embeddable Go library.
+
+```bash
+go get github.com/codewandler/axon
+```
+
+### Index and Query
+
+`axon.New` returns an `*Axon` that handles both indexing and querying:
+
+```go
+import (
+    "context"
+    "fmt"
+    "log"
+
+    axon "github.com/codewandler/axon"
+    "github.com/codewandler/axon/aql"
+    "github.com/codewandler/axon/graph"
+)
+
+func main() {
+    ax, err := axon.New(axon.Config{Dir: "."})
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    ctx := context.Background()
+    if _, err := ax.Index(ctx, "."); err != nil {
+        log.Fatal(err)
+    }
+
+    // AQL string — parse + execute in one call
+    result, err := ax.QueryString(ctx, `SELECT type, COUNT(*) FROM nodes GROUP BY type ORDER BY COUNT(*) DESC`)
+    if err != nil {
+        log.Fatal(err)
+    }
+    for _, c := range result.Counts {
+        fmt.Printf("%s: %d\n", c.Name, c.Count)
+    }
+
+    // Builder API — type-safe, no strings
+    q := aql.Nodes.Select(aql.Type, aql.Count()).
+        Where(aql.Type.Glob("go:*")).
+        GroupBy(aql.Type).
+        OrderByCount(true).
+        Build()
+    result, err = ax.Query(ctx, q)
+
+    // Structural filter
+    nodes, err := ax.Find(ctx, graph.NodeFilter{Type: "go:func"}, graph.QueryOptions{Limit: 20})
+    for _, n := range nodes {
+        fmt.Println(n.Name)
+    }
+}
+```
+
+### The `Querier` Interface
+
+`*Axon` satisfies `axon.Querier`, so you can depend on the interface in your
+own code for easier testing and decoupling:
+
+```go
+func printNodeTypes(ctx context.Context, q axon.Querier) error {
+    result, err := q.QueryString(ctx, "SELECT type, COUNT(*) FROM nodes GROUP BY type")
+    if err != nil {
+        return err
+    }
+    for _, c := range result.Counts {
+        fmt.Printf("%s: %d\n", c.Name, c.Count)
+    }
+    return nil
+}
+
+printNodeTypes(ctx, ax)
+```
+
+`Querier` exposes:
+
+| Method | Description |
+|--------|-------------|
+| `Query(ctx, *aql.Query)` | Execute a pre-built AQL query (from the builder or `aql.Parse`) |
+| `QueryString(ctx, string)` | Parse an AQL string and execute it in one call |
+| `Explain(ctx, *aql.Query)` | Return the execution plan without running the query |
+| `Find(ctx, NodeFilter, QueryOptions)` | Structural node filter search |
+| `Search(ctx, queries, limit, filter)` | Semantic similarity search (requires embedding provider) |
+
+### Semantic Search
+
+Pass an embedding provider in `Config` to enable semantic search:
+
+```go
+import "github.com/codewandler/axon/indexer/embeddings"
+
+ax, _ := axon.New(axon.Config{
+    Dir:               ".",
+    EmbeddingProvider: embeddings.NewOllama("", "", 0),
+})
+ax.Index(ctx, ".")
+results, err := ax.Search(ctx, []string{"authentication logic"}, 10, nil)
+```
+
+### Watch Mode
+
+Keep the graph live with `(*Axon).Watch`:
+
+```go
+err := ax.Watch(ctx, ".", axon.WatchOptions{
+    OnReady: func(result *axon.IndexResult, err error) {
+        fmt.Printf("ready: %d files\n", result.Files)
+    },
+    OnReindex: func(path string, result *axon.IndexResult, err error) {
+        fmt.Printf("re-indexed %s\n", path)
+    },
+})
+```
+
 ## Node Types
 
 Axon uses typed nodes with `domain:name` format:

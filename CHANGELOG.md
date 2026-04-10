@@ -7,6 +7,26 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.0] — 2026-04-10
+
+### Added
+
+- **`Querier` interface** — `*Axon` now satisfies `axon.Querier`, a read-oriented
+  interface exposing `Query`, `QueryString`, `Explain`, `Find`, and `Search`.
+  Integrators can accept `axon.Querier` in their own code for easier testing
+  and decoupling.
+- **`(*Axon).Query`** — execute a pre-built `*aql.Query` (from the builder or
+  `aql.Parse`) without reaching into `ax.Graph().Storage()`.
+- **`(*Axon).QueryString`** — parse an AQL string and execute it in one call.
+- **`(*Axon).Explain`** — return the SQL execution plan for a pre-built query.
+- **`(*Axon).Find`** — structural node filter search, wrapping
+  `storage.FindNodes` directly on `*Axon`.
+- **`(*Axon).Search`** — convenience alias for `SemanticSearch`.
+- **README: Go Library section** — documents programmatic usage, the `Querier`
+  interface, semantic search, and watch mode for SDK integrators.
+
+---
+
 ## [0.8.4] — 2026-05-13
 
 ### Added
