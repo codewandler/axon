@@ -1630,18 +1630,17 @@ func (s *Storage) FindSimilar(ctx context.Context, query []float32, limit int, f
 		return candidates[i].score > candidates[j].score
 	})
 
-	// Take top limit candidates and fetch nodes
-	if limit > 0 && len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
-
+	// Iterate sorted candidates, apply filter, and stop once limit is reached.
+	// (Do NOT truncate before filtering — the filter may discard many candidates.)
 	var results []*graph.NodeWithScore
 	for _, c := range candidates {
+		if limit > 0 && len(results) >= limit {
+			break
+		}
 		node, err := s.GetNode(ctx, c.nodeID)
 		if err != nil || node == nil {
 			continue
 		}
-		// Apply filter if provided
 		if filter != nil && !nodeMatchesFilter(node, filter) {
 			continue
 		}
@@ -1672,6 +1671,40 @@ func cosineSimilarity(a, b []float32) float32 {
 func nodeMatchesFilter(node *graph.Node, filter *graph.NodeFilter) bool {
 	if filter.Type != "" && node.Type != filter.Type {
 		return false
+	}
+	if filter.URIPrefix != "" && !strings.HasPrefix(node.URI, filter.URIPrefix) {
+		return false
+	}
+	if len(filter.Labels) > 0 {
+		found := false
+		outer:
+		for _, want := range filter.Labels {
+			for _, have := range node.Labels {
+				if have == want {
+					found = true
+					break outer
+				}
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	if len(filter.Extensions) > 0 {
+		ext := ""
+		if m, ok := node.Data.(map[string]any); ok {
+			ext, _ = m["ext"].(string)
+		}
+		found := false
+		for _, want := range filter.Extensions {
+			if ext == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
 	}
 	return true
 }

@@ -34,43 +34,35 @@ var (
 )
 
 var findCmd = &cobra.Command{
-	Use:   "find [flags]",
+	Use:   "find [query] [flags]",
 	Short: "Search for nodes in the graph",
-	Long: `Search for nodes in the graph using various filters.
+	Long: `Search for nodes in the graph.
 
-By default, searches within the current directory subtree. Use --global to search
-the entire indexed graph.
+With a text argument, performs semantic vector similarity search (requires
+embeddings — run 'axon index --embed' first). Any flags are applied as
+post-filters on the semantic results.
+
+With no text argument, filters nodes by flags only (existing behaviour).
 
 Examples:
-  # Find all markdown documents
+  # Semantic search
+  axon find "error handling"
+  axon find "concurrency and goroutines" --type go:func
+  axon find "recent logo commits"        --type vcs:commit --limit 5
+  axon find "storage interface design"   --type go:interface --global
+
+  # Flag-only (unchanged)
   axon find --type "md:*"
-
-  # Find files named README.md
   axon find --name README.md
-
-  # Find all branches (requires --global since vcs nodes use git+file:// URIs)
   axon find --type vcs:branch --global --query "feature*"
-
-  # Count git repositories
   axon find --type vcs:repo --global --count
-
-  # Show nodes with parent chain
   axon find --type vcs:branch --global --show-parent
-
-  # Find CI configuration files
   axon find --label ci:config
-
-  # Find files with multiple labels (OR logic)
   axon find --label build:config --label lang:go
-
-  # Find Go test files
   axon find --label test:file --ext go
-
-  # Find all Go and Python files
   axon find --ext go --ext py
-
-  # Show the generated AQL query
   axon find --type fs:file --ext go --show-query`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: runFind,
 }
 
@@ -91,6 +83,9 @@ func init() {
 }
 
 func runFind(cmd *cobra.Command, args []string) error {
+	if len(args) == 1 {
+		return runSemanticFind(args[0])
+	}
 	cmdCtx, err := openDB(false)
 	if err != nil {
 		return err
@@ -420,4 +415,120 @@ func outputTable(nodes []*graph.Node) error {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", shortID(node.ID), node.Type, name, labels, node.URI)
 	}
 	return w.Flush()
+}
+
+// runSemanticFind performs vector similarity search for the given text query,
+// then applies any active flag filters as post-filters on the results.
+func runSemanticFind(query string) error {
+	cmdCtx, err := openDB(false)
+	if err != nil {
+		return err
+	}
+	defer cmdCtx.Close()
+
+	ctx := cmdCtx.Ctx
+
+	provider, err := resolveEmbeddingProvider("", "")
+	if err != nil {
+		return fmt.Errorf(
+			"no embedding provider available — run 'axon index --embed .' to generate embeddings first: %w",
+			err,
+		)
+	}
+	fmt.Fprintf(os.Stderr, "Using embedding provider: %s\n", provider.Name())
+
+	embedding, err := provider.Embed(ctx, query)
+	if err != nil {
+		return fmt.Errorf("embedding query: %w", err)
+	}
+
+	// Build NodeFilter from active flags.
+	filter := &graph.NodeFilter{}
+	if len(findType) == 1 {
+		filter.Type = findType[0]
+	} else if len(findType) > 1 {
+		// FindSimilar only supports a single type; warn and use the first.
+		fmt.Fprintf(os.Stderr, "Warning: semantic search supports one --type at a time; using %q\n", findType[0])
+		filter.Type = findType[0]
+	}
+	filter.Labels = findLabels
+	filter.Extensions = findExt
+
+	// Local scope: restrict to nodes whose URI is under the CWD.
+	if !findGlobal {
+		absPath, err := filepath.Abs(cmdCtx.Cwd)
+		if err != nil {
+			return err
+		}
+		filter.URIPrefix = types.PathToURI(absPath)
+	}
+
+	limit := findLimit
+	if limit <= 0 {
+		limit = 20 // sensible default for semantic results
+	}
+
+	results, err := cmdCtx.Storage.FindSimilar(ctx, embedding, limit, filter)
+	if err != nil {
+		return fmt.Errorf("similarity search: %w", err)
+	}
+
+	if len(results) == 0 {
+		fmt.Println("No results found.")
+		fmt.Println("Tip: run 'axon index --embed .' to generate embeddings first.")
+		return nil
+	}
+
+	return outputSemanticResults(results, findOutput)
+}
+
+// outputSemanticResults renders similarity-search results in the requested format.
+func outputSemanticResults(results []*graph.NodeWithScore, format string) error {
+	switch format {
+	case "json":
+		type jsonResult struct {
+			Score float32 `json:"score"`
+			*graph.Node
+		}
+		out := make([]jsonResult, len(results))
+		for i, r := range results {
+			out[i] = jsonResult{Score: r.Score, Node: r.Node}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+
+	case "table":
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "Score\tID\tType\tName\tURI")
+		for _, r := range results {
+			fmt.Fprintf(w, "%.3f\t%s\t%s\t%s\t%s\n",
+				r.Score, shortID(r.ID), r.Type, r.Name, truncate(r.URI, 60))
+		}
+		return w.Flush()
+
+	case "uri":
+		for _, r := range results {
+			fmt.Printf("%.3f  [%s] %s (%s)\n", r.Score, shortID(r.ID), r.URI, r.Type)
+		}
+		return nil
+
+	default: // "path"
+		for _, r := range results {
+			path := types.URIToPath(r.URI)
+			if path == "" {
+				path = r.Key
+			}
+			if path == "" {
+				path = r.Name
+			}
+			fmt.Printf("%.3f  [%s] %s (%s)\n", r.Score, shortID(r.ID), path, r.Type)
+		}
+		return nil
+	}
+}
+
+// escapeSQL escapes single quotes in a string for safe interpolation into AQL/SQL.
+func escapeSQL(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
 }

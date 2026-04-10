@@ -436,8 +436,9 @@ result, _ := storage.Query(ctx, q)
 - `query` - Execute AQL queries (with `--explain`, `--output table|json|count`)
 - `tree` - Display graph as tree (with `--depth`, `--ids`, `--types`)
 - `find` - Search nodes with filters (with `--type`, `--name`, `--ext`, `--global`)
+          Pass a text argument for semantic similarity search: `axon find "error handling" --type go:func`
 - `show` - Display node details
-- `search` - Natural language search (with `--semantic` for vector similarity search)
+- `search` - **Deprecated** — use `axon find "<query>"` instead
 - `impact` - Show blast radius of changing a symbol
 - `stats`, `labels`, `types`, `edges`, `gc` - Introspection and maintenance
 

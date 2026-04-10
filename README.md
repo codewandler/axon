@@ -46,7 +46,7 @@ Axon is built to be used directly by AI agents as a persistent knowledge tool. C
 > axon index .
 > ```
 >
-> You can now query the graph with `axon query`, explore with `axon tree`, search with `axon search`, and generate context for tasks with `axon context`.
+> You can now query the graph with `axon query`, explore with `axon tree`, search with `axon find`, and generate context for tasks with `axon context`.
 
 ---
 
@@ -82,11 +82,10 @@ Basic CLI commands:
 - `axon index --watch [path]` - Watch for changes and keep graph up to date
 - `axon query "<aql>"` - Execute AQL queries
 - `axon tree [path]` - Display graph as tree
-- `axon find` - Search nodes with filters
+- `axon find` - Search nodes with flags (`--type`, `--name`, `--ext`, …)
+- `axon find "<query>"` - Semantic similarity search (requires `--embed`)
 - `axon show <node-id>` - Show node details
 - `axon impact <symbol>` - Show blast radius of changing a symbol
-- `axon search "<question>"` - Natural language code search
-- `axon search --semantic "<query>"` - Semantic vector similarity search
 - `axon context --task "<description>"` - Generate AI-optimised context for a task
 - `axon info` - Database status and statistics dashboard
 - `axon stats` - Database statistics
@@ -327,9 +326,18 @@ axon tree --no-emoji           # Disable emoji icons
 
 ### axon find
 
-Search for nodes with filters:
+Search nodes with flags, or pass a text argument for semantic similarity search
+(requires embeddings — run `axon index --embed` first):
 
 ```bash
+# Semantic search
+axon find "error handling"
+axon find "concurrency and goroutines" --type go:func
+axon find "recent logo commits"        --type vcs:commit --limit 5
+axon find "storage interface design"   --type go:interface --global
+axon find "error handling"             --output json
+
+# Flag-only (unchanged)
 axon find --type fs:file               # All files
 axon find --name "main.go"             # Exact name match
 axon find --ext go                     # By extension (repeatable: --ext go --ext py)
@@ -425,39 +433,34 @@ Packages importing affected packages:
   cmd/axon              imports sqlite, graph
 ```
 
-### axon search
+### axon search (deprecated)
 
-`axon search` answers natural-language questions about the codebase — no embeddings required:
+`axon search` is deprecated — use `axon find "<query>"` instead.
+
+Semantic search is now built directly into `axon find`. Any positional text
+argument triggers vector similarity search:
 
 ```bash
-axon search "what is the Indexer interface"
-axon search "who calls NewNode"
-axon search "list structs"
-axon search "what implements Storage"
-axon search "how does event routing work"
-axon search "methods of Storage"
-axon search "compare Node and Edge"
-axon search "where is NewNode defined"
-axon search "find functions that return error"
+# Before (deprecated)
+axon search --semantic "handles token budget overflow"
+axon search --semantic "error recovery" --type go:func
 
-# Limit results
-axon search --limit 5 "list interfaces"
-
-# Filter by node type
-axon search --type go:func "error recovery"
+# After
+axon find "handles token budget overflow"
+axon find "error recovery" --type go:func
 ```
 
-**Semantic / vector similarity search** (requires embeddings — see below):
+### Embeddings
 
 ```bash
 # First generate embeddings during indexing
 axon index --embed .                              # uses Ollama by default
 axon index --embed --embed-provider=hugot .       # in-process, no daemon needed
 
-# Then search semantically
-axon search --semantic "handles token budget overflow"
-axon search --semantic "error recovery" --type go:func
-axon search --semantic "storage interface" --limit 5
+# Then search semantically via axon find
+axon find "handles token budget overflow"
+axon find "error recovery" --type go:func
+axon find "storage interface" --limit 5
 ```
 
 #### Provider: Ollama (default)

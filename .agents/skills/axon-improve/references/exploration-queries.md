@@ -130,7 +130,7 @@ axon query "
 "
 
 # Commands mentioned in README
-axon search "what CLI commands are documented in README.md"
+axon find "what CLI commands are documented in README.md"
 
 # Does the README mention the 'ask' command?
 axon query "
@@ -290,31 +290,31 @@ axon query "
 
 ```bash
 # Core data model
-axon search "what is Node"
-axon search "what is Edge"
-axon search "what is Graph"
+axon find "what is Node"
+axon find "what is Edge"
+axon find "what is Graph"
 
 # Storage layer
-axon search "what is the Storage interface"
-axon search "what implements Storage"
-axon search "methods of Storage"
+axon find "what is the Storage interface"
+axon find "what implements Storage"
+axon find "methods of Storage"
 
 # Indexer system
-axon search "what is the Indexer interface"
-axon search "what implements Indexer"
-axon search "explain the indexer subscription system"
-axon search "how does event routing work"
+axon find "what is the Indexer interface"
+axon find "what implements Indexer"
+axon find "explain the indexer subscription system"
+axon find "how does event routing work"
 
 # AQL
-axon search "describe the AQL compiler"
-axon search "what is the AQL builder"
-axon search "explain query validation"
-axon search "list structs in the aql package"
+axon find "describe the AQL compiler"
+axon find "what is the AQL builder"
+axon find "explain query validation"
+axon find "list structs in the aql package"
 
 # CLI
-axon search "how does db resolution work"
-axon search "explain the output formatting system"
-axon search "what is the results package"
+axon find "how does db resolution work"
+axon find "explain the output formatting system"
+axon find "what is the results package"
 ```
 
 ---
