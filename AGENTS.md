@@ -611,9 +611,29 @@ When cutting a release **or** applying a git tag (even a standalone `tag` reques
    chore(release): v0.4.0
    ```
 
-5. **Apply the tag** on that commit:
+5. **Create the GitHub release** (this also pushes the tag via `--tag`):
    ```bash
-   git tag v0.4.0
+   gh release create v0.4.0 \
+     --title "v0.4.0" \
+     --notes "<release notes>" \
+     --latest
+   ```
+   - Copy the CHANGELOG entry for this version as `--notes`.
+   - Use `--latest` on the most recent release; omit it for backfills.
+   - **Do not** run `git tag` manually — `gh release create` creates the tag on GitHub
+     and `git fetch --tags` can pull it locally if needed. If the tag already exists
+     locally, pass `--tag v0.4.0` explicitly.
+
+   Alternatively, if the tag was already pushed separately:
+   ```bash
+   git push origin v0.4.0          # push tag first if not already pushed
+   gh release create v0.4.0 --title "v0.4.0" --notes "..." --latest
+   ```
+
+6. **Verify** the release appears on GitHub:
+   ```bash
+   gh release list
    ```
 
 > **Never tag a commit that still has `[Unreleased]` in CHANGELOG.md.**
+> **Always create a matching GitHub release — a tag alone is not a release.**
