@@ -15,6 +15,7 @@ var DefaultEmbedTypes = []string{
 	types.TypeGoStruct,
 	types.TypeGoInterface,
 	"md:section",
+	"vcs:commit",
 }
 
 // DefaultBatchSize is the number of texts sent to the provider in one
@@ -133,13 +134,20 @@ func buildNodeText(node *graph.Node) string {
 	if len(node.Labels) > 0 {
 		parts = append(parts, strings.Join(node.Labels, " "))
 	}
-	// Extract doc/signature from Data if available
 	if m, ok := node.Data.(map[string]interface{}); ok {
+		// Go symbols: doc comment + signature
 		if doc, ok := m["doc"].(string); ok && doc != "" {
 			parts = append(parts, doc)
 		}
 		if sig, ok := m["signature"].(string); ok && sig != "" {
 			parts = append(parts, sig)
+		}
+		// VCS commits: subject line + optional body
+		if msg, ok := m["message"].(string); ok && msg != "" {
+			parts = append(parts, msg)
+		}
+		if body, ok := m["body"].(string); ok && body != "" {
+			parts = append(parts, body)
 		}
 	}
 	return strings.Join(parts, " ")
