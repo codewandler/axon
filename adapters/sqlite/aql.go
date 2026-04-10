@@ -24,6 +24,20 @@ type existsRewrite struct {
 	whereArgs  []any  // Arguments for WHERE
 }
 
+// aqlActiveTable maps a logical table name ("nodes" or "edges") to its
+// TTL-filtered view ("active_nodes" or "active_edges"). All SELECT paths in
+// the AQL compiler use this function so that expired records are invisible.
+func aqlActiveTable(table string) string {
+	switch table {
+	case "nodes":
+		return "active_nodes"
+	case "edges":
+		return "active_edges"
+	default:
+		return table
+	}
+}
+
 // jsonExtractRegex matches json_extract(data, '$.field') to extract the field name.
 var jsonExtractRegex = regexp.MustCompile(`json_extract\([^,]+,\s*'\$\.(\w+)'`)
 
@@ -447,11 +461,11 @@ func (s *Storage) buildDescendantsCTE(e *aql.ExistsExpr, table, cteName string) 
 	// For incoming edges, we rely on idx_edges_to_id_type (to_id, type)
 	hasEdgeType := varLenEdge.Type != "" || len(varLenEdge.Types) > 0
 	if hasEdgeType && varLenEdge.Direction == aql.Outgoing {
-		sql.WriteString(", path.depth + 1 FROM path JOIN edges e INDEXED BY idx_edges_from_type ON ")
+		sql.WriteString(", path.depth + 1 FROM path JOIN active_edges e ON ")
 	} else if hasEdgeType && varLenEdge.Direction == aql.Incoming {
-		sql.WriteString(", path.depth + 1 FROM path JOIN edges e INDEXED BY idx_edges_to_id_type ON ")
+		sql.WriteString(", path.depth + 1 FROM path JOIN active_edges e ON ")
 	} else {
-		sql.WriteString(", path.depth + 1 FROM path JOIN edges e ON ")
+		sql.WriteString(", path.depth + 1 FROM path JOIN active_edges e ON ")
 	}
 
 	switch varLenEdge.Direction {
@@ -511,6 +525,10 @@ func (s *Storage) compileFlatQuery(q *aql.Query) (string, []any, graph.ResultTyp
 		return "", nil, 0, fmt.Errorf("invalid table: %s (must be 'nodes' or 'edges')", src.Table)
 	}
 
+	// activeTableName maps the logical table to its TTL-filtered view.
+	// SELECT queries always read from the view to exclude expired records.
+	activeTableName := aqlActiveTable(src.Table)
+
 	// Determine result type
 	hasCount := false
 	for _, col := range q.Select.Columns {
@@ -560,13 +578,15 @@ func (s *Storage) compileFlatQuery(q *aql.Query) (string, []any, graph.ResultTyp
 
 	// FROM clause - JOIN with CTE when rewriting EXISTS
 	if rewrite != nil && rewrite.joinCTE != "" {
-		// FROM __descendants_0 JOIN table ON __descendants_0.node_id = table.joinColumn
+		// FROM __descendants_0 JOIN active_table AS table ON __descendants_0.node_id = table.joinColumn
 		// For nodes: JOIN on id (the node itself is a descendant)
 		// For edges: JOIN on from_id (the edge's source node is a descendant)
 		sqlBuilder.WriteString(" FROM ")
 		sqlBuilder.WriteString(rewrite.joinCTE)
 		sqlBuilder.WriteString(" JOIN ")
-		sqlBuilder.WriteString(src.Table)
+		sqlBuilder.WriteString(activeTableName)
+		sqlBuilder.WriteString(" AS ")
+		sqlBuilder.WriteString(src.Table) // alias as original name so column refs work
 		sqlBuilder.WriteString(" ON ")
 		sqlBuilder.WriteString(rewrite.joinCTE)
 		sqlBuilder.WriteString(".node_id = ")
@@ -575,7 +595,9 @@ func (s *Storage) compileFlatQuery(q *aql.Query) (string, []any, graph.ResultTyp
 		sqlBuilder.WriteString(rewrite.joinColumn)
 	} else {
 		sqlBuilder.WriteString(" FROM ")
-		sqlBuilder.WriteString(src.Table)
+		sqlBuilder.WriteString(activeTableName)
+		sqlBuilder.WriteString(" AS ")
+		sqlBuilder.WriteString(src.Table) // alias as original name so column refs work
 	}
 
 	// WHERE clause
@@ -668,6 +690,8 @@ func (s *Storage) compileJoinedTableQuery(q *aql.Query, src *aql.JoinedTableSour
 		return "", nil, 0, fmt.Errorf("invalid table: %s (must be 'nodes' or 'edges')", src.Table)
 	}
 
+	activeTableName := aqlActiveTable(src.Table)
+
 	// Validate table function
 	if src.TableFunc == nil {
 		return "", nil, 0, fmt.Errorf("joined table source requires a table function")
@@ -718,13 +742,15 @@ func (s *Storage) compileJoinedTableQuery(q *aql.Query, src *aql.JoinedTableSour
 
 	// FROM clause
 	if rewrite != nil && rewrite.joinCTE != "" {
-		// FROM __descendants_0 JOIN table ON __descendants_0.node_id = table.joinColumn, json_each(table.column)
+		// FROM __descendants_0 JOIN active_table AS table ON __descendants_0.node_id = table.joinColumn, json_each(table.column)
 		// For nodes: JOIN on id (the node itself is a descendant)
 		// For edges: JOIN on from_id (the edge's source node is a descendant)
 		sqlBuilder.WriteString(" FROM ")
 		sqlBuilder.WriteString(rewrite.joinCTE)
 		sqlBuilder.WriteString(" JOIN ")
-		sqlBuilder.WriteString(src.Table)
+		sqlBuilder.WriteString(activeTableName)
+		sqlBuilder.WriteString(" AS ")
+		sqlBuilder.WriteString(src.Table) // alias as original name so column refs work
 		sqlBuilder.WriteString(" ON ")
 		sqlBuilder.WriteString(rewrite.joinCTE)
 		sqlBuilder.WriteString(".node_id = ")
@@ -733,9 +759,11 @@ func (s *Storage) compileJoinedTableQuery(q *aql.Query, src *aql.JoinedTableSour
 		sqlBuilder.WriteString(rewrite.joinColumn)
 		sqlBuilder.WriteString(", ")
 	} else {
-		// FROM table, json_each(table.column)
+		// FROM active_table AS table, json_each(table.column)
 		sqlBuilder.WriteString(" FROM ")
-		sqlBuilder.WriteString(src.Table)
+		sqlBuilder.WriteString(activeTableName)
+		sqlBuilder.WriteString(" AS ")
+		sqlBuilder.WriteString(src.Table) // alias as original name so column refs work
 		sqlBuilder.WriteString(", ")
 	}
 
@@ -1111,7 +1139,7 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 
 				if patternIdx == 0 && i == 0 {
 					// First table in FROM
-					sqlBuilder.WriteString("FROM nodes AS ")
+					sqlBuilder.WriteString("FROM active_nodes AS ")
 					sqlBuilder.WriteString(leftAlias)
 				}
 
@@ -1151,7 +1179,7 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 				leftAlias := nodeAliases[leftNode.Variable]
 
 				// Add JOIN for edge
-				sqlBuilder.WriteString("\nJOIN edges AS ")
+				sqlBuilder.WriteString("\nJOIN active_edges AS ")
 				sqlBuilder.WriteString(edgeAlias)
 				sqlBuilder.WriteString(" ON ")
 
@@ -1169,7 +1197,7 @@ func (s *Storage) compilePatternQuery(q *aql.Query, src *aql.PatternSource) (str
 
 				// Add JOIN for right node
 				if isNewNode {
-					sqlBuilder.WriteString("\nJOIN nodes AS ")
+					sqlBuilder.WriteString("\nJOIN active_nodes AS ")
 					sqlBuilder.WriteString(rightAlias)
 					sqlBuilder.WriteString(" ON ")
 				} else {
@@ -1422,7 +1450,6 @@ func (s *Storage) compileVariableLengthPattern(q *aql.Query, src *aql.PatternSou
 func (s *Storage) compileUnrolledVariableLength(q *aql.Query, startNode *aql.NodePattern, edge *aql.EdgePattern, endNode *aql.NodePattern, minHops, maxHops int) (string, []any, graph.ResultType, error) {
 	var args []any
 	var sql strings.Builder
-	hasEdgeType := edge.Type != "" || len(edge.Types) > 0
 
 	// cols returns an explicit SELECT column list for the given table alias,
 	// matching the order expected by executeNodeQuery's isStar scan:
@@ -1459,18 +1486,16 @@ func (s *Storage) compileUnrolledVariableLength(q *aql.Query, startNode *aql.Nod
 		first = false
 
 		if selectingEndNode {
-			sql.WriteString(cols("n_end") + "\nFROM edges e0\n")
+			sql.WriteString(cols("n_end") + "\nFROM active_edges e0\n")
 		} else {
-			sql.WriteString(cols("n_start") + "\nFROM edges e0\n")
+			sql.WriteString(cols("n_start") + "\nFROM active_edges e0\n")
 		}
 
-		// INDEXED BY hint on first edge
-		if hasEdgeType {
-			sql.WriteString("INDEXED BY idx_edges_from_type\n")
-		}
+		// INDEXED BY hint on first edge — not supported on views, removed
+		// (query planner uses underlying table indexes through the view automatically)
 
 		// JOIN start node with type filter
-		sql.WriteString("JOIN nodes n_start ON n_start.id = e0.from_id")
+		sql.WriteString("JOIN active_nodes n_start ON n_start.id = e0.from_id")
 		if startNode.Type != "" {
 			sql.WriteString(" AND n_start.type = ?")
 			args = append(args, startNode.Type)
@@ -1481,11 +1506,8 @@ func (s *Storage) compileUnrolledVariableLength(q *aql.Query, startNode *aql.Nod
 		for i := 1; i < depth; i++ {
 			prev := fmt.Sprintf("e%d", i-1)
 			cur := fmt.Sprintf("e%d", i)
-			if hasEdgeType {
-				sql.WriteString(fmt.Sprintf("JOIN edges %s INDEXED BY idx_edges_from_type ON %s.from_id = %s.to_id", cur, cur, prev))
-			} else {
-				sql.WriteString(fmt.Sprintf("JOIN edges %s ON %s.from_id = %s.to_id", cur, cur, prev))
-			}
+			// No INDEXED BY on active_edges view; query planner uses underlying indexes
+			sql.WriteString(fmt.Sprintf("JOIN active_edges %s ON %s.from_id = %s.to_id", cur, cur, prev))
 			// Edge type on chained edges
 			if len(edge.Types) > 1 {
 				placeholders := make([]string, len(edge.Types))
@@ -1503,7 +1525,7 @@ func (s *Storage) compileUnrolledVariableLength(q *aql.Query, startNode *aql.Nod
 
 		// JOIN end node
 		lastEdge := fmt.Sprintf("e%d", depth-1)
-		sql.WriteString(fmt.Sprintf("JOIN nodes n_end ON n_end.id = %s.to_id", lastEdge))
+		sql.WriteString(fmt.Sprintf("JOIN active_nodes n_end ON n_end.id = %s.to_id", lastEdge))
 		if endNode.Type != "" {
 			sql.WriteString(" AND n_end.type = ?")
 			args = append(args, endNode.Type)
@@ -2308,7 +2330,7 @@ func (s *Storage) compileExistsSimple(e *aql.ExistsExpr, table string) (string, 
 	}
 
 	// Start building the subquery
-	sql.WriteString("EXISTS (SELECT 1 FROM edges e JOIN nodes target ON ")
+	sql.WriteString("EXISTS (SELECT 1 FROM active_edges e JOIN active_nodes target ON ")
 
 	// Get first edge pattern (element 1)
 	edgePattern, ok := e.Pattern.Elements[1].(*aql.EdgePattern)
@@ -2460,7 +2482,7 @@ func (s *Storage) compileExistsRecursive(e *aql.ExistsExpr, table string) (strin
 		return "", nil, fmt.Errorf("undirected variable-length paths not yet supported")
 	}
 
-	sql.WriteString(", path.depth + 1 FROM path JOIN edges e ON ")
+	sql.WriteString(", path.depth + 1 FROM path JOIN active_edges e ON ")
 
 	switch varLenEdge.Direction {
 	case aql.Outgoing:
@@ -2495,7 +2517,7 @@ func (s *Storage) compileExistsRecursive(e *aql.ExistsExpr, table string) (strin
 		sql.WriteString(fmt.Sprintf(" WHERE path.depth + 1 <= %d", *varLenEdge.MaxHops))
 	}
 
-	sql.WriteString(") SELECT 1 FROM path JOIN nodes target ON path.node_id = target.id WHERE ")
+	sql.WriteString(") SELECT 1 FROM path JOIN active_nodes target ON path.node_id = target.id WHERE ")
 
 	// Correlate with outer query: target must match the outer table row
 	// If target node has a variable that matches the outer table, add correlation

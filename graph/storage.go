@@ -136,6 +136,13 @@ type StalenessManager interface {
 	DeleteOrphanedEdges(ctx context.Context) (int, error)
 	CountOrphanedEdges(ctx context.Context) (int, error)
 	FindOrphanedEdges(ctx context.Context) ([]*Edge, error)
+	// DeleteExpired physically removes all nodes and edges whose ExpiresAt is in
+	// the past. Returns (nodesDeleted, edgesDeleted, error). This is called by
+	// "axon gc" and the background watch-mode ticker.
+	DeleteExpired(ctx context.Context) (int64, int64, error)
+	// CountExpired returns the count of expired nodes and edges without deleting
+	// them. Used for dry-run reporting in "axon gc --dry-run".
+	CountExpired(ctx context.Context) (int64, int64, error)
 }
 
 // IndexRunTracker tracks indexing run history.

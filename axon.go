@@ -762,6 +762,10 @@ type WatchOptions struct {
 	// triggering a re-index. Default: 150ms.
 	Debounce time.Duration
 
+	// GCInterval is how often the background GC ticker runs DeleteExpired.
+	// Default: 5 minutes. Set to 0 to disable background expiry GC.
+	GCInterval time.Duration
+
 	// OnReady is called once after the initial full index completes.
 	// It is NOT called on subsequent change-triggered re-indexes.
 	// If nil, the initial result is silently discarded.
@@ -781,6 +785,9 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 	if opts.Debounce == 0 {
 		opts.Debounce = 150 * time.Millisecond
 	}
+	if opts.GCInterval == 0 {
+		opts.GCInterval = 5 * time.Minute
+	}
 
 	// Resolve to absolute path.
 	absPath, err := filepath.Abs(path)
@@ -797,6 +804,22 @@ func (a *Axon) Watch(ctx context.Context, path string, opts WatchOptions) error 
 	}
 	if indexErr != nil {
 		return fmt.Errorf("initial index: %w", indexErr)
+	}
+
+	// Background GC: periodically remove expired nodes and edges.
+	if opts.GCInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(opts.GCInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					_, _, _ = a.storage.DeleteExpired(ctx)
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
 	}
 
 	// Retrieve the fs indexer to reuse its ShouldIgnore logic in the watcher,
