@@ -95,6 +95,29 @@ echo "add error handling to Flush" | axon context
 axon show <node-id>            # Show node details (4-char prefix is enough)
 ```
 
+## Neighbor Traversal
+
+Walk edges from a node to discover relationships:
+
+```bash
+# All neighbors (both directions, all edge types)
+axon neighbors Storage
+
+# Who implements this interface?
+axon neighbors Storage --direction in --edge-type implements
+
+# What does this struct depend on?
+axon neighbors Server --direction out
+
+# JSON output for scripting
+axon neighbors Storage -o json
+
+# Accepts URI, name, or node ID
+axon neighbors "go:func:pkg.New" --direction in --edge-type calls
+```
+
+Flags: `--direction in|out|both` · `--edge-type <type>` (repeatable) · `--max <n>` · `--output text|table|json`
+
 ## Database Info
 
 ```bash
