@@ -104,6 +104,7 @@ Basic CLI commands:
 - `axon find` - Search nodes with flags (`--type`, `--name`, `--ext`, …)
 - `axon find "<query>"` - Semantic similarity search (requires `--embed`)
 - `axon show <node-id>` - Show node details
+- `axon neighbors <uri>` - Show immediate neighbors via edges (direction, edge-type filter)
 - `axon impact <symbol>` - Show blast radius of changing a symbol
 - `axon context --task "<description>"` - Generate AI-optimised context for a task
 - `axon info` - Database status and statistics dashboard
@@ -381,6 +382,47 @@ Display detailed node information:
 ```bash
 axon show <node-id>            # Show node details
 ```
+
+### axon neighbors
+
+Return the immediate neighbors of a node — all nodes connected by a single edge.
+Useful for answering "what calls this?", "what implements this?", "what does this depend on?":
+
+```bash
+# All neighbors (both directions, all edge types)
+axon neighbors Storage
+
+# Who implements this interface? (incoming edges only)
+axon neighbors Storage --direction in --edge-type implements
+
+# What does this struct depend on? (outgoing edges only)
+axon neighbors Server --direction out
+
+# Resolve by URI
+axon neighbors "go:func:github.com/codewandler/axon.New" --direction in
+
+# Structured output for scripting
+axon neighbors Storage --output json
+axon neighbors Storage --output table
+
+# Limit results
+axon neighbors Storage --max 10
+```
+
+Output (text):
+```
+3 neighbor(s) of "Storage":
+
+  <- implements  [abc1234] SQLiteStorage  (go:struct)
+  -> defines     [def5678] PutNode        (go:func)
+  -> defines     [ghi9012] GetNode        (go:func)
+```
+
+Flags:
+- `--direction in|out|both` — edge direction (default: `both`)
+- `--edge-type <type>` — restrict to edge type; repeatable
+- `--max <n>` — maximum results (default: 50; 0 = unlimited)
+- `--output text|table|json` — output format (default: `text`)
 
 ### axon context
 
