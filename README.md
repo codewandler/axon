@@ -466,9 +466,11 @@ axon stats                     # Database statistics
 axon labels                    # List all labels with counts
 axon types                     # List all node types with counts
 axon edges                     # List all edge types with counts
-axon gc                        # Run garbage collection (verbose: lists deleted edges)
+axon gc                        # Remove expired nodes/edges + orphaned edges (verbose)
 axon gc --dry-run              # Preview what would be cleaned without making changes
 axon gc --dry-run -q           # Dry-run quiet mode: summary count only
+axon write-node --uri <uri> --type <type> [--name <name>] [--data <json>] [--ttl <dur>]
+                               # Persist a custom node (same URI = upsert; --ttl = ephemeral)
 ```
 
 ### Watch Mode
@@ -661,6 +663,57 @@ if err := ax.WriteNode(ctx, node); err != nil {
 // Node is immediately queryable and searchable:
 nodes, _ := ax.Find(ctx, graph.NodeFilter{Type: "memory:decision"}, graph.QueryOptions{})
 got, _   := ax.GetNodeByURI(ctx, "memory:decision:db-choice")
+```
+
+#### Ephemeral nodes with TTL
+
+Call `WithTTL` to give a node a time-to-live. After the duration elapses the
+node is treated as non-existent by all read paths (queries, AQL, semantic
+search). Run `axon gc` to physically remove expired rows.
+
+```go
+// Automatically invisible after 2 hours:
+node := graph.NewNode("memory:note").
+    WithName("Current focus").
+    WithURI("memory://session-abc/current-task").
+    WithData(map[string]any{"text": "investigating auth bug"}).
+    WithTTL(2 * time.Hour)
+
+if err := ax.WriteNode(ctx, node); err != nil {
+    log.Fatal(err)
+}
+
+// Renew by writing the same URI with a new TTL:
+node.WithTTL(2 * time.Hour)       // resets ExpiresAt
+ax.WriteNode(ctx, node)            // upserts
+```
+
+Edges can carry a TTL too:
+
+```go
+edge := graph.NewEdge("references", noteID, fileID).WithTTL(30 * time.Minute)
+_ = ax.storage.PutEdge(ctx, edge)
+```
+
+#### `axon write-node` CLI
+
+The `write-node` command lets you persist a custom node from the shell (or from
+a CI script) without writing Go code:
+
+```bash
+# Immortal node:
+axon write-node --uri memory://s1/task --type memory:note --name "current task"
+
+# Ephemeral node — expires in 2 hours:
+axon write-node \
+  --uri  memory://session-abc/current-task \
+  --type memory:note \
+  --name "Current focus" \
+  --data '{"text":"investigating auth bug"}' \
+  --ttl  2h
+
+# After nodes expire, clean up physically:
+axon gc
 ```
 
 For bulk writes where you want to control the flush boundary yourself, use

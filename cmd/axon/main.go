@@ -52,6 +52,7 @@ func init() {
 	rootCmd.AddCommand(impactCmd)
 	rootCmd.AddCommand(pathCmd)
 	rootCmd.AddCommand(neighborsCmd)
+	rootCmd.AddCommand(writeNodeCmd)
 
 	rootCmd.Version = version
 }

@@ -309,6 +309,30 @@ func (s *Storage) migrate(ctx context.Context) error {
 				);
 			`,
 		},
+		{
+			version: 11,
+			sql: `
+				-- TTL support: optional expiry timestamp (unix epoch seconds, nullable)
+				ALTER TABLE nodes ADD COLUMN expires_at INTEGER;
+				CREATE INDEX IF NOT EXISTS idx_nodes_expires_at ON nodes(expires_at);
+
+				-- View that filters out expired nodes for all read paths
+				CREATE VIEW IF NOT EXISTS active_nodes AS
+					SELECT * FROM nodes WHERE expires_at IS NULL OR expires_at > unixepoch();
+			`,
+		},
+		{
+			version: 12,
+			sql: `
+				-- TTL support for edges
+				ALTER TABLE edges ADD COLUMN expires_at INTEGER;
+				CREATE INDEX IF NOT EXISTS idx_edges_expires_at ON edges(expires_at);
+
+				-- View that filters out expired edges for all read paths
+				CREATE VIEW IF NOT EXISTS active_edges AS
+					SELECT * FROM edges WHERE expires_at IS NULL OR expires_at > unixepoch();
+			`,
+		},
 	}
 
 	// Run pending migrations
@@ -542,8 +566,8 @@ func (s *Storage) tryFlushBatch(batch []writeOp) error {
 
 	// Prepare statements for batch insert
 	nodeStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO nodes (id, type, uri, key, name, labels, data, generation, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO nodes (id, type, uri, key, name, labels, data, generation, created_at, updated_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			type = excluded.type,
 			uri = excluded.uri,
@@ -552,7 +576,8 @@ func (s *Storage) tryFlushBatch(batch []writeOp) error {
 			labels = excluded.labels,
 			data = excluded.data,
 			generation = excluded.generation,
-			updated_at = excluded.updated_at
+			updated_at = excluded.updated_at,
+			expires_at = excluded.expires_at
 	`)
 	if err != nil {
 		log.Printf("sqlite: failed to prepare node statement: %v", err)
@@ -561,11 +586,12 @@ func (s *Storage) tryFlushBatch(batch []writeOp) error {
 	defer nodeStmt.Close()
 
 	edgeStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO edges (id, type, from_id, to_id, data, generation, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO edges (id, type, from_id, to_id, data, generation, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(type, from_id, to_id) DO UPDATE SET
 			data = excluded.data,
-			generation = excluded.generation
+			generation = excluded.generation,
+			expires_at = excluded.expires_at
 	`)
 	if err != nil {
 		log.Printf("sqlite: failed to prepare edge statement: %v", err)
@@ -602,10 +628,14 @@ func (s *Storage) tryFlushBatch(batch []writeOp) error {
 			if op.Node.UpdatedAt != nil {
 				nodeUpdatedAt = op.Node.UpdatedAt.Format(time.RFC3339)
 			}
+			var nodeExpiresAt sql.NullInt64
+			if op.Node.ExpiresAt != nil {
+				nodeExpiresAt = sql.NullInt64{Int64: op.Node.ExpiresAt.Unix(), Valid: true}
+			}
 			_, err = nodeStmt.ExecContext(ctx,
 				op.Node.ID, op.Node.Type, op.Node.URI, op.Node.Key, op.Node.Name,
 				string(labels), dataStr, op.Node.Generation,
-				nodeCreatedAt, nodeUpdatedAt)
+				nodeCreatedAt, nodeUpdatedAt, nodeExpiresAt)
 			if err != nil {
 				log.Printf("sqlite: failed to insert node %s: %v", op.Node.ID, err)
 				batchErr = err
@@ -628,9 +658,13 @@ func (s *Storage) tryFlushBatch(batch []writeOp) error {
 			if op.Edge.CreatedAt != nil {
 				edgeCreatedAt = op.Edge.CreatedAt.Format(time.RFC3339)
 			}
+			var edgeExpiresAt sql.NullInt64
+			if op.Edge.ExpiresAt != nil {
+				edgeExpiresAt = sql.NullInt64{Int64: op.Edge.ExpiresAt.Unix(), Valid: true}
+			}
 			_, err = edgeStmt.ExecContext(ctx,
 				op.Edge.ID, op.Edge.Type, op.Edge.From, op.Edge.To, dataStr, op.Edge.Generation,
-				edgeCreatedAt)
+				edgeCreatedAt, edgeExpiresAt)
 			if err != nil {
 				log.Printf("sqlite: failed to insert edge %s: %v", op.Edge.ID, err)
 				batchErr = err
@@ -657,8 +691,8 @@ func (s *Storage) GetNode(ctx context.Context, id string) (*graph.Node, error) {
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at
-		FROM nodes WHERE id = ?
+		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at, expires_at
+		FROM active_nodes WHERE id = ?
 	`, id)
 	return s.scanNode(row)
 }
@@ -669,8 +703,8 @@ func (s *Storage) GetNodeByURI(ctx context.Context, uri string) (*graph.Node, er
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at
-		FROM nodes WHERE uri = ?
+		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at, expires_at
+		FROM active_nodes WHERE uri = ?
 	`, uri)
 	return s.scanNode(row)
 }
@@ -681,8 +715,8 @@ func (s *Storage) GetNodeByKey(ctx context.Context, nodeType, key string) (*grap
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at
-		FROM nodes WHERE type = ? AND key = ?
+		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at, expires_at
+		FROM active_nodes WHERE type = ? AND key = ?
 	`, nodeType, key)
 	return s.scanNode(row)
 }
@@ -691,8 +725,9 @@ func (s *Storage) scanNode(row *sql.Row) (*graph.Node, error) {
 	var node graph.Node
 	var labelsStr, createdAt, updatedAt string
 	var uri, key, name, dataStr, generation, root sql.NullString
+	var expiresAt sql.NullInt64
 
-	err := row.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt)
+	err := row.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt, &expiresAt)
 	if err == sql.ErrNoRows {
 		return nil, storage.ErrNodeNotFound
 	}
@@ -725,6 +760,10 @@ func (s *Storage) scanNode(row *sql.Row) (*graph.Node, error) {
 	}
 	if t, err2 := time.Parse(time.RFC3339, updatedAt); err2 == nil {
 		node.UpdatedAt = &t
+	}
+	if expiresAt.Valid {
+		t := time.Unix(expiresAt.Int64, 0)
+		node.ExpiresAt = &t
 	}
 
 	return &node, nil
@@ -771,15 +810,16 @@ func (s *Storage) GetEdge(ctx context.Context, id string) (*graph.Edge, error) {
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, type, from_id, to_id, data, generation, created_at
-		FROM edges WHERE id = ?
+		SELECT id, type, from_id, to_id, data, generation, created_at, expires_at
+		FROM active_edges WHERE id = ?
 	`, id)
 
 	var edge graph.Edge
 	var createdAt string
 	var data, generation sql.NullString
+	var expiresAt sql.NullInt64
 
-	err := row.Scan(&edge.ID, &edge.Type, &edge.From, &edge.To, &data, &generation, &createdAt)
+	err := row.Scan(&edge.ID, &edge.Type, &edge.From, &edge.To, &data, &generation, &createdAt, &expiresAt)
 	if err == sql.ErrNoRows {
 		return nil, storage.ErrEdgeNotFound
 	}
@@ -799,6 +839,10 @@ func (s *Storage) GetEdge(ctx context.Context, id string) (*graph.Edge, error) {
 
 	if t, err2 := time.Parse(time.RFC3339, createdAt); err2 == nil {
 		edge.CreatedAt = &t
+	}
+	if expiresAt.Valid {
+		t := time.Unix(expiresAt.Int64, 0)
+		edge.ExpiresAt = &t
 	}
 
 	return &edge, nil
@@ -829,8 +873,8 @@ func (s *Storage) GetEdgesFrom(ctx context.Context, nodeID string) ([]*graph.Edg
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, type, from_id, to_id, data, generation, created_at
-		FROM edges WHERE from_id = ?
+		SELECT id, type, from_id, to_id, data, generation, created_at, expires_at
+		FROM active_edges WHERE from_id = ?
 	`, nodeID)
 	if err != nil {
 		return nil, err
@@ -845,8 +889,8 @@ func (s *Storage) GetEdgesTo(ctx context.Context, nodeID string) ([]*graph.Edge,
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, type, from_id, to_id, data, generation, created_at
-		FROM edges WHERE to_id = ?
+		SELECT id, type, from_id, to_id, data, generation, created_at, expires_at
+		FROM active_edges WHERE to_id = ?
 	`, nodeID)
 	if err != nil {
 		return nil, err
@@ -861,8 +905,9 @@ func (s *Storage) scanEdges(rows *sql.Rows) ([]*graph.Edge, error) {
 		var edge graph.Edge
 		var createdAt string
 		var data, generation sql.NullString
+		var expiresAt sql.NullInt64
 
-		err := rows.Scan(&edge.ID, &edge.Type, &edge.From, &edge.To, &data, &generation, &createdAt)
+		err := rows.Scan(&edge.ID, &edge.Type, &edge.From, &edge.To, &data, &generation, &createdAt, &expiresAt)
 		if err != nil {
 			return nil, err
 		}
@@ -880,6 +925,10 @@ func (s *Storage) scanEdges(rows *sql.Rows) ([]*graph.Edge, error) {
 		if t, err2 := time.Parse(time.RFC3339, createdAt); err2 == nil {
 			edge.CreatedAt = &t
 		}
+		if expiresAt.Valid {
+			t := time.Unix(expiresAt.Int64, 0)
+			edge.ExpiresAt = &t
+		}
 		edges = append(edges, &edge)
 	}
 	return edges, rows.Err()
@@ -891,7 +940,7 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter, opts g
 		return nil, err
 	}
 
-	query := `SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at FROM nodes WHERE 1=1`
+	query := `SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at, expires_at FROM active_nodes WHERE 1=1`
 	args := s.buildNodeFilterArgs(&query, filter)
 
 	// ORDER BY
@@ -914,8 +963,9 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter, opts g
 		var node graph.Node
 		var labelsStr, createdAt, updatedAt string
 		var uri, key, name, dataStr, generation, root sql.NullString
+		var expiresAt sql.NullInt64
 
-		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt)
+		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt, &expiresAt)
 		if err != nil {
 			return nil, err
 		}
@@ -945,6 +995,10 @@ func (s *Storage) FindNodes(ctx context.Context, filter graph.NodeFilter, opts g
 		}
 		if t, err2 := time.Parse(time.RFC3339, updatedAt); err2 == nil {
 			node.UpdatedAt = &t
+		}
+		if expiresAt.Valid {
+			t := time.Unix(expiresAt.Int64, 0)
+			node.ExpiresAt = &t
 		}
 		nodes = append(nodes, &node)
 	}
@@ -1074,7 +1128,7 @@ func (s *Storage) CountNodes(ctx context.Context, filter graph.NodeFilter, opts 
 
 	switch opts.GroupBy {
 	case "type":
-		query := `SELECT type, COUNT(*) FROM nodes WHERE 1=1`
+		query := `SELECT type, COUNT(*) FROM active_nodes WHERE 1=1`
 		args := s.buildNodeFilterArgs(&query, filter)
 		query += ` GROUP BY type`
 		query += s.buildCountOrderBy(opts)
@@ -1102,7 +1156,7 @@ func (s *Storage) CountNodes(ctx context.Context, filter graph.NodeFilter, opts 
 	case "label":
 		// Use json_each to extract labels from JSON array
 		// Filter out nodes with empty/null labels arrays
-		query := `SELECT j.value, COUNT(*) FROM nodes, json_each(nodes.labels) AS j WHERE j.value IS NOT NULL`
+		query := `SELECT j.value, COUNT(*) FROM active_nodes, json_each(active_nodes.labels) AS j WHERE j.value IS NOT NULL`
 		args := s.buildNodeFilterArgs(&query, filter)
 		query += ` GROUP BY j.value`
 		query += s.buildCountOrderBy(opts)
@@ -1129,7 +1183,7 @@ func (s *Storage) CountNodes(ctx context.Context, filter graph.NodeFilter, opts 
 
 	case "extension":
 		// Extract extension from data JSON, only for fs:file nodes
-		query := `SELECT json_extract(data, '$.ext'), COUNT(*) FROM nodes WHERE type = 'fs:file' AND json_extract(data, '$.ext') IS NOT NULL AND json_extract(data, '$.ext') != ''`
+		query := `SELECT json_extract(data, '$.ext'), COUNT(*) FROM active_nodes WHERE type = 'fs:file' AND json_extract(data, '$.ext') IS NOT NULL AND json_extract(data, '$.ext') != ''`
 		args := s.buildNodeFilterArgs(&query, filter)
 		query += ` GROUP BY json_extract(data, '$.ext')`
 		query += s.buildCountOrderBy(opts)
@@ -1156,7 +1210,7 @@ func (s *Storage) CountNodes(ctx context.Context, filter graph.NodeFilter, opts 
 
 	default:
 		// No grouping - just total count
-		query := `SELECT COUNT(*) FROM nodes WHERE 1=1`
+		query := `SELECT COUNT(*) FROM active_nodes WHERE 1=1`
 		args := s.buildNodeFilterArgs(&query, filter)
 
 		var count int
@@ -1187,19 +1241,21 @@ func (s *Storage) CountEdges(ctx context.Context, filter graph.EdgeFilter, opts 
 	// restructure query to start from nodes table with index hints.
 	// This allows SQLite to use idx_nodes_uri for URI prefix filtering
 	// and idx_edges_from for the join, which is much faster.
+	// Note: INDEXED BY hints cannot be used with views, so we rely on
+	// the query planner to choose optimal indexes automatically.
 	if needFromJoin && filter.From.URIPrefix != "" {
-		// Optimized query: start from nodes, use index hints
+		// Optimized query: start from nodes, join edges
 		switch opts.GroupBy {
 		case "type":
-			query = `SELECT e.type, COUNT(*) FROM nodes nf INDEXED BY idx_nodes_uri`
-			query += ` JOIN edges e INDEXED BY idx_edges_from ON e.from_id = nf.id`
+			query = `SELECT e.type, COUNT(*) FROM active_nodes nf`
+			query += ` JOIN active_edges e ON e.from_id = nf.id`
 		default:
-			query = `SELECT COUNT(*) FROM nodes nf INDEXED BY idx_nodes_uri`
-			query += ` JOIN edges e INDEXED BY idx_edges_from ON e.from_id = nf.id`
+			query = `SELECT COUNT(*) FROM active_nodes nf`
+			query += ` JOIN active_edges e ON e.from_id = nf.id`
 		}
 
 		if needToJoin {
-			query += ` JOIN nodes nt ON e.to_id = nt.id`
+			query += ` JOIN active_nodes nt ON e.to_id = nt.id`
 		}
 
 		query += ` WHERE 1=1`
@@ -1221,16 +1277,16 @@ func (s *Storage) CountEdges(ctx context.Context, filter graph.EdgeFilter, opts 
 		// Standard query starting from edges
 		switch opts.GroupBy {
 		case "type":
-			query = `SELECT e.type, COUNT(*) FROM edges e`
+			query = `SELECT e.type, COUNT(*) FROM active_edges e`
 		default:
-			query = `SELECT COUNT(*) FROM edges e`
+			query = `SELECT COUNT(*) FROM active_edges e`
 		}
 
 		if needFromJoin {
-			query += ` JOIN nodes nf ON e.from_id = nf.id`
+			query += ` JOIN active_nodes nf ON e.from_id = nf.id`
 		}
 		if needToJoin {
-			query += ` JOIN nodes nt ON e.to_id = nt.id`
+			query += ` JOIN active_nodes nt ON e.to_id = nt.id`
 		}
 
 		query += ` WHERE 1=1`
@@ -1362,7 +1418,7 @@ func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGe
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at
+		SELECT id, type, uri, key, name, labels, data, generation, root, created_at, updated_at, expires_at
 		FROM nodes WHERE uri LIKE ? AND generation != ?
 	`, uriPrefix+"%", currentGen)
 	if err != nil {
@@ -1375,8 +1431,9 @@ func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGe
 		var node graph.Node
 		var labelsStr, createdAt, updatedAt string
 		var uri, key, name, dataStr, generation, root sql.NullString
+		var expiresAt sql.NullInt64
 
-		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt)
+		err := rows.Scan(&node.ID, &node.Type, &uri, &key, &name, &labelsStr, &dataStr, &generation, &root, &createdAt, &updatedAt, &expiresAt)
 		if err != nil {
 			return nil, err
 		}
@@ -1405,6 +1462,10 @@ func (s *Storage) FindStaleByURIPrefix(ctx context.Context, uriPrefix, currentGe
 		}
 		if t, err2 := time.Parse(time.RFC3339, updatedAt); err2 == nil {
 			node.UpdatedAt = &t
+		}
+		if expiresAt.Valid {
+			t := time.Unix(expiresAt.Int64, 0)
+			node.ExpiresAt = &t
 		}
 		nodes = append(nodes, &node)
 	}
@@ -1494,7 +1555,7 @@ func (s *Storage) FindOrphanedEdges(ctx context.Context) ([]*graph.Edge, error) 
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, type, from_id, to_id, data, generation, created_at
+		SELECT id, type, from_id, to_id, data, generation, created_at, expires_at
 		FROM edges
 		WHERE from_id NOT IN (SELECT id FROM nodes)
 		   OR to_id   NOT IN (SELECT id FROM nodes)
@@ -1504,6 +1565,59 @@ func (s *Storage) FindOrphanedEdges(ctx context.Context) ([]*graph.Edge, error) 
 	}
 	defer rows.Close()
 	return s.scanEdges(rows)
+}
+
+// DeleteExpired physically removes all nodes and edges whose ExpiresAt is in
+// the past. Returns (nodesDeleted, edgesDeleted, error). Called by "axon gc"
+// and the background watch-mode GC ticker.
+func (s *Storage) DeleteExpired(ctx context.Context) (int64, int64, error) {
+	if err := s.Flush(ctx); err != nil {
+		return 0, 0, err
+	}
+
+	nr, err := s.db.ExecContext(ctx,
+		`DELETE FROM nodes WHERE expires_at IS NOT NULL AND expires_at <= unixepoch()`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("delete expired nodes: %w", err)
+	}
+	nodesDeleted, err := nr.RowsAffected()
+	if err != nil {
+		return 0, 0, fmt.Errorf("delete expired nodes rows affected: %w", err)
+	}
+
+	er, err := s.db.ExecContext(ctx,
+		`DELETE FROM edges WHERE expires_at IS NOT NULL AND expires_at <= unixepoch()`)
+	if err != nil {
+		return nodesDeleted, 0, fmt.Errorf("delete expired edges: %w", err)
+	}
+	edgesDeleted, err := er.RowsAffected()
+	if err != nil {
+		return nodesDeleted, 0, fmt.Errorf("delete expired edges rows affected: %w", err)
+	}
+
+	return nodesDeleted, edgesDeleted, nil
+}
+
+// CountExpired returns the number of expired nodes and edges without deleting
+// them. Used for dry-run reporting.
+func (s *Storage) CountExpired(ctx context.Context) (int64, int64, error) {
+	if err := s.Flush(ctx); err != nil {
+		return 0, 0, err
+	}
+
+	var nodesExpired int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM nodes WHERE expires_at IS NOT NULL AND expires_at <= unixepoch()`).Scan(&nodesExpired); err != nil {
+		return 0, 0, fmt.Errorf("count expired nodes: %w", err)
+	}
+
+	var edgesExpired int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM edges WHERE expires_at IS NOT NULL AND expires_at <= unixepoch()`).Scan(&edgesExpired); err != nil {
+		return nodesExpired, 0, fmt.Errorf("count expired edges: %w", err)
+	}
+
+	return nodesExpired, edgesExpired, nil
 }
 
 // URIPrefix helper for building LIKE patterns

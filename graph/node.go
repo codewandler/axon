@@ -10,16 +10,17 @@ import (
 
 // Node represents a vertex in the graph.
 type Node struct {
-	ID         string    `json:"id,omitempty"`
-	Type       string    `json:"type,omitempty"`
-	URI        string    `json:"uri,omitempty"`
-	Key        string    `json:"key,omitempty"`
-	Name       string    `json:"name,omitempty"`   // Human-readable name (filename, branch name, section title)
-	Labels     []string  `json:"labels,omitempty"` // Categorical labels (e.g., "ci:config", "agent:instructions")
-	Data       any       `json:"data,omitempty"`
-	Generation string    `json:"generation,omitempty"`
+	ID         string     `json:"id,omitempty"`
+	Type       string     `json:"type,omitempty"`
+	URI        string     `json:"uri,omitempty"`
+	Key        string     `json:"key,omitempty"`
+	Name       string     `json:"name,omitempty"`   // Human-readable name (filename, branch name, section title)
+	Labels     []string   `json:"labels,omitempty"` // Categorical labels (e.g., "ci:config", "agent:instructions")
+	Data       any        `json:"data,omitempty"`
+	Generation string     `json:"generation,omitempty"`
 	CreatedAt  *time.Time `json:"created_at,omitempty"`
 	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"` // nil means the node never expires (immortal)
 }
 
 // NewID generates a new unique node ID using gonanoid.
@@ -95,6 +96,18 @@ func (n *Node) WithGeneration(gen string) *Node {
 	return n
 }
 
+// WithTTL sets the node's expiry time to now + d. After d has elapsed, the
+// node is treated as non-existent by all read paths. Pass 0 to leave the node
+// immortal (same as not calling WithTTL at all).
+// GC must run (axon gc) to physically remove expired rows.
+func (n *Node) WithTTL(d time.Duration) *Node {
+	if d > 0 {
+		t := time.Now().Add(d)
+		n.ExpiresAt = &t
+	}
+	return n
+}
+
 // WithLabels adds labels to the node and returns the node for chaining.
 func (n *Node) WithLabels(labels ...string) *Node {
 	n.Labels = append(n.Labels, labels...)
@@ -143,6 +156,10 @@ func (n *Node) Clone() *Node {
 	if n.UpdatedAt != nil {
 		t := *n.UpdatedAt
 		clone.UpdatedAt = &t
+	}
+	if n.ExpiresAt != nil {
+		t := *n.ExpiresAt
+		clone.ExpiresAt = &t
 	}
 	return &clone
 }

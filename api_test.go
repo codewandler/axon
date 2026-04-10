@@ -3,6 +3,7 @@ package axon
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/indexer/embeddings"
@@ -217,5 +218,46 @@ func TestAxon_Find_Extensions_DotNormalized(t *testing.T) {
 	}
 	if len(nodes) != 1 || nodes[0].Name != "main.go" {
 		t.Errorf("expected main.go only, got %v", nodes)
+	}
+}
+
+// ── TTL / WriteNode with TTL ───────────────────────────────────────────────
+
+func TestAxon_WriteNode_WithTTL_ExpiredInvisible(t *testing.T) {
+	// Write a node with a TTL already elapsed, then verify it's not findable.
+	ax, err := New(Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	past := time.Now().Add(-time.Second)
+	node := graph.NewNode("memory:note").
+		WithURI("memory://api-ttl/expired").
+		WithName("stale note")
+	node.ExpiresAt = &past
+
+	if err := ax.WriteNode(ctx, node); err != nil {
+		t.Fatalf("WriteNode: %v", err)
+	}
+
+	// Must not appear in Find.
+	nodes, err := ax.Find(ctx, graph.NodeFilter{Type: "memory:note"}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	for _, n := range nodes {
+		if n.URI == node.URI {
+			t.Error("expired node must not appear in Find results")
+		}
+	}
+
+	// After DeleteExpired, the row is physically gone.
+	delN, _, err := ax.storage.DeleteExpired(ctx)
+	if err != nil {
+		t.Fatalf("DeleteExpired: %v", err)
+	}
+	if delN != 1 {
+		t.Errorf("expected 1 node deleted by DeleteExpired, got %d", delN)
 	}
 }

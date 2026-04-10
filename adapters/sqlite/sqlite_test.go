@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codewandler/axon/graph"
 	"github.com/codewandler/axon/storage"
@@ -845,3 +846,228 @@ func TestFindOrphanedEdges_BothEndpointsMissing(t *testing.T) {
 		t.Errorf("expected edge ID %s, got %s", edge.ID, orphanedEdges[0].ID)
 	}
 }
+
+// ── TTL / ExpiresAt tests ──────────────────────────────────────────────────
+
+func TestTTL_NodeVisibleBeforeExpiry(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	// Node with TTL 1 hour into the future — must be visible immediately.
+	node := graph.NewNode("memory:note").
+		WithURI("memory://ttl-test/future").
+		WithName("future").
+		WithTTL(time.Hour)
+
+	if err := s.PutNode(ctx, node); err != nil {
+		t.Fatalf("PutNode: %v", err)
+	}
+
+	got, err := s.GetNode(ctx, node.ID)
+	if err != nil {
+		t.Fatalf("GetNode: %v", err)
+	}
+	if got.ExpiresAt == nil {
+		t.Fatal("expected ExpiresAt to be non-nil after round-trip")
+	}
+	if got.ExpiresAt.Before(time.Now()) {
+		t.Fatalf("expected ExpiresAt to be in the future, got %v", got.ExpiresAt)
+	}
+}
+
+func TestTTL_NilTTLIsImmortal(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	node := graph.NewNode("memory:note").
+		WithURI("memory://ttl-test/immortal").
+		WithName("immortal")
+	// ExpiresAt is nil — node should live forever.
+
+	if err := s.PutNode(ctx, node); err != nil {
+		t.Fatalf("PutNode: %v", err)
+	}
+
+	got, err := s.GetNode(ctx, node.ID)
+	if err != nil {
+		t.Fatalf("GetNode: %v", err)
+	}
+	if got.ExpiresAt != nil {
+		t.Fatalf("expected ExpiresAt to be nil for immortal node, got %v", got.ExpiresAt)
+	}
+}
+
+func TestTTL_NodeInvisibleAfterExpiry(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	// Write a node with ExpiresAt already in the past.
+	past := time.Now().Add(-1 * time.Second)
+	node := graph.NewNode("memory:note").
+		WithURI("memory://ttl-test/expired").
+		WithName("expired")
+	node.ExpiresAt = &past
+
+	if err := s.PutNode(ctx, node); err != nil {
+		t.Fatalf("PutNode: %v", err)
+	}
+
+	// GetNode must return ErrNodeNotFound because node is expired.
+	_, err := s.GetNode(ctx, node.ID)
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Fatalf("expected ErrNodeNotFound for expired node, got %v", err)
+	}
+
+	// GetNodeByURI must also return ErrNodeNotFound.
+	_, err = s.GetNodeByURI(ctx, node.URI)
+	if !errors.Is(err, storage.ErrNodeNotFound) {
+		t.Fatalf("expected ErrNodeNotFound from GetNodeByURI for expired node, got %v", err)
+	}
+
+	// FindNodes must return empty slice.
+	nodes, err := s.FindNodes(ctx, graph.NodeFilter{Type: "memory:note"}, graph.QueryOptions{})
+	if err != nil {
+		t.Fatalf("FindNodes: %v", err)
+	}
+	if len(nodes) != 0 {
+		t.Fatalf("expected 0 nodes from FindNodes, got %d", len(nodes))
+	}
+}
+
+func TestTTL_DeleteExpiredNodes(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	past := time.Now().Add(-1 * time.Second)
+
+	// Write 3 expired nodes and 1 immortal node.
+	for i := 0; i < 3; i++ {
+		n := graph.NewNode("memory:note").
+			WithURI(fmt.Sprintf("memory://ttl-test/exp%d", i)).
+			WithName(fmt.Sprintf("exp%d", i))
+		n.ExpiresAt = &past
+		if err := s.PutNode(ctx, n); err != nil {
+			t.Fatalf("PutNode %d: %v", i, err)
+		}
+	}
+	immortal := graph.NewNode("memory:note").
+		WithURI("memory://ttl-test/immortal2").
+		WithName("immortal2")
+	if err := s.PutNode(ctx, immortal); err != nil {
+		t.Fatalf("PutNode immortal: %v", err)
+	}
+
+	nodesDeleted, edgesDeleted, err := s.DeleteExpired(ctx)
+	if err != nil {
+		t.Fatalf("DeleteExpired: %v", err)
+	}
+	if nodesDeleted != 3 {
+		t.Errorf("expected 3 nodes deleted, got %d", nodesDeleted)
+	}
+	if edgesDeleted != 0 {
+		t.Errorf("expected 0 edges deleted, got %d", edgesDeleted)
+	}
+
+	// Immortal node must still be visible.
+	got, err := s.GetNode(ctx, immortal.ID)
+	if err != nil {
+		t.Fatalf("GetNode immortal after DeleteExpired: %v", err)
+	}
+	if got.Name != "immortal2" {
+		t.Errorf("unexpected immortal name: %s", got.Name)
+	}
+
+	// Expired nodes must be physically gone (not just invisible).
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM nodes WHERE type = 'memory:note' AND expires_at IS NOT NULL`).Scan(&count); err != nil {
+		t.Fatalf("count expired: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 expired rows after DeleteExpired, got %d", count)
+	}
+}
+
+func TestTTL_EdgeExpiry(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	// Create two nodes and an expired edge between them.
+	parent := graph.NewNode("fs:dir").WithURI("file:///ttl/parent").WithName("parent")
+	child := graph.NewNode("fs:file").WithURI("file:///ttl/child").WithName("child")
+	if err := s.PutNode(ctx, parent); err != nil {
+		t.Fatalf("PutNode parent: %v", err)
+	}
+	if err := s.PutNode(ctx, child); err != nil {
+		t.Fatalf("PutNode child: %v", err)
+	}
+
+	past := time.Now().Add(-1 * time.Second)
+	edge := graph.NewEdge("contains", parent.ID, child.ID)
+	edge.ExpiresAt = &past
+
+	if err := s.PutEdge(ctx, edge); err != nil {
+		t.Fatalf("PutEdge: %v", err)
+	}
+
+	// GetEdgesFrom must return empty (edge expired).
+	gotEdges, err := s.GetEdgesFrom(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("GetEdgesFrom: %v", err)
+	}
+	if len(gotEdges) != 0 {
+		t.Fatalf("expected 0 edges from GetEdgesFrom, got %d", len(gotEdges))
+	}
+
+	// DeleteExpired must remove the edge.
+	_, edgesDeleted, err := s.DeleteExpired(ctx)
+	if err != nil {
+		t.Fatalf("DeleteExpired: %v", err)
+	}
+	if edgesDeleted != 1 {
+		t.Errorf("expected 1 edge deleted, got %d", edgesDeleted)
+	}
+}
+
+func TestTTL_EdgeWithTTLBuilder(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestDB(t)
+
+	parent := graph.NewNode("fs:dir").WithURI("file:///builder/parent").WithName("p")
+	child := graph.NewNode("fs:file").WithURI("file:///builder/child").WithName("c")
+	if err := s.PutNode(ctx, parent); err != nil {
+		t.Fatalf("PutNode: %v", err)
+	}
+	if err := s.PutNode(ctx, child); err != nil {
+		t.Fatalf("PutNode: %v", err)
+	}
+
+	// Edge with 1-hour TTL — must be visible immediately.
+	edge := graph.NewEdge("contains", parent.ID, child.ID).WithTTL(time.Hour)
+	if err := s.PutEdge(ctx, edge); err != nil {
+		t.Fatalf("PutEdge: %v", err)
+	}
+
+	gotEdges, err := s.GetEdgesFrom(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("GetEdgesFrom: %v", err)
+	}
+	if len(gotEdges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(gotEdges))
+	}
+	if gotEdges[0].ExpiresAt == nil {
+		t.Fatal("expected ExpiresAt to be set on edge after round-trip")
+	}
+}
+
+func TestTTL_WithTTLZeroIsImmortal(t *testing.T) {
+	// WithTTL(0) should leave ExpiresAt nil (immortal).
+	n := graph.NewNode("test").WithTTL(0)
+	if n.ExpiresAt != nil {
+		t.Errorf("WithTTL(0) should leave ExpiresAt nil, got %v", n.ExpiresAt)
+	}
+	e := graph.NewEdge("test", "a", "b").WithTTL(0)
+	if e.ExpiresAt != nil {
+		t.Errorf("WithTTL(0) on edge should leave ExpiresAt nil, got %v", e.ExpiresAt)
+	}
+}
+

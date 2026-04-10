@@ -140,9 +140,43 @@ axon stats                     # Database statistics
 axon labels                    # List all labels with counts
 axon types                     # List all node types with counts
 axon edges                     # List all edge types with counts
-axon gc                        # Run garbage collection (verbose: lists deleted edges)
+axon gc                        # Remove expired nodes/edges + orphaned edges (verbose)
 axon gc --dry-run              # Preview what would be cleaned without making changes
 axon gc --dry-run -q           # Dry-run quiet mode: summary count only
+```
+
+## Writing and Tagging Nodes
+
+Persist custom knowledge nodes with `axon write-node`. Nodes are upserted by
+URI (same URI = update in place). Use `--ttl` for ephemeral notes that should
+automatically expire:
+
+```bash
+# Immortal node (persists until explicitly deleted or re-indexed away):
+axon write-node \
+  --uri  memory://session/architecture-note \
+  --type memory:note \
+  --name "Architecture decision" \
+  --data '{"text":"Use PostgreSQL for user data"}' \
+  --label architecture
+
+# Ephemeral node — expires in 2 hours, then axon gc removes it:
+axon write-node \
+  --uri  memory://session/current-task \
+  --type memory:note \
+  --name "Current focus" \
+  --data '{"text":"investigating auth bug"}' \
+  --ttl  2h
+
+# After nodes expire:
+axon gc
+```
+
+Add or remove labels on existing nodes:
+
+```bash
+axon label <node-id> --add reviewed --add important
+axon label <node-id> --remove wip
 ```
 
 ## Node Types
