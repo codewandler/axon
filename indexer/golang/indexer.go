@@ -923,8 +923,8 @@ func (i *Indexer) indexImplementations(ctx context.Context, ictx *indexer.Contex
 }
 
 // indexEmbeds indexes struct embedding relationships for all packages in the module.
-// For each struct with anonymous (embedded) fields, it emits a
-// go:struct -[embeds]-> go:struct edge for every embedded type that is also
+// For each struct with anonymous (embedded) fields, it emits
+// a go:struct -[embeds]-> go:struct edge for every embedded type that is also
 // defined within the same module. Cross-module embeddings (e.g. embedding
 // sync.Mutex) are intentionally skipped because those nodes are not in the graph.
 func (i *Indexer) indexEmbeds(ctx context.Context, ictx *indexer.Context, moduleURI, modulePath string, allPkgs []*packages.Package) error {

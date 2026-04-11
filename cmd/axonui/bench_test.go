@@ -72,7 +72,7 @@ func TestFullNavigationTiming(t *testing.T) {
 	}
 
 	t0 := time.Now()
-	err = nav.SetCenter(cwdNode)
+	_ = nav.SetCenter(cwdNode)
 	d0 := time.Since(t0)
 	fmt.Printf("SetCenter (axon dir, %d out groups): %s\n", len(nav.edges.Children), d0)
 
@@ -92,7 +92,7 @@ func TestFullNavigationTiming(t *testing.T) {
 
 	// Navigate to AGENTS.md - this is the full "click" path
 	t1 := time.Now()
-	err = nav.NavigateTo(agentsMD)
+	_ = nav.NavigateTo(agentsMD)
 	d1 := time.Since(t1)
 	fmt.Printf("NavigateTo AGENTS.md: %s\n", d1)
 
@@ -111,7 +111,7 @@ func TestFullNavigationTiming(t *testing.T) {
 	hugeResult, _ := s.Query(ctx, hugeQ)
 	if len(hugeResult.Nodes) > 0 {
 		t3 := time.Now()
-		err = nav.NavigateTo(hugeResult.Nodes[0])
+		_ = nav.NavigateTo(hugeResult.Nodes[0])
 		d3 := time.Since(t3)
 		fmt.Printf("\nNavigateTo manager.md (970KB): %s\n", d3)
 
@@ -131,7 +131,7 @@ func TestFullNavigationTiming(t *testing.T) {
 	bigResult, _ := s.Query(ctx, bigQ)
 	if len(bigResult.Nodes) > 0 {
 		t5 := time.Now()
-		err = nav.NavigateTo(bigResult.Nodes[0])
+		_ = nav.NavigateTo(bigResult.Nodes[0])
 		d5 := time.Since(t5)
 		fmt.Printf("NavigateTo 24k-child dir: %s\n", d5)
 	}
@@ -405,7 +405,7 @@ func runBenchmark() {
 		Where(aql.FromID.Eq(sec.ID)).
 		GroupBy(aql.Type).
 		Build()
-	secEdgeResult, err := s.Query(ctx, seq)
+	secEdgeResult, _ := s.Query(ctx, seq)
 	d4 := time.Since(t4)
 	fmt.Printf("Section edge counts: %v (%s)\n", secEdgeResult.Counts, d4)
 

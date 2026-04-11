@@ -66,14 +66,6 @@ var spdxTable = []spdxEntry{
 	},
 }
 
-// licenceFileNames are the exact filenames that qualify as licence files.
-// The indexer uses glob patterns for LICENSE* and LICENCE* variants and an
-// exact match for COPYING.
-var licenceFileNames = []string{
-	"LICENSE", "LICENSE.md", "LICENSE.txt",
-	"LICENCE", "LICENCE.md", "LICENCE.txt",
-	"COPYING",
-}
 
 // headerReadLimit is the maximum number of bytes read from a licence file for
 // detection. 1 KiB is sufficient for any standard licence header.

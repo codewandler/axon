@@ -268,7 +268,7 @@ func readFilePreview(uri string) string {
 	defer f.Close()
 
 	buf := make([]byte, maxPreviewBytes)
-	n, err := f.Read(buf)
+	n, _ := f.Read(buf)
 	if n == 0 {
 		return ""
 	}
