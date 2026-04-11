@@ -7,6 +7,21 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.20.1] — 2026-04-11
+
+### Fixed
+
+- **staticcheck warnings cleared** — replaced discarded errors with blank identifier in
+  `axonui/bench_test.go` (5 sites) and `axonui/preview.go`; fixed extraneous space in
+  `go:struct` compiler directive in `golang/indexer.go`; removed unused `licenceFileNames`
+  variable in `project/license.go`.
+
+---
+
+## [Unreleased]
+
+---
+
 ## [0.20.0] — 2026-04-11
 
 ### Added
