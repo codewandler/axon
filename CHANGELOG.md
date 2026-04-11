@@ -7,6 +7,11 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+
+## [Unreleased]
+
+---
+
 ## [0.20.1] — 2026-04-11
 
 ### Fixed
@@ -18,20 +23,13 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
-
----
-
 ## [0.20.0] — 2026-04-11
 
 ### Added
 
-- **TTL / `ExpiresAt` for nodes and edges** (#26) — nodes and edges can now carry
-  an expiry timestamp. After the deadline elapses, the record is invisible to all
-  read paths (queries, AQL, semantic search) without any caller change.
-  - `graph.Node.ExpiresAt *time.Time` and `graph.Edge.ExpiresAt *time.Time` fields.
-  - `WithTTL(d time.Duration)` builder on both types; `WithTTL(0)` is a no-op
-    (immortal, the default).
+- **Node and edge TTL (time-to-live)** — nodes and edges can be assigned an
+  expiry using `--ttl <duration>`; a TTL of 0 means the node never expires
+  (immortal, the default).
   - SQLite migrations 11 and 12 add `expires_at INTEGER` column and index to both
     tables, plus `active_nodes` and `active_edges` views that filter expired rows.
   - `StalenessManager` interface extended with `DeleteExpired(ctx)` and
@@ -47,6 +45,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Watch-mode background GC** — `Watch` starts a background goroutine that
   calls `DeleteExpired` on a configurable `WatchOptions.GCInterval` (default 5 min;
   set to 0 to disable).
+
+---
 
 ## [0.19.0] — 2026-04-11
 
@@ -764,136 +764,7 @@ axon query "SELECT data.kind, COUNT(*) FROM nodes WHERE type = 'code:todo' GROUP
   via DSN `_pragma` parameters; retry backoff improved to 5 attempts with
   exponential delays. (`adapters/sqlite/sqlite.go`)
 
- — runs ONNX sentence-embedding models fully
-  in-process via the Hugot pure-Go backend (no CGO, no daemon, no data leaves
-  the machine). Model auto-downloaded to `~/.axon/models/` on first use
-  (~90 MB, cached). (`indexer/embeddings/hugot.go`)
-
-- **`EmbedBatch(ctx, []string) ([][]float32, error)` on `Provider` interface**
-  — enables batch embedding; `OllamaProvider` uses Ollama's `/api/embed`
-  batch endpoint, `HugotProvider` calls `RunPipeline([]string)` in one pass.
-  `Embed()` is now a thin wrapper around `EmbedBatch` on all providers.
-
-- **`Close() error` on `Provider` interface** — standardises resource cleanup;
-  `HugotProvider` destroys its Hugot session, others return nil.
-
-- **`--embed-provider` and `--embed-model-path` flags** on `axon index` to
-  select the embedding provider and local model path from the CLI.
-  `AXON_EMBED_PROVIDER`, `AXON_HUGOT_MODEL`, and `AXON_HUGOT_MODEL_PATH`
-  environment variables also supported. (`cmd/axon/index.go`)
-
-- **`cmd/axon/embed.go`** — shared `resolveEmbeddingProvider()` factory used
-  by both `index` and `search` commands; removes the duplicate switch.
-
-- **Embedding benchmarks** — `BenchmarkOllama`, `BenchmarkOllamaBatch`,
-  `BenchmarkHugot`, `BenchmarkHugotBatch` in
-  `indexer/embeddings/bench_test.go`; all opt-in via env vars, CI-safe.
-
-### Changed
-
-- **`indexer/embeddings/` refactored for library extraction** — split into one
-  file per provider (`null.go`, `ollama.go`, `hugot.go`), interface-only
-  `provider.go`, and `doc.go` documenting the package boundary. No file except
-  `indexer.go` imports axon-internal packages.
-
-- **`PostIndex` uses batch embedding** — collects all nodes across all types
-  and calls `EmbedBatch` in chunks of `DefaultBatchSize` (32) instead of one
-  `Embed()` call per node. Benchmark results on i9-10900K + RTX 3090:
-  Ollama 23 ms → 12 ms/node batched; Hugot 114 ms → 21 ms/node batched.
-
-- **`OllamaProvider`** — accepts a configurable `dims int` parameter (was
-  hardcoded to 768); switches from `/api/embeddings` (single) to `/api/embed`
-  (batch) endpoint.
-
-- **`axon index --watch` replaces `axon watch`** in documentation — the watch
-  sub-command was merged into `index` in a prior commit; README and AGENTS now
-  reflect the correct flags (`--watch-quiet`, `--watch-debounce`).
-
 ---
-
-### Added
-
-- **`axon index` command** — replaces the separate `init` and `watch` commands
-  with a single `index [path]` command. `--watch`, `--watch-debounce`, and
-  `--watch-quiet` flags added. `init` is kept as an alias for backward
-  compatibility. (`cmd/axon/index.go`)
-
-- **`Axon.DeleteByPath()`** — removes a filesystem path (or entire subtree for
-  directories) from the graph and cleans up orphaned edges. Used internally by
-  the watch loop on `Remove`/`Rename` events. (`axon.go`)
-
-- **`FSInclude` config field** — allow-list of glob patterns; when non-empty
-  only matching files are indexed (directories are always traversed). (`axon.go`)
-
-- **`Registry.ByName()`** — looks up a registered indexer by its `Name()`
-  string. (`indexer/registry.go`)
-
-### Changed
-
-- **Per-file targeted watch re-indexing** — the watch loop now re-indexes or
-  deletes each changed path individually instead of computing the deepest
-  common ancestor of all pending paths. Deletions are handled without calling
-  `OnReindex`; the watcher also consults the FS indexer's exclusion rules so
-  ignored paths never trigger re-indexes. (`axon.go`)
-
-- **Dotfiles no longer blanket-excluded** — the FS indexer no longer skips all
-  hidden files/directories. `DefaultFSIgnore` is updated with specific entries
-  (`.git`, `.devspace`, `.DS_Store`, `*.log`) so that useful dotfiles such as
-  `.agents/` and `.claude/` remain visible in the graph. (`axon.go`,
-  `indexer/fs/indexer.go`)
-
-- **`FSExclude` replaces `FSIgnore`** in `axon.Config`; `FSIgnore` kept as a
-  deprecated alias that is merged into `FSExclude` at construction time.
-  `fs.Config` gains matching `Include`/`Exclude` fields and exports
-  `ShouldIgnore()`. (`axon.go`, `indexer/fs/indexer.go`)
-
-### Fixed
-
-- **`context.Canceled` on Ctrl+C in `--watch` mode** no longer causes cobra to
-  print an error message and the full usage block. (`cmd/axon/index.go`)
-
----
-
-### Added
-
-- **Git commit indexing** — the git indexer now walks the commit log (default
-  cap: 500 per repo) and creates `vcs:commit` nodes with full metadata: SHA,
-  subject, body, author, committer, date, and change stats (files changed,
-  insertions, deletions). Enables queries like "recent commits by author" and
-  "largest commits by diff size".
-  (`indexer/git/indexer.go`, `types/vcs.go`)
-
-- **`parent_of` edges** — each `vcs:commit` node emits a `parent_of` edge to
-  each of its parent commits, forming the commit DAG in the graph. Variable-
-  length path queries (`[:parent_of*1..N]`) traverse the ancestry chain.
-  (`types/edges.go`, `indexer/git/indexer.go`)
-
-- **`modifies` edges** — for single-parent commits, a `modifies` edge is
-  emitted from the commit to each `fs:file` node it touched, enabling
-  "hotspot" queries (most frequently modified files).
-  (`types/edges.go`, `indexer/git/indexer.go`)
-
-- **Branch/tag → commit `references` edges** — `vcs:branch` and `vcs:tag`
-  nodes now emit a `references` edge to their tip `vcs:commit` node, making
-  it possible to query "what commit does this branch/tag point to?".
-  (`indexer/git/indexer.go`)
-
-- **`git.Config` with `MaxCommits`** — the git indexer accepts a `Config`
-  struct with a `MaxCommits` field (default 500) to cap commit ingestion per
-  repo. Exposed via `axon.Config.GitConfig`.
-  (`indexer/git/indexer.go`, `axon.go`)
-
-- **AQL constants** — `aql.NodeType.Commit`, `aql.Edge.ParentOf`, and
-  `aql.Edge.Modifies` added to the type-safe fluent builder.
-  (`aql/nodetypes.go`, `aql/edgetypes.go`)
-
-### Fixed
-
-- **SQLite SQLITE_BUSY errors eliminated** — PRAGMAs (including `busy_timeout=30s`)
-  are now set per-connection via DSN `_pragma` parameters instead of a one-shot
-  `ExecContext`. The `database/sql` connection pool could previously hand out
-  connections with default `busy_timeout=0`, causing immediate SQLITE_BUSY on any
-  lock contention. Retry backoff improved to 5 attempts with exponential delays.
 
 ## [0.5.0] — 2026-04-10
 
